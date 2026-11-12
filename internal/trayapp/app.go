@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mytgfs/internal/config"
@@ -24,6 +26,7 @@ import (
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/tray"
 	"mytgfs/internal/vfs"
+	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
 
@@ -148,6 +151,22 @@ func Run(opts Options) error {
 		tray.SetStatus(s)
 	}
 
+	// 授权失效标记：Web 面板据此显示重新登录提示，并禁用写操作
+	var authLost atomic.Bool
+	// botUsername 在连接就绪后读取，建卷时用来拉 bot 进新频道
+	var botMu sync.Mutex
+	var botUsername string
+	setBotUsername := func(n string) {
+		botMu.Lock()
+		botUsername = n
+		botMu.Unlock()
+	}
+	getBotUsername := func() string {
+		botMu.Lock()
+		defer botMu.Unlock()
+		return botUsername
+	}
+
 	unmountAll := func() {
 		mu.Lock()
 		cs := cancels
@@ -160,16 +179,25 @@ func Run(opts Options) error {
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{OnConnState: func(s tgclient.ConnState) {
-			switch s {
-			case tgclient.ConnReady:
-				setState(i18n.T("tray.state.connected"))
-			case tgclient.ConnConnecting:
-				setState(i18n.T("tray.state.connecting"))
-			default:
-				setState(i18n.T("tray.state.reconnecting"))
-			}
-		}})
+		tgclient.Options{
+			OnConnState: func(s tgclient.ConnState) {
+				switch s {
+				case tgclient.ConnReady:
+					setState(i18n.T("tray.state.connected"))
+				case tgclient.ConnConnecting:
+					setState(i18n.T("tray.state.connecting"))
+				default:
+					setState(i18n.T("tray.state.reconnecting"))
+				}
+			},
+			OnAuthLost: func(_ context.Context, err error) error {
+				// 会话被吊销只能重新登录；停止 Run，别让连接循环空转
+				authLost.Store(true)
+				setState(i18n.T("tray.state.auth_lost"))
+				fmt.Fprintf(os.Stderr, "会话失效: %v\n", err)
+				return err
+			},
+		})
 
 	// Web 面板：按需启动/关闭，绑定 127.0.0.1
 	var webMu sync.Mutex
@@ -215,7 +243,11 @@ func Run(opts Options) error {
 						"name": v.name, "entries": len(entries), "used": used,
 					})
 				}
-				return map[string]any{"state": st, "volumes": list}, nil
+				auth := "ok"
+				if authLost.Load() {
+					auth = "lost"
+				}
+				return map[string]any{"state": st, "auth": auth, "volumes": list}, nil
 			},
 			Sync: func(ctx context.Context) (any, error) {
 				volMu.Lock()
@@ -238,6 +270,50 @@ func Run(opts Options) error {
 					})
 				}
 				return map[string]any{"results": out}, nil
+			},
+			CreateVolume: func(ctx context.Context, name, title, point string) (any, error) {
+				bn := getBotUsername()
+				if bn == "" {
+					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
+				}
+				// 建频道/拉 bot 只有 user 会话能做：这里临时开一条 user 连接
+				uc := tgclient.New(cfg.Telegram.APIID, apiHash,
+					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+					tgclient.Options{})
+				var res volume.Result
+				rerr := uc.Run(ctx, func(ctx context.Context) error {
+					r, cerr := volume.Create(ctx, uc.API(), volume.Request{
+						Name: name, Title: title, BotUsername: bn,
+					})
+					res = r
+					return cerr
+				})
+				if rerr != nil {
+					if tgclient.IsAuthLost(rerr) {
+						return nil, fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), rerr)
+					}
+					return nil, rerr
+				}
+				vol := config.Volume{
+					Name:    res.Name,
+					ChatID:  res.ChannelID,
+					Point:   strings.TrimSpace(point),
+					Enabled: true,
+				}
+				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
+					return nil, aerr
+				}
+				out := map[string]any{
+					"name":             res.Name,
+					"channel_id":       res.ChannelID,
+					"chat_id":          res.ChatID,
+					"muted":            res.Muted,
+					"restart_required": true,
+				}
+				if res.MuteErr != nil {
+					out["mute_error"] = res.MuteErr.Error()
+				}
+				return out, nil
 			},
 		}
 		go func() {
@@ -335,13 +411,23 @@ func Run(opts Options) error {
 	go func() {
 		defer wg.Done()
 		rerr := client.Run(rootCtx, func(ctx context.Context) error {
+			// 连接就绪后读一次 bot 用户名，建卷时用它拉 bot 进新频道
+			if self, serr := client.Self(ctx); serr == nil {
+				setBotUsername(self.Username)
+			}
 			<-ctx.Done()
 			return nil
 		})
 		if rootCtx.Err() != nil {
 			return
 		}
-		// 永久错误（app id 无效、token 被撤销等）无法靠重试恢复，保持托盘可退出
+		if tgclient.IsAuthLost(rerr) {
+			authLost.Store(true)
+			setState(i18n.T("tray.state.auth_lost"))
+			fmt.Fprintf(os.Stderr, "凭据失效: %v\n", rerr)
+			return
+		}
+		// 其它永久错误（app id 无效等）无法自愈，保持托盘可退出
 		setState(i18n.T("tray.state.reconnecting"))
 		fmt.Fprintf(os.Stderr, "Telegram 连接结束: %v\n", rerr)
 	}()

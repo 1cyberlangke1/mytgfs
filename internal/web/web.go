@@ -8,12 +8,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
 	"mytgfs/internal/atomicfile"
+	"mytgfs/internal/config"
 	"mytgfs/internal/daemon"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/ipc"
@@ -25,10 +27,19 @@ type StatusFunc func(ctx context.Context) (any, error)
 // SyncFunc 立即触发一次增量同步并返回结果。
 type SyncFunc func(ctx context.Context) (any, error)
 
+// CreateVolumeFunc 创建新卷并返回可序列化的结果。
+//
+// 输入：ctx；name 卷名；title 频道标题；point 挂载点
+// 输出：结果对象；error
+// 预期：重名返回 config.ErrVolumeExists，供 handler 映射成 409
+type CreateVolumeFunc func(ctx context.Context, name, title, point string) (any, error)
+
 // Options 是面板的可选能力，零值表示只提供配置编辑。
 type Options struct {
 	Status StatusFunc
 	Sync   SyncFunc
+	// CreateVolume 为 nil 时建卷接口返回 501，面板按钮置灰
+	CreateVolume CreateVolumeFunc
 }
 
 // Serve 启动只读面板，状态回落到 daemon IPC。
@@ -43,9 +54,10 @@ func Serve(ctx context.Context, addr, configPath string) error {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时尝试连 daemon
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handlePage)
+	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil))
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
+	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
 	mux.HandleFunc("/api/config", handleConfig(configPath))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
@@ -61,31 +73,45 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 }
 
 // handlePage 输出内嵌的静态页面，并把当前语言的文案注入进去。
-func handlePage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	host := r.Host
-	if host == "" {
-		host = "127.0.0.1"
+//
+// 输入：canCreate 是否支持建卷（决定是否显示建卷卡片）
+// 输出：HTML
+// 预期：语言包以 JSON 注入，前端不硬编码任何用户可见文案
+func handlePage(canCreate bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		labels := map[string]string{
+			"title":      i18n.T("web.title"),
+			"subtitle":   i18n.T("web.subtitle"),
+			"volumes":    i18n.T("web.volumes"),
+			"actions":    i18n.T("web.actions"),
+			"sync":       i18n.T("web.sync"),
+			"syncing":    i18n.T("web.syncing"),
+			"syncDone":   i18n.T("web.sync_done"),
+			"config":     i18n.T("web.config"),
+			"save":       i18n.T("web.save"),
+			"saved":      i18n.T("web.saved"),
+			"entries":    i18n.T("web.entries"),
+			"used":       i18n.T("web.used"),
+			"nodaemon":   i18n.T("web.no_daemon"),
+			"loadError":  i18n.T("web.load_error"),
+			"newVolume":  i18n.T("web.new_volume"),
+			"fieldName":  i18n.T("web.field_name"),
+			"fieldTitle": i18n.T("web.field_title"),
+			"fieldPoint": i18n.T("web.field_point"),
+			"create":     i18n.T("web.create"),
+			"creating":   i18n.T("web.creating"),
+			"created":    i18n.T("web.created"),
+			"restart":    i18n.T("web.restart_hint"),
+			"authLost":   i18n.T("web.auth_lost"),
+			"nameNeed":   i18n.T("web.name_required"),
+		}
+		if canCreate {
+			labels["canCreate"] = "1"
+		}
+		blob, _ := json.Marshal(labels)
+		_, _ = io.WriteString(w, strings.Replace(pageHTML, "__LABELS__", string(blob), 1))
 	}
-	_ = host
-	labels := map[string]string{
-		"title":     i18n.T("web.title"),
-		"subtitle":  i18n.T("web.subtitle"),
-		"volumes":   i18n.T("web.volumes"),
-		"actions":   i18n.T("web.actions"),
-		"sync":      i18n.T("web.sync"),
-		"syncing":   i18n.T("web.syncing"),
-		"syncDone":  i18n.T("web.sync_done"),
-		"config":    i18n.T("web.config"),
-		"save":      i18n.T("web.save"),
-		"saved":     i18n.T("web.saved"),
-		"entries":   i18n.T("web.entries"),
-		"used":      i18n.T("web.used"),
-		"nodaemon":  i18n.T("web.no_daemon"),
-		"loadError": i18n.T("web.load_error"),
-	}
-	blob, _ := json.Marshal(labels)
-	_, _ = io.WriteString(w, strings.Replace(pageHTML, "__LABELS__", string(blob), 1))
 }
 
 // handleStatus 优先用调用方注入的状态，否则回落到 daemon IPC。
@@ -136,6 +162,47 @@ func handleSync(sync SyncFunc) http.HandlerFunc {
 		v, err := sync(r.Context())
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, v)
+	}
+}
+
+// handleVolumes 创建新卷（POST /api/volumes）。
+//
+// 输入：JSON {name,title,point}
+// 输出：200 结果；400 参数错误；409 重名；501 当前模式不支持；502 Telegram 失败
+// 预期：建频道/拉 bot/静音全部在调用方实现，这里只做参数校验与状态码映射
+func handleVolumes(create CreateVolumeFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if create == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": i18n.T("web.create_unavailable")})
+			return
+		}
+		var req struct {
+			Name  string `json:"name"`
+			Title string `json:"title"`
+			Point string `json:"point"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T("web.name_required")})
+			return
+		}
+		v, err := create(r.Context(), req.Name, req.Title, req.Point)
+		if err != nil {
+			code := http.StatusBadGateway
+			if errors.Is(err, config.ErrVolumeExists) {
+				code = http.StatusConflict
+			}
+			writeJSON(w, code, map[string]string{"error": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, v)
@@ -236,6 +303,12 @@ textarea{
   outline:none;
 }
 textarea:focus{border-color:rgba(42,167,224,.55)}
+input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+  background:rgba(0,0,0,.28);color:var(--text);font:inherit;outline:none}
+input:focus{border-color:rgba(42,167,224,.55)}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.banner{grid-column:1/-1;border-radius:14px;padding:12px 16px;font-size:13px;line-height:1.6;display:none;
+  color:#ffd7db;background:rgba(255,107,122,.12);border:1px solid rgba(255,107,122,.42)}
 footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
 </style>
 </head>
@@ -262,6 +335,8 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
   </header>
 
   <main>
+    <div id="authbar" class="banner"></div>
+
     <section class="card">
       <h2 id="l-volumes"></h2>
       <div id="volumes"><div class="empty">…</div></div>
@@ -274,6 +349,19 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
         <button id="reload" class="ghost">↻</button>
       </div>
       <p class="msg" id="syncmsg"></p>
+    </section>
+
+    <section class="card" style="grid-column:1/-1">
+      <h2 id="l-newvol"></h2>
+      <div class="form">
+        <input id="nv-name" autocomplete="off">
+        <input id="nv-title" autocomplete="off">
+        <input id="nv-point" autocomplete="off">
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="nv-create"></button>
+        <span class="msg" id="nv-msg"></span>
+      </div>
     </section>
 
     <section class="card" style="grid-column:1/-1">
@@ -297,8 +385,15 @@ $('l-actions').textContent = L.actions;
 $('l-config').textContent = L.config;
 $('sync').textContent = L.sync;
 $('save').textContent = L.save;
+$('l-newvol').textContent = L.newVolume;
+$('nv-name').placeholder = L.fieldName;
+$('nv-title').placeholder = L.fieldTitle;
+$('nv-point').placeholder = L.fieldPoint;
+$('nv-create').textContent = L.create;
+$('authbar').textContent = L.authLost;
+if (L.canCreate !== '1') { $('l-newvol').closest('section').style.display = 'none'; }
 
-let lastState = '';
+let lastState = '', lastKind = '';
 function setPill(state, kind){
   const p = $('pill');
   p.textContent = state || '—';
@@ -335,10 +430,15 @@ async function refresh(){
     const r = await fetch('/api/status');
     const data = await r.json();
     if (data.error) { setPill(data.error, 'bad'); return; }
+    const lost = data.auth === 'lost';
+    $('authbar').style.display = lost ? 'block' : 'none';
+    $('sync').disabled = lost;
+    $('nv-create').disabled = lost;
     const s = String(data.state || '');
-    const kind = /connect|已连接|connecting|ready/i.test(s) && !/reconnect|断开|disconnect/i.test(s) ? 'ok'
+    const kind = lost ? 'bad'
+      : /connect|已连接|connecting|ready/i.test(s) && !/reconnect|断开|disconnect/i.test(s) ? 'ok'
       : /reconnect|重连|disconnect|断开/i.test(s) ? 'warn' : '';
-    if (s !== lastState) { lastState = s; setPill(s, kind); }
+    if (s !== lastState || kind !== lastKind) { lastState = s; lastKind = kind; setPill(s, kind); }
     renderVolumes(data);
   } catch (e) {
     setPill(L.loadError, 'bad');
@@ -361,6 +461,36 @@ $('save').onclick = async () => {
   const r = await fetch('/api/config', {method:'PUT', body: $('cfg').value});
   const data = await r.json();
   $('savemsg').textContent = data.error || L.saved;
+};
+$('nv-create').onclick = async () => {
+  const name = $('nv-name').value.trim();
+  if (!name) { $('nv-msg').textContent = L.nameNeed; return; }
+  const b = $('nv-create');
+  b.disabled = true; $('nv-msg').textContent = L.creating;
+  try {
+    const r = await fetch('/api/volumes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name,
+        title: $('nv-title').value.trim(),
+        point: $('nv-point').value.trim(),
+      }),
+    });
+    const data = await r.json();
+    if (data.error) {
+      $('nv-msg').textContent = data.error;
+    } else {
+      $('nv-msg').textContent = L.created + ' · ' + L.restart;
+      $('nv-name').value = ''; $('nv-title').value = ''; $('nv-point').value = '';
+      fetch('/api/config').then(x=>x.text()).then(t=>{ $('cfg').value = t; });
+      await refresh();
+    }
+  } catch (e) {
+    $('nv-msg').textContent = String(e);
+  } finally {
+    b.disabled = false;
+  }
 };
 refresh();
 setInterval(refresh, 3000);

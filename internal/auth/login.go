@@ -78,3 +78,19 @@ func printSelf(ctx context.Context, client *telegram.Client) error {
 	fmt.Println(i18n.T("ok.login", self.ID, self.Username))
 	return nil
 }
+
+// Username 读取当前会话的用户名（不带 @）。
+//
+// 输入：ctx；client 运行中的客户端
+// 输出：用户名；没有用户名时返回 error
+// 预期：用于从 bot 会话自动拿到 bot 用户名，省去手工输入
+func Username(ctx context.Context, client *telegram.Client) (string, error) {
+	self, err := client.Self(ctx)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", i18n.T("err.self_prefix"), err)
+	}
+	if self.Username == "" {
+		return "", fmt.Errorf("%s", i18n.T("err.bot_no_username"))
+	}
+	return self.Username, nil
+}

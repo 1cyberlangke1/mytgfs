@@ -6,17 +6,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 )
 
 // Create 创建一个私有广播频道。
 //
-// 输入：ctx；client user 客户端；title 频道名
+// 输入：ctx；api user 会话的 Telegram API；title 频道名
 // 输出：Result
 // 预期：不邀请 bot，只建频道
-func Create(ctx context.Context, client *telegram.Client, title string) (*Result, error) {
-	updates, err := client.API().ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
+func Create(ctx context.Context, api API, title string) (*Result, error) {
+	updates, err := api.ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
 		Broadcast: true,
 		Title:     title,
 		About:     "mytgfs storage",
@@ -37,12 +36,10 @@ func Create(ctx context.Context, client *telegram.Client, title string) (*Result
 
 // AddBot 把 bot 设为指定频道的管理员。
 //
-// 输入：ctx；client user 客户端；res 频道；botUsername 不含 @
+// 输入：ctx；api user 会话的 Telegram API；res 频道；botUsername 不含 @
 // 输出：bot 的 user id
 // 预期：bot 不在频道时，editAdmin 会把它加入并授权
-func AddBot(ctx context.Context, client *telegram.Client, res *Result, botUsername string) (int64, error) {
-	api := client.API()
-
+func AddBot(ctx context.Context, api API, res *Result, botUsername string) (int64, error) {
 	resolved, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
 		Username: botUsername,
 	})

@@ -73,6 +73,8 @@ func main() {
 		}
 	case "sync":
 		runSync(os.Args[2:])
+	case "volume":
+		runVolume(os.Args[2:])
 	case "mount":
 		runMount(os.Args[2:])
 	case "umount":
@@ -173,12 +175,12 @@ func runChannelCreate(args []string) {
 
 	var res *channel.Result
 	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Create(ctx, client.Client, *name)
+		r, err := channel.Create(ctx, client.API(), *name)
 		if err != nil {
 			return err
 		}
 		if *bot != "" {
-			id, err := channel.AddBot(ctx, client.Client, r, *bot)
+			id, err := channel.AddBot(ctx, client.API(), r, *bot)
 			if err != nil {
 				return err
 			}
@@ -188,7 +190,7 @@ func runChannelCreate(args []string) {
 		return nil
 	})
 	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.channel_init_prefix"), err))
+		failErr(i18n.T("err.channel_init_prefix"), err)
 	}
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
@@ -212,7 +214,7 @@ func runChannelList(args []string) {
 		tgclient.Options{})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
-		items, err := channel.List(ctx, client.Client)
+		items, err := channel.List(ctx, client.API())
 		if err != nil {
 			return err
 		}
@@ -222,7 +224,7 @@ func runChannelList(args []string) {
 		return nil
 	})
 	if err != nil {
-		fatal(fmt.Sprintf("列出频道失败: %v", err))
+		failErr("列出频道失败", err)
 	}
 }
 
@@ -251,12 +253,12 @@ func runChannelAdd(args []string) {
 
 	var res *channel.Result
 	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Add(ctx, client.Client, *channelID, *bot)
+		r, err := channel.Add(ctx, client.API(), *channelID, *bot)
 		res = r
 		return err
 	})
 	if err != nil {
-		fatal(fmt.Sprintf("添加 bot 失败: %v", err))
+		failErr("添加 bot 失败", err)
 	}
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
@@ -286,12 +288,12 @@ func runChannelInit(args []string) {
 
 	var res *channel.Result
 	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Init(ctx, client.Client, *botUsername, *name)
+		r, err := channel.Init(ctx, client.API(), *botUsername, *name)
 		res = r
 		return err
 	})
 	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.channel_init_prefix"), err))
+		failErr(i18n.T("err.channel_init_prefix"), err)
 	}
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
@@ -345,7 +347,7 @@ func runSync(args []string) {
 			return tgsync.Sync(ctx, idx, f, *limit)
 		})
 		if err != nil {
-			fatal(fmt.Sprintf("回填失败: %v", err))
+			failErr("回填失败", err)
 		}
 	} else {
 		client := tgclient.New(cfg.Telegram.APIID, apiHash,
@@ -359,7 +361,7 @@ func runSync(args []string) {
 			return serr
 		})
 		if err != nil {
-			fatal(fmt.Sprintf("同步失败: %v", err))
+			failErr("同步失败", err)
 		}
 		if res.Truncated {
 			fmt.Println("警告: 差异过大，只拿到最新消息；可用 --backfill 补历史")
@@ -520,7 +522,7 @@ func runMount(args []string) {
 		return nil
 	})
 	if err != nil {
-		fatal(fmt.Sprintf("挂载失败: %v", err))
+		failErr("挂载失败", err)
 	}
 }
 
@@ -647,4 +649,16 @@ func readLine() string {
 func fatal(msg string) {
 	fmt.Fprintln(os.Stderr, "FAIL:", msg)
 	os.Exit(1)
+}
+
+// failErr 打印错误；授权失效时补一句重新登录提示。
+//
+// 输入：prefix 错误前缀；err 原始错误
+// 输出：无（进程退出 1）
+// 预期：会话失效不可自愈，提示重新 auth，避免用户反复重试同一命令
+func failErr(prefix string, err error) {
+	if tgclient.IsAuthLost(err) {
+		fatal(fmt.Sprintf("%s: %v\n%s", prefix, err, i18n.T("err.auth_lost_hint")))
+	}
+	fatal(fmt.Sprintf("%s: %v", prefix, err))
 }

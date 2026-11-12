@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 )
 
@@ -20,15 +19,15 @@ type Result struct {
 
 // Init 创建私有频道并把 bot 设为管理员。
 //
-// 输入：ctx；client user 客户端；botUsername 不含 @；title 频道名
+// 输入：ctx；api user 会话的 Telegram API；botUsername 不含 @；title 频道名
 // 输出：Result
 // 预期：等价于 Create + AddBot
-func Init(ctx context.Context, client *telegram.Client, botUsername, title string) (*Result, error) {
-	res, err := Create(ctx, client, title)
+func Init(ctx context.Context, api API, botUsername, title string) (*Result, error) {
+	res, err := Create(ctx, api, title)
 	if err != nil {
 		return nil, err
 	}
-	botID, err := AddBot(ctx, client, res, botUsername)
+	botID, err := AddBot(ctx, api, res, botUsername)
 	if err != nil {
 		return nil, err
 	}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 )
 
@@ -22,11 +21,10 @@ type Item struct {
 
 // List 列出当前 user 能管理的频道/超级群。
 //
-// 输入：ctx；client user 客户端
+// 输入：ctx；api user 会话的 Telegram API
 // 输出：频道列表
 // 预期：creator 与拥有管理权限的管理员频道都会返回；普通成员频道不返回
-func List(ctx context.Context, client *telegram.Client) ([]Item, error) {
-	api := client.API()
+func List(ctx context.Context, api API) ([]Item, error) {
 	res, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
 		OffsetPeer: &tg.InputPeerEmpty{},
 		Limit:      200,

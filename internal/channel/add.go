@@ -5,17 +5,15 @@ package channel
 import (
 	"context"
 	"fmt"
-
-	"github.com/gotd/td/telegram"
 )
 
 // Add 把 bot 设为已有频道的管理员。
 //
-// 输入：ctx；client user 客户端；channelID 目标频道；botUsername 不含 @
+// 输入：ctx；api user 会话的 Telegram API；channelID 目标频道；botUsername 不含 @
 // 输出：Result
 // 预期：要求当前 user 是该频道管理员
-func Add(ctx context.Context, client *telegram.Client, channelID int64, botUsername string) (*Result, error) {
-	items, err := List(ctx, client)
+func Add(ctx context.Context, api API, channelID int64, botUsername string) (*Result, error) {
+	items, err := List(ctx, api)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +33,7 @@ func Add(ctx context.Context, client *telegram.Client, channelID int64, botUsern
 		AccessHash: target.AccessHash,
 		Title:      target.Title,
 	}
-	botID, err := AddBot(ctx, client, res, botUsername)
+	botID, err := AddBot(ctx, api, res, botUsername)
 	if err != nil {
 		return nil, err
 	}

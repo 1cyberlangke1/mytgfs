@@ -34,6 +34,10 @@ type Options struct {
 	// OnConnState 在主连接状态变化时回调。
 	// 输入：连接状态；输出：无；预期：回调要短，不能阻塞连接生命周期。
 	OnConnState func(ConnState)
+	// OnAuthLost 在会话失效时回调（会话被吊销、退出登录、账号停用等）。
+	// 输入：ctx 与导致判定的错误；输出：非 nil 时停止 Run
+	// 预期：nil 时默认停止 Run，避免拿着失效会话无限重连空转
+	OnAuthLost func(ctx context.Context, err error) error
 }
 
 // Client 包装 telegram.Client 与 floodwait 调度器。
@@ -66,10 +70,17 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		WithMaxRetries(opts.MaxRetries).
 		WithMaxWait(opts.MaxWait)
 
+	// 默认在授权失效时停止 Run：失效会话无法自愈，继续重连只会空转
+	onAuthLost := opts.OnAuthLost
+	if onAuthLost == nil {
+		onAuthLost = func(_ context.Context, err error) error { return err }
+	}
+
 	client := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage:    sess,
 		Middlewares:       []telegram.Middleware{waiter},
 		OnConnectionState: mapConnState(opts.OnConnState),
+		OnAuthLost:        onAuthLost,
 	})
 	return &Client{Client: client, waiter: waiter}
 }
