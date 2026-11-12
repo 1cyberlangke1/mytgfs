@@ -30,6 +30,7 @@ import (
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
+	"mytgfs/internal/uploadcache"
 )
 
 // runWebDAV 启动 WebDAV 服务。
@@ -41,11 +42,11 @@ func runWebDAV(args []string) {
 
 	cfg, err := config.Load("config.toml")
 	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
 	volume, ok := volumeByName(cfg, *name)
 	if !ok {
-		fatal("卷不存在: " + *name)
+		fatal(i18n.T("err.volume_not_found", *name))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -57,7 +58,7 @@ func runWebDAV(args []string) {
 	}
 	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
 	if err != nil {
-		fatal(fmt.Sprintf("打开索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}
 	defer idx.Close()
 
@@ -73,6 +74,10 @@ func runWebDAV(args []string) {
 	err = client.Run(ctx, func(ctx context.Context) error {
 		store := telegramstore.New(client.API(), volume.ChatID)
 		store.SetParallel(cfg.Mount.DownloadConnections())
+		store.SetUploadParallel(cfg.Mount.UploadParallelism())
+		store.SetUploadParallel(cfg.Mount.UploadParallelism())
+		// 上传断点落在 data/uploads，中断后按内容 sha256 续传
+		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
 		handler := &webdav.Handler{
 			Prefix:     "/",
 			FileSystem: dav.New(ctx, idx, store, cfg.Mount.ReadChunk()),
@@ -143,5 +148,5 @@ func runUnmap(args []string) {
 	addr := fs.String("addr", "127.0.0.1:8080", "服务地址")
 	_ = fs.Parse(args)
 	cleanupMappings(*addr)
-	fmt.Printf("已清理指向 %s 的网络映射\n", *addr)
+	fmt.Println(i18n.T("dav.cleanup_done", *addr))
 }

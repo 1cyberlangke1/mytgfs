@@ -50,11 +50,11 @@ func runCopy(args []string) {
 	}
 	cfg, err := config.Load("config.toml")
 	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
 	volume, ok := volumeByName(cfg, *name)
 	if !ok {
-		fatal("卷不存在: " + *name)
+		fatal(i18n.T("err.volume_not_found", *name))
 	}
 	dstName := *to
 	if dstName == "" {
@@ -62,11 +62,11 @@ func runCopy(args []string) {
 	}
 	dstVolume, ok := volumeByName(cfg, dstName)
 	if !ok {
-		fatal("目标卷不存在: " + dstName)
+		fatal(i18n.T("err.volume_target_not_found", dstName))
 	}
 	// 同卷同路径才是无意义操作；跨卷复制到相同路径是合法的
 	if src == dst && dstName == *name {
-		fatal("源和目标是同一个路径")
+		fatal(i18n.T("err.cp_same_path"))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -78,7 +78,7 @@ func runCopy(args []string) {
 	}
 	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
 	if err != nil {
-		fatal(fmt.Sprintf("打开索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}
 	defer idx.Close()
 
@@ -87,7 +87,7 @@ func runCopy(args []string) {
 	if dstName != *name {
 		dstIdx, err = index.Open(datadir.Path("index-" + dstName + ".db"))
 		if err != nil {
-			fatal(fmt.Sprintf("打开目标索引: %v", err))
+			fatal(fmt.Sprintf(i18n.T("err.index_open_target"), err))
 		}
 		defer dstIdx.Close()
 	}
@@ -97,17 +97,17 @@ func runCopy(args []string) {
 
 	source, found, err := idx.Get(ctx, src)
 	if err != nil {
-		fatal(fmt.Sprintf("读取索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
 	}
 	if !found {
-		fatal("源文件不在索引里，先运行 mytgfs sync: " + src)
+		fatal(i18n.T("err.cp_src_missing", src))
 	}
 	old, hadOld, err := dstIdx.Get(ctx, dst)
 	if err != nil {
-		fatal(fmt.Sprintf("读取索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
 	}
 	if hadOld && !*force {
-		fatal("目标已存在，加 --force 覆盖: " + dst)
+		fatal(i18n.T("err.cp_dst_exists", dst))
 	}
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
@@ -144,7 +144,7 @@ func runCopy(args []string) {
 				Mtime:         source.Mtime,
 				Sha256:        source.Sha256,
 			}); err != nil {
-				fmt.Fprintf(os.Stderr, "写回源索引失败: %v\n", err)
+				fmt.Fprintln(os.Stderr, i18n.T("err.index_read", err))
 			}
 		}
 		if err := dstIdx.Put(ctx, index.File{
@@ -161,7 +161,7 @@ func runCopy(args []string) {
 		}
 		if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
 			if err := dstStore.Delete(ctx, old.MessageID); err != nil {
-				fmt.Fprintf(os.Stderr, "删除目标旧消息 %d 失败: %v\n", old.MessageID, err)
+				fmt.Fprintln(os.Stderr, i18n.T("err.cp_delete_old", old.MessageID, err))
 			}
 		}
 		fmt.Printf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
@@ -169,7 +169,7 @@ func runCopy(args []string) {
 		return nil
 	})
 	if err != nil {
-		failErr("复制失败", err)
+		failErr(i18n.T("err.cp_prefix"), err)
 	}
 }
 

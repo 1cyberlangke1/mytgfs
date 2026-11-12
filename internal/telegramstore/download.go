@@ -78,7 +78,7 @@ func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int
 		b = b.WithProgress(func(done, _ int64) { progress(done) })
 	}
 	if _, err := b.Parallel(ctx, w); err != nil {
-		return nil, fmt.Errorf("下载 %d..%d: %w", start, end, err)
+		return nil, DescribeError(fmt.Errorf("下载 %d..%d: %w", start, end, s.noteErr(err)))
 	}
 
 	lo := offset - start

@@ -475,6 +475,8 @@ func runMount(args []string) {
 			}
 			store := telegramstore.New(api, channelID)
 			store.SetParallel(cfg.Mount.DownloadConnections())
+			store.SetUploadParallel(cfg.Mount.UploadParallelism())
+			store.SetUploadParallel(cfg.Mount.UploadParallelism())
 			vctx, vcancel := context.WithCancel(ctx)
 			fsys := vfs.New(vctx, idx, store, os.TempDir())
 			ctlMu.Lock()

@@ -36,7 +36,7 @@ func (s *Store) Refresh(ctx context.Context, messageID int) (*Part, error) {
 		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getMessages: %w", err)
+		return nil, DescribeError(fmt.Errorf("getMessages: %w", s.noteErr(err)))
 	}
 	for _, mc := range messagesOf(res) {
 		msg, ok := mc.(*tg.Message)

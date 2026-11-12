@@ -90,7 +90,7 @@ func (s *Store) sendDocRef(ctx context.Context, peer tg.InputPeerClass, src *Par
 		RandomID: rand.Int63(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("copy: sendMedia: %w", err)
+		return nil, DescribeError(fmt.Errorf("copy: sendMedia: %w", s.noteErr(err)))
 	}
 	doc, msgID, err := extractDocument(updates)
 	if err != nil {

@@ -58,7 +58,7 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		RandomID: rand.Int63(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("sendMedia: %w", err)
+		return nil, DescribeError(fmt.Errorf("sendMedia: %w", s.noteErr(err)))
 	}
 
 	doc, msgID, err := extractDocument(updates)
@@ -101,7 +101,7 @@ func (s *Store) sendMeta(ctx context.Context, peer tg.InputPeerClass, text strin
 		RandomID: rand.Int63(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("sendMeta: %w", err)
+		return 0, DescribeError(fmt.Errorf("sendMeta: %w", s.noteErr(err)))
 	}
 	return extractMessageID(updates)
 }

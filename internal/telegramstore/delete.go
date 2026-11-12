@@ -28,7 +28,7 @@ func (s *Store) Delete(ctx context.Context, ids ...int) error {
 		ID:      ids,
 	})
 	if err != nil {
-		return fmt.Errorf("deleteMessages: %w", err)
+		return DescribeError(fmt.Errorf("deleteMessages: %w", s.noteErr(err)))
 	}
 	return nil
 }

@@ -55,6 +55,24 @@ type Mount struct {
 	DownloadParallel int `toml:"download_parallel"`
 	// ReadChunkMB 是 WebDAV 每次向上游取数的分片大小（MB）：0 用默认 8，范围 1..64。
 	ReadChunkMB int `toml:"read_chunk_mb"`
+	// UploadParallel 是上传并发分片数：0 用默认 4，范围 1..16。
+	UploadParallel int `toml:"upload_parallel"`
+}
+
+// UploadParallelism 返回上传并发分片数。
+//
+// 输入：无
+// 输出：并发数，默认 4，夹在 1..16
+// 预期：网络好的可以调大，慢网络调小；与下载并发独立
+func (c Mount) UploadParallelism() int {
+	n := c.UploadParallel
+	if n <= 0 {
+		return 4
+	}
+	if n > 16 {
+		return 16
+	}
+	return n
 }
 
 // ReadChunk 返回 WebDAV 读分片大小（字节）。

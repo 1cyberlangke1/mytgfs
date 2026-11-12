@@ -369,6 +369,8 @@ func Run(opts Options) error {
 		}
 		store := telegramstore.New(api, channelID)
 		store.SetParallel(cfg.Mount.DownloadConnections())
+		store.SetUploadParallel(cfg.Mount.UploadParallelism())
+		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		vctx, vcancel := context.WithCancel(rootCtx)
 		fsys := vfs.New(vctx, idx, store, os.TempDir())
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}

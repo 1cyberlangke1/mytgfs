@@ -40,9 +40,66 @@ func runVolume(args []string) {
 		runVolumeCreate(args[1:])
 	case "delete":
 		runVolumeDelete(args[1:])
+	case "check":
+		runVolumeCheck(args[1:])
 	default:
 		usage()
 		os.Exit(2)
+	}
+}
+
+// runVolumeCheck 用 bot 会话逐个检查卷的频道是否仍可用。
+//
+// 输入：--config 配置文件
+// 输出：每个卷一行状态，最后一行汇总；有卷不可用时退出码 1
+// 预期：只读 RPC（getChannels + getParticipant），不往频道写任何消息
+func runVolumeCheck(args []string) {
+	fs := flag.NewFlagSet("volume check", flag.ExitOnError)
+	cfgPath := fs.String("config", "config.toml", "config file")
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
+	}
+	if len(cfg.Volumes) == 0 {
+		fmt.Println(i18n.T("volume.check_none"))
+		return
+	}
+	apiHash := cfg.APIHash()
+	if apiHash == "" {
+		fatal(i18n.T("err.missing_api_hash"))
+	}
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	client := tgclient.New(cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+		tgclient.Options{})
+	bad := 0
+	err = client.Run(ctx, func(ctx context.Context) error {
+		for _, v := range cfg.Volumes {
+			fmt.Println(i18n.T("volume.check_title", v.Name, v.ChatID))
+			if _, cerr := channel.Check(ctx, client.API(), v.ChatID); cerr != nil {
+				bad++
+				fmt.Println(i18n.T("volume.check_fail", cerr))
+				continue
+			}
+			fmt.Println(i18n.T("volume.check_ok"))
+		}
+		return nil
+	})
+	if err != nil {
+		failErr(i18n.T("err.channel_check_prefix"), err)
+	}
+	fmt.Println(i18n.T("volume.check_summary", len(cfg.Volumes), bad))
+	if bad > 0 {
+		os.Exit(1)
 	}
 }
 

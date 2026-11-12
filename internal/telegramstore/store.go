@@ -16,6 +16,8 @@ import (
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 	"golang.org/x/time/rate"
+
+	"mytgfs/internal/i18n"
 )
 
 // MaxFileSize 是 Telegram 单条 document 消息的字节上限。
@@ -67,6 +69,11 @@ type Store struct {
 
 	dl          *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
 	threadCount int                    // 下载工作协程上限，0 用默认值
+
+	// resumeStore 保存上传断点，nil 表示不做断点续传
+	resumeStore ResumeStore
+	// uploadWorkers 是上传并发分片数，0 用默认值
+	uploadWorkers int
 }
 
 // New 创建存储。
@@ -138,7 +145,7 @@ func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 		&tg.InputChannel{ChannelID: s.channelID, AccessHash: 0},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getChannels: %w", err)
+		return nil, DescribeError(fmt.Errorf("getChannels: %w", err))
 	}
 	var chats []tg.ChatClass
 	switch m := res.(type) {
@@ -153,5 +160,6 @@ func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 			return ch, nil
 		}
 	}
-	return nil, fmt.Errorf("channel %d not found", s.channelID)
+	// 频道不存在、或被删后重建了同 ID 之外的新频道时都会走到这里
+	return nil, fmt.Errorf("%s", i18n.T("err.channel_not_visible", s.channelID))
 }

@@ -37,10 +37,17 @@ type fakeAPI struct {
 	fileErr    error
 	// fileErrOnce 只让下一次 getFile 失败，用于测试 file_reference 刷新后重试。
 	fileErrOnce error
+
+	// savedParts/bigParts 记录实际发出的分片序号，供断点续传测试断言
+	savedParts []int
+	bigParts   []int
+	// partErrOnceAt 让指定分片第一次上传失败（-1 表示不注入）
+	partErrOnceAt int
+	partErrOnce   error
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{nextID: 100, fileData: []byte("0123456789")}
+	return &fakeAPI{nextID: 100, fileData: []byte("0123456789"), partErrOnceAt: -1}
 }
 
 func (f *fakeAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClass) (tg.MessagesChatsClass, error) {
@@ -118,11 +125,23 @@ func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest)
 	return &tg.UploadFile{Bytes: f.fileData[off:end]}, nil
 }
 
-func (f *fakeAPI) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequest) (bool, error) {
+func (f *fakeAPI) UploadSaveFilePart(_ context.Context, req *tg.UploadSaveFilePartRequest) (bool, error) {
+	f.savedParts = append(f.savedParts, req.FilePart)
+	if f.partErrOnce != nil && f.partErrOnceAt == req.FilePart {
+		err := f.partErrOnce
+		f.partErrOnce = nil
+		return false, err
+	}
 	return true, nil
 }
 
-func (f *fakeAPI) UploadSaveBigFilePart(context.Context, *tg.UploadSaveBigFilePartRequest) (bool, error) {
+func (f *fakeAPI) UploadSaveBigFilePart(_ context.Context, req *tg.UploadSaveBigFilePartRequest) (bool, error) {
+	f.bigParts = append(f.bigParts, req.FilePart)
+	if f.partErrOnce != nil && f.partErrOnceAt == req.FilePart {
+		err := f.partErrOnce
+		f.partErrOnce = nil
+		return false, err
+	}
 	return true, nil
 }
 

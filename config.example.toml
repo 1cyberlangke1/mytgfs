@@ -26,6 +26,12 @@ max_bytes = 1073741824
 point = ""
 # 挂载期自动增量同步间隔（秒）：0 = 默认 15，负数 = 关闭
 sync_seconds = 15
+# WebDAV 读分片（MB）：0 = 默认 8，范围 1..64；网络慢可调小
+read_chunk_mb = 8
+# 下载并发连接数：0 = 默认 4，范围 1..8
+download_parallel = 4
+# 上传并发分片数：0 = 默认 4，范围 1..16
+upload_parallel = 4
 
 [ratelimit]
 # 全部留空即使用默认值（推荐，不需要配置）

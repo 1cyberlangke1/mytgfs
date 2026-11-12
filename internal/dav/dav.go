@@ -7,9 +7,13 @@ package dav
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"hash"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -17,6 +21,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
@@ -26,6 +31,8 @@ import (
 type Store interface {
 	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error)
 	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
+	// UploadResumable 按内容 key 断点续传，中断后能跳过已上传分片
+	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*telegramstore.Part, error)
 	Delete(ctx context.Context, ids ...int) error
 	Rename(ctx context.Context, messageID int, caption string) error
 }
@@ -74,7 +81,7 @@ func (d *FileSystem) OpenFile(_ context.Context, name string, flag int, perm os.
 		if err != nil {
 			return nil, err
 		}
-		return &file{d: d, name: name, tmp: tmp, write: true, perm: perm}, nil
+		return &file{d: d, name: name, tmp: tmp, write: true, perm: perm, sum: sha256.New()}, nil
 	}
 	if d.isDir(name) {
 		return &file{d: d, name: name, dir: true}, nil
@@ -93,7 +100,7 @@ func (d *FileSystem) OpenFile(_ context.Context, name string, flag int, perm os.
 func (d *FileSystem) RemoveAll(_ context.Context, name string) error {
 	name = clean(name)
 	if name == "/" {
-		return errors.New("不能删除根目录")
+		return errors.New(i18n.T("err.dav_root_delete"))
 	}
 	if d.isDir(name) {
 		return d.idx.DeleteDir(d.ctx, name)
@@ -115,7 +122,7 @@ func (d *FileSystem) RemoveAll(_ context.Context, name string) error {
 func (d *FileSystem) Rename(_ context.Context, oldName, newName string) error {
 	oldName, newName = clean(oldName), clean(newName)
 	if d.isDir(oldName) {
-		return errors.New("暂不支持目录改名")
+		return errors.New(i18n.T("err.dav_dir_rename"))
 	}
 	f, ok, err := d.idx.Get(d.ctx, oldName)
 	if err != nil {
@@ -172,6 +179,8 @@ type file struct {
 	off  int64
 	buf  []byte
 	base int64
+	// sum 在写模式下累计内容 sha256，作为断点键与去重依据
+	sum hash.Hash
 }
 
 // Close 关闭：写模式提交上传，读模式释放缓冲。
@@ -186,12 +195,22 @@ func (f *file) Close() error {
 		if _, err := f.tmp.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		caption := tgsync.EncodeCaptionHash(f.name, "")
-		part, err := f.d.store.Upload(f.d.ctx, f.tmp, st.Size(), path.Base(f.name), "application/octet-stream", caption)
+		sha := ""
+		if f.sum != nil {
+			sha = hex.EncodeToString(f.sum.Sum(nil))
+		}
+		caption := tgsync.EncodeCaptionHash(f.name, sha)
+		part, err := f.d.store.UploadResumable(f.d.ctx, f.tmp, st.Size(), sha,
+			path.Base(f.name), "application/octet-stream", caption)
 		if err != nil {
 			return err
 		}
-		return f.d.idx.Put(f.d.ctx, index.File{
+		// 覆盖写：旧消息要删掉，否则频道里会堆同路径的孤儿消息
+		old, hadOld, gerr := f.d.idx.Get(f.d.ctx, f.name)
+		if gerr != nil {
+			return gerr
+		}
+		if err := f.d.idx.Put(f.d.ctx, index.File{
 			Path:          f.name,
 			MessageID:     part.MessageID,
 			DocumentID:    part.DocumentID,
@@ -199,7 +218,16 @@ func (f *file) Close() error {
 			FileReference: part.FileReference,
 			Size:          part.Size,
 			Mtime:         time.Now().Unix(),
-		})
+			Sha256:        sha,
+		}); err != nil {
+			return err
+		}
+		if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
+			if derr := f.d.store.Delete(f.d.ctx, old.MessageID); derr != nil {
+				slog.Debug("删除被覆盖的旧消息失败", "path", f.name, "msg", old.MessageID, "err", derr)
+			}
+		}
+		return nil
 	}
 	return nil
 }
@@ -222,6 +250,12 @@ func (f *file) Read(p []byte) (int, error) {
 		}
 		data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), f.off, int(length), nil)
 		if err != nil {
+			// 消息在 Telegram 侧被删了：索引里这条已经没有意义，删掉并按文件不存在处理
+			if telegramstore.IsMessageGone(err) {
+				slog.Debug("远端消息已被删除，清理索引", "path", f.name, "msg", f.entry.MessageID)
+				_ = f.d.idx.Delete(f.d.ctx, f.name)
+				return 0, os.ErrNotExist
+			}
 			return 0, err
 		}
 		f.buf, f.base = data, f.off
@@ -239,32 +273,36 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 		offset += f.off
 	case io.SeekEnd:
 		if f.entry == nil {
-			return 0, errors.New("未知长度")
+			return 0, errors.New(i18n.T("err.dav_unknown_size"))
 		}
 		offset += f.entry.Size
 	default:
-		return 0, errors.New("不支持的 whence")
+		return 0, errors.New(i18n.T("err.dav_whence"))
 	}
 	if offset < 0 {
-		return 0, errors.New("负偏移")
+		return 0, errors.New(i18n.T("err.dav_negative_offset"))
 	}
 	f.off = offset
 	f.buf = nil
 	return offset, nil
 }
 
-// Write 写临时文件。
+// Write 写临时文件，同时累计内容 sha256。
 func (f *file) Write(p []byte) (int, error) {
 	if !f.write {
-		return 0, errors.New("文件未以写模式打开")
+		return 0, errors.New(i18n.T("err.dav_not_write"))
 	}
-	return f.tmp.Write(p)
+	n, err := f.tmp.Write(p)
+	if n > 0 && f.sum != nil {
+		_, _ = f.sum.Write(p[:n])
+	}
+	return n, err
 }
 
 // Readdir 列出目录项。
 func (f *file) Readdir(count int) ([]fs.FileInfo, error) {
 	if !f.dir {
-		return nil, errors.New("不是目录")
+		return nil, errors.New(i18n.T("err.dav_not_dir"))
 	}
 	entries, err := f.d.idx.List(f.d.ctx, f.name)
 	if err != nil {

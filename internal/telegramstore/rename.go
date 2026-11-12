@@ -27,7 +27,7 @@ func (s *Store) Rename(ctx context.Context, messageID int, caption string) error
 		return err
 	}
 	if _, err := s.api.MessagesEditMessage(ctx, req); err != nil {
-		return fmt.Errorf("editMessage: %w", err)
+		return DescribeError(fmt.Errorf("editMessage: %w", s.noteErr(err)))
 	}
 	return nil
 }
