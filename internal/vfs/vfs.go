@@ -1,16 +1,18 @@
 package vfs
 
-// FUSE 文件系统适配层。
+// Package vfs 是 FUSE 适配层。
 //
-// 元数据读本地索引，文件内容走 telegramstore 随机读。
-// v1 支持：读文件、写文件、删除文件、目录由 path 推导。
-// 不支持：硬链接、软链接、重命名（返回 ENOSYS）。
+// 数据流：元数据读本地 SQLite 索引，文件内容按需走 telegramstore 随机读；
+// 写入先落磁盘临时文件（不占内存），Release 时上传 Telegram 并写入索引。
+// 支持：读、写、截断、删除、重命名；目录由 path 推导，不单独存储。
+// 不支持：硬链接、软链接。
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -49,13 +51,8 @@ func pathIno(p string) uint64 {
 	return h.Sum64()
 }
 
-// debug 由 MYTGFS_DEBUG=1 打开，默认关闭。
-var debug = os.Getenv("MYTGFS_DEBUG") != ""
-
 func debugf(format string, args ...any) {
-	if debug {
-		log.Printf(format, args...)
-	}
+	slog.Debug(fmt.Sprintf(format, args...))
 }
 
 // FS 是挂载的文件系统。
@@ -68,6 +65,7 @@ type FS struct {
 
 	mu      sync.Mutex
 	handles map[uint64]*openFile
+	pending map[string]*openFile
 	next    uint64
 }
 
@@ -76,6 +74,8 @@ type openFile struct {
 	tmp   *os.File
 	dirty bool
 	size  int64
+	// refs 是同时打开该节点的 handle 数；归零才允许提交并清理 pending。
+	refs int
 }
 
 // New 创建文件系统。
@@ -93,7 +93,23 @@ func New(ctx context.Context, idx *index.Index, store *telegramstore.Store, tmpD
 		ctx:     ctx,
 		tmpDir:  tmpDir,
 		handles: map[uint64]*openFile{},
+		pending: map[string]*openFile{},
 	}
+}
+
+// newHandle 分配一个文件句柄并给节点加引用。
+//
+// 输入：h 节点（nil 表示无缓冲的只读句柄）
+// 输出：句柄号
+// 预期：调用方必须已持有 f.mu；h 非 nil 时 refs 加一
+func (f *FS) newHandle(h *openFile) uint64 {
+	f.next++
+	hid := f.next
+	f.handles[hid] = h
+	if h != nil {
+		h.refs++
+	}
+	return hid
 }
 
 // Getattr 取文件属性。
@@ -105,6 +121,12 @@ func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 	}
 	// 正在写入、尚未上传的文件
 	f.mu.Lock()
+	if h, ok := f.pending[p]; ok {
+		size := h.size
+		f.mu.Unlock()
+		fillStat(stat, fuse.S_IFREG|0o666, size, pathIno(p))
+		return 0
+	}
 	for _, h := range f.handles {
 		if h.path == p && h.tmp != nil {
 			size := h.size
@@ -128,6 +150,39 @@ func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 	}
 	return -fuse.ENOENT
 }
+
+// Fgetattr 用句柄取属性。
+//
+// 输入：路径 p、统计结构 stat、句柄 fh
+// 输出：0 或负 errno
+// 预期：命中句柄时用句柄里的实时 size；否则退回按路径取，供 PowerShell 提供程序使用
+func (f *FS) Fgetattr(p string, stat *fuse.Stat_t, fh uint64) int {
+	f.mu.Lock()
+	h := f.handles[fh]
+	if h != nil {
+		size := h.size
+		f.mu.Unlock()
+		fillStat(stat, fuse.S_IFREG|0o666, size, pathIno(clean(p)))
+		return 0
+	}
+	f.mu.Unlock()
+	return f.Getattr(p, stat, fh)
+}
+
+// Flush 刷新句柄；内容在 Release 统一提交，这里直接成功。
+func (f *FS) Flush(p string, fh uint64) int { return 0 }
+
+// Fsync 同步句柄；内容在 Release 统一提交，这里直接成功。
+func (f *FS) Fsync(p string, datasync bool, fh uint64) int { return 0 }
+
+// Utimens 更新时间戳；不持久化时间戳，直接成功。
+func (f *FS) Utimens(p string, tmsp []fuse.Timespec) int { return 0 }
+
+// Chmod 改权限；虚拟盘统一 0666/0777，直接成功。
+func (f *FS) Chmod(p string, mode uint32) int { return 0 }
+
+// Chown 改属主；虚拟盘不区分属主，直接成功。
+func (f *FS) Chown(p string, uid uint32, gid uint32) int { return 0 }
 
 // Opendir 打开目录（资源管理器必须先调它）。
 func (f *FS) Opendir(p string) (int, uint64) {
@@ -165,25 +220,104 @@ func (f *FS) Readdir(p string, fill func(name string, stat *fuse.Stat_t, ofst in
 			return 0
 		}
 	}
+	f.mu.Lock()
+	for pendingPath, h := range f.pending {
+		if path.Dir(pendingPath) != p {
+			continue
+		}
+		st := &fuse.Stat_t{}
+		fillStat(st, fuse.S_IFREG|0o666, h.size, pathIno(pendingPath))
+		fill(path.Base(pendingPath), st, 0)
+	}
+	f.mu.Unlock()
 	return 0
 }
 
-// Open 打开文件。
-func (f *FS) Open(p string, flags int) (int, uint64) {
+// Mknod 创建待上传文件（memfs 模式：先建节点，再由 Open 取 handle）。
+func (f *FS) Mknod(p string, mode uint32, dev uint64) int {
+	debugf("vfs: Mknod %s mode=%o", p, mode)
 	p = clean(p)
+	f.mu.Lock()
+	if _, ok := f.pending[p]; ok {
+		// 已存在待上传节点，复用，避免覆盖未提交内容
+		f.mu.Unlock()
+		return 0
+	}
+	f.mu.Unlock()
+	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
+	if err != nil {
+		debugf("vfs: Mknod %s temp error: %v", p, err)
+		return -fuse.EIO
+	}
+	f.mu.Lock()
+	if _, ok := f.pending[p]; ok {
+		f.mu.Unlock()
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return 0
+	}
+	f.pending[p] = &openFile{path: p, tmp: tmp, dirty: true}
+	f.mu.Unlock()
+	return 0
+}
+
+// Create 交给 Mknod + Open 处理，返回 ENOSYS 让 cgofuse 走标准路径。
+// （memfs 官方示例也不实现 Create）
+
+// Create 新建文件（Windows 的 CreateFile 直接走这里）。
+//
+// 输入：路径 p、flags、mode
+// 输出：0 与句柄
+// 预期：建磁盘临时文件并登记 pending，Release 时上传到 Telegram
+func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
+	debugf("vfs: Create %s flags=%d", p, flags)
+	p = clean(p)
+	f.mu.Lock()
+	if h, ok := f.pending[p]; ok {
+		hid := f.newHandle(h)
+		f.mu.Unlock()
+		return 0, hid
+	}
+	f.mu.Unlock()
+	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
+	if err != nil {
+		debugf("vfs: Create %s temp error: %v", p, err)
+		return -fuse.EIO, 0
+	}
+	h := &openFile{path: p, tmp: tmp, dirty: true}
+	f.mu.Lock()
+	f.pending[p] = h
+	hid := f.newHandle(h)
+	f.mu.Unlock()
+	return 0, hid
+}
+
+// Open 打开文件。
+//
+// 输入：路径 p、flags
+// 输出：0 与句柄（永不返回 ENOENT）
+// 预期：命中待上传节点用同一个节点加引用；命中索引给只读句柄；
+//       都未命中时给空句柄，让上层自己拿到 EBADF，而不是在这里抛 ENOENT
+func (f *FS) Open(p string, flags int) (int, uint64) {
+	debugf("vfs: Open %s flags=%d", p, flags)
+	p = clean(p)
+	f.mu.Lock()
+	if h, ok := f.pending[p]; ok {
+		hid := f.newHandle(h)
+		f.mu.Unlock()
+		return 0, hid
+	}
+	f.mu.Unlock()
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
 		return -fuse.EIO, 0
 	}
-	if !ok {
-		return -fuse.ENOENT, 0
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.next++
-	hid := f.next
-	f.handles[hid] = &openFile{path: p, size: file.Size}
-	return 0, hid
+	if !ok {
+		return 0, f.newHandle(nil)
+	}
+	return 0, f.newHandle(&openFile{path: p, size: file.Size})
 }
 
 // Read 按偏移读。
@@ -220,22 +354,6 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	return copy(buff, data)
 }
 
-// Create 新建文件（写入临时文件，Release 时上传）。
-func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
-	debugf("vfs: Create %s flags=%d", p, flags)
-	p = clean(p)
-	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
-	if err != nil {
-		return -fuse.EIO, 0
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.next++
-	hid := f.next
-	f.handles[hid] = &openFile{path: p, tmp: tmp, dirty: true}
-	return 0, hid
-}
-
 // Write 写入临时文件。
 func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
 	debugf("vfs: Write %s ofst=%d len=%d fh=%d", p, ofst, len(buff), fh)
@@ -255,19 +373,47 @@ func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
 	return len(buff)
 }
 
-// Release 关闭文件；有内容时上传并更新索引。
+// Release 关闭文件。
+//
+// 输入：路径 p、句柄 fh
+// 输出：0 或负 errno
+// 预期：最后一个句柄关闭时才提交；0 字节文件不占 Telegram 对象，直接写索引
 func (f *FS) Release(p string, fh uint64) int {
 	debugf("vfs: Release %s fh=%d", p, fh)
 	f.mu.Lock()
 	h := f.handles[fh]
 	delete(f.handles, fh)
-	f.mu.Unlock()
-	if h == nil || h.tmp == nil {
+	if h == nil {
+		f.mu.Unlock()
 		return 0
 	}
+	h.refs--
+	if h.refs > 0 || h.tmp == nil {
+		f.mu.Unlock()
+		return 0
+	}
+	f.mu.Unlock()
+
 	defer h.tmp.Close()
 	defer os.Remove(h.tmp.Name())
-	if !h.dirty || h.size == 0 {
+
+	if h.size == 0 {
+		// 空文件：先删旧记录再写入 0 字节记录，保证「截断为空」也生效
+		if err := f.idx.Delete(f.ctx, h.path); err != nil {
+			debugf("vfs: Release empty delete %s failed: %v", h.path, err)
+			return -fuse.EIO
+		}
+		if err := f.idx.Put(f.ctx, index.File{
+			Path:  h.path,
+			Size:  0,
+			Mtime: nowUnix(),
+		}); err != nil {
+			debugf("vfs: Release empty index %s failed: %v", h.path, err)
+			return -fuse.EIO
+		}
+		f.mu.Lock()
+		delete(f.pending, h.path)
+		f.mu.Unlock()
 		return 0
 	}
 	if _, err := h.tmp.Seek(0, io.SeekStart); err != nil {
@@ -292,6 +438,9 @@ func (f *FS) Release(p string, fh uint64) int {
 		debugf("vfs: Release index %s failed: %v", h.path, err)
 		return -fuse.EIO
 	}
+	f.mu.Lock()
+	delete(f.pending, h.path)
+	f.mu.Unlock()
 	return 0
 }
 
@@ -344,10 +493,31 @@ func (f *FS) Rename(oldpath, newpath string) int {
 	return 0
 }
 
-// Truncate 暂不支持。
-func (f *FS) Truncate(p string, size int64, fh uint64) int { return -fuse.ENOSYS }
+// Truncate 调整待上传文件大小。
+func (f *FS) Truncate(p string, size int64, fh uint64) int {
+	debugf("vfs: Truncate %s size=%d fh=%d", p, size, fh)
+	f.mu.Lock()
+	h := f.handles[fh]
+	if h == nil {
+		h = f.pending[clean(p)]
+	}
+	f.mu.Unlock()
+	if h == nil || h.tmp == nil {
+		return -fuse.ENOENT
+	}
+	if err := h.tmp.Truncate(size); err != nil {
+		return -fuse.EIO
+	}
+	h.size = size
+	h.dirty = true
+	return 0
+}
 
 // Statfs 返回虚拟容量。
+//
+// 输入：路径、输出结构
+// 输出：0
+// 预期：总容量按主人要求固定为 2^63-1 字节
 func (f *FS) Statfs(p string, stat *fuse.Statfs_t) int {
 	const blockSize = 4096
 	total := int64(^uint64(0) >> 1) // 2^63-1

@@ -1,5 +1,7 @@
 # 构建 mytgfs。
-# FUSE 需要 WinFsp SDK；这里用 8.3 短路径避免空格把 gcc 参数拆开。
+# 输入：无
+# 输出：build\mytgfs.exe；失败时退出码 1
+# 预期：CGO 能找到 WinFsp SDK 头文件与库
 $winfsp = 'C:\PROGRA~2\WinFsp'
 if (Test-Path "$winfsp\inc\fuse\fuse_common.h") {
     $env:CGO_CFLAGS = "-I$winfsp\inc\fuse -I$winfsp\inc\fuse3"
@@ -8,7 +10,11 @@ if (Test-Path "$winfsp\inc\fuse\fuse_common.h") {
     Write-Warning '未找到 WinFsp SDK，FUSE 挂载将无法编译。请安装 WinFsp 并勾选 Developer。'
 }
 
-go build -o mytgfs.exe ./cmd/mytgfs
+New-Item -ItemType Directory -Force -Path 'build' | Out-Null
+go build -o 'build\mytgfs.exe' ./cmd/mytgfs
 if ($LASTEXITCODE -eq 0) {
-    Write-Output 'OK build/mytgfs.exe'
+    Write-Output 'OK build\mytgfs.exe'
+} else {
+    Write-Output 'FAIL build\mytgfs.exe'
+    exit 1
 }
