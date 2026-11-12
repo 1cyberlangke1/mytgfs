@@ -31,7 +31,7 @@ type Store interface {
 }
 
 // blockSize 是单次按需读取的块大小。
-const blockSize = 1 << 20
+const blockSize = 8 << 20
 
 // FileSystem 实现 webdav.FileSystem。
 type FileSystem struct {

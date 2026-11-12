@@ -81,6 +81,8 @@ func main() {
 		runMount(os.Args[2:])
 	case "webdav":
 		runWebDAV(os.Args[2:])
+	case "unmap":
+		runUnmap(os.Args[2:])
 	case "umount":
 		runUmount(os.Args[2:])
 	case "daemon":

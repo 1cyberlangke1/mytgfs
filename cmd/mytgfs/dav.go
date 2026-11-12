@@ -122,3 +122,17 @@ func cleanupMappings(addr string) {
 		}
 	}
 }
+
+// runUnmap 删除指向指定地址的网络映射。
+//
+// 用法：mytgfs unmap [--addr 127.0.0.1:8080]
+// 输入：--addr 服务地址
+// 输出：删除结果
+// 预期：只删与本服务地址匹配的映射，其它盘符不动
+func runUnmap(args []string) {
+	fs := flag.NewFlagSet("unmap", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:8080", "服务地址")
+	_ = fs.Parse(args)
+	cleanupMappings(*addr)
+	fmt.Printf("已清理指向 %s 的网络映射\n", *addr)
+}
