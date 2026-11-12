@@ -79,6 +79,8 @@ func main() {
 		runVolume(os.Args[2:])
 	case "mount":
 		runMount(os.Args[2:])
+	case "webdav":
+		runWebDAV(os.Args[2:])
 	case "umount":
 		runUmount(os.Args[2:])
 	case "daemon":

@@ -7,9 +7,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/gotd/contrib v0.26.0
 	github.com/gotd/td v0.165.0
-	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/natefinch/atomic v1.0.1
-	github.com/winfsp/cgofuse v1.6.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/time v0.16.0
