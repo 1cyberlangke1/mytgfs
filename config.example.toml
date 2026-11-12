@@ -1,0 +1,37 @@
+# mytgfs 配置模板
+#
+# 使用方法：复制为 config.toml 后填入自己的值。
+# config.toml 已被 .gitignore 忽略，不会提交。
+# 敏感值（api_hash / bot_token / user session）放 secrets/ 目录，不要写进本文件。
+
+[telegram]
+# my.telegram.org/apps 申请到的 App api_id（数字）
+api_id = 0
+# api_hash 不放这里，放 secrets/api_hash（单行 32 位 hex）
+api_hash_file = "secrets/api_hash"
+# bot token 放 secrets/bot_token（单行）
+bot_token_file = "secrets/bot_token"
+# 私有频道：channel_id + access_hash 由 channel init 打印
+channel_id = 0
+access_hash = 0
+# Bot API 风格的 chat_id（-100 前缀），仅展示用
+chat_id = 0
+
+[cache]
+# 磁盘块缓存上限（字节）；默认 1GB，0 = 不落盘
+max_bytes = 1073741824
+
+[mount]
+# Windows 示例："T:"；Linux 示例："/mnt/mytgfs"
+point = ""
+
+[ratelimit]
+# 全部留空即使用默认值（推荐，不需要配置）
+# 自适应最小间隔（毫秒）
+# adaptive_min_ms = 500
+# 自适应最大间隔（毫秒）
+# adaptive_max_ms = 5000
+# 单个请求最大重试次数
+# max_retries = 5
+# 单次最大等待（秒）
+# max_wait_s = 120

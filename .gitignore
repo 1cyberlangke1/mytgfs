@@ -20,7 +20,10 @@ Desktop.ini
 *.key
 *.jks
 secrets.*
+secrets/
 credentials.*
+*.session
+config.toml
 
 # 日志 / 临时文件
 *.log
@@ -41,6 +44,14 @@ hs_err_pid*
 
 # 临时 clone / 临时目录
 tmp/
+
+# 本地索引（可重建）
+index.db
+index.db-*
+
+# daemon 运行时文件
+daemon.json
+daemon.log
 
 # Python 虚拟环境 / 缓存
 .venv/

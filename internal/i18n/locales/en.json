@@ -1,0 +1,15 @@
+{
+  "cli.usage": "Usage:\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs sync        rebuild local index from channel history\n  mytgfs mount       mount the virtual drive\n  mytgfs daemon start|status|stop  background daemon\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
+  "err.missing_api_hash": "missing secrets/api_hash",
+  "err.session_key_prefix": "failed to load session key",
+  "prompt.bot_token": "bot token: ",
+  "prompt.phone": "phone (with country code, e.g. +8613800000000): ",
+  "prompt.code": "code: ",
+  "err.bot_login_prefix": "bot login failed",
+  "err.user_login_prefix": "user login failed",
+  "err.self_prefix": "failed to read self",
+  "err.bot_required": "--bot is required",
+  "err.channel_init_prefix": "channel init failed",
+  "channel.ok": "channel created: channel_id=%d access_hash=%d chat_id=%d",
+  "ok.login": "OK id=%d username=%s"
+}

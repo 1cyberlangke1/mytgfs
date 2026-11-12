@@ -1,0 +1,15 @@
+{
+  "cli.usage": "用法:\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs sync        拉频道历史重建索引\n  mytgfs mount       挂载虚拟盘\n  mytgfs daemon start|status|stop  后台守护进程\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
+  "err.missing_api_hash": "缺少 secrets/api_hash",
+  "err.session_key_prefix": "读取会话密钥失败",
+  "prompt.bot_token": "bot token: ",
+  "prompt.phone": "手机号（含国家码，如 +8613800000000）: ",
+  "prompt.code": "验证码: ",
+  "err.bot_login_prefix": "bot 登录失败",
+  "err.user_login_prefix": "user 登录失败",
+  "err.self_prefix": "读取自身信息失败",
+  "err.bot_required": "需要 --bot 指定 bot 用户名",
+  "err.channel_init_prefix": "建频道失败",
+  "channel.ok": "频道已创建: channel_id=%d access_hash=%d chat_id=%d",
+  "ok.login": "OK id=%d username=%s"
+}
