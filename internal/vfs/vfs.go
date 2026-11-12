@@ -270,8 +270,29 @@ func (f *FS) Mkdir(p string, mode uint32) int { return 0 }
 // Rmdir 目录由 path 推导，这里直接成功。
 func (f *FS) Rmdir(p string) int { return 0 }
 
-// Rename 暂不支持（需要改 caption + 索引，v2）。
-func (f *FS) Rename(oldpath, newpath string) int { return -fuse.ENOSYS }
+// Rename 改名或移动：改 caption + 更新索引。
+func (f *FS) Rename(oldpath, newpath string) int {
+	oldp := clean(oldpath)
+	newp := clean(newpath)
+	file, ok, err := f.idx.Get(f.ctx, oldp)
+	if err != nil {
+		return -fuse.EIO
+	}
+	if !ok {
+		return -fuse.ENOENT
+	}
+	if err := f.store.Rename(f.ctx, file.MessageID, tgsync.EncodeCaption(newp)); err != nil {
+		return -fuse.EIO
+	}
+	if err := f.idx.Delete(f.ctx, oldp); err != nil {
+		return -fuse.EIO
+	}
+	file.Path = newp
+	if err := f.idx.Put(f.ctx, file); err != nil {
+		return -fuse.EIO
+	}
+	return 0
+}
 
 // Truncate 暂不支持。
 func (f *FS) Truncate(p string, size int64, fh uint64) int { return -fuse.ENOSYS }
