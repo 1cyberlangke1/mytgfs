@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 )
 
 // ErrVolumeExists 表示配置里已经有同名卷（忽略大小写）。
@@ -62,7 +62,7 @@ func AppendVolume(path string, v Volume) error {
 	}
 	b.WriteString("enabled = true\n")
 
-	return atomicfile.WriteFile(path, b.Bytes(), 0o600)
+	return atomic.WriteFile(path, bytes.NewReader(b.Bytes()))
 }
 
 // ErrVolumeNotFound 表示配置里没有这个卷。
@@ -114,7 +114,7 @@ func RemoveVolume(path, name string) error {
 	if !removed {
 		return ErrVolumeNotFound
 	}
-	return atomicfile.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600)
+	return atomic.WriteFile(path, strings.NewReader(strings.Join(out, "\n")))
 }
 
 // volumeName 从 [[volumes]] 段落里取 name 值。

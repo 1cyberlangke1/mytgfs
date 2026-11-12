@@ -7,25 +7,18 @@ package telegramstore
 import (
 	"context"
 	"fmt"
-	"strings"
 
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
-	"github.com/gotd/td/tgerr"
 )
 
 // IsFileReferenceError 判断错误是否为 file_reference 失效。
 //
 // 输入：任意 error
 // 输出：true 表示可以按消息 ID 刷新元数据后重试
-// 预期：覆盖 FILE_REFERENCE_* 全系列（EXPIRED / INVALID / EMPTY 等）
+// 预期：直接交给 gotd downloader 判定，不自己匹配错误字符串
 func IsFileReferenceError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if e, ok := tgerr.As(err); ok {
-		return strings.HasPrefix(e.Type, "FILE_REFERENCE")
-	}
-	return strings.Contains(err.Error(), "FILE_REFERENCE")
+	return downloader.IsFileReferenceError(err)
 }
 
 // Refresh 按消息 ID 重新拉取 document 元数据。

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 )
 
 const agentLabel = "com.mytgfs.tray"
@@ -36,7 +36,7 @@ func Enable(exe string) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(p, []byte(plistContent(exe)), 0o644)
+	return atomic.WriteFile(p, strings.NewReader(plistContent(exe)))
 }
 
 // Disable 删除 LaunchAgent plist。

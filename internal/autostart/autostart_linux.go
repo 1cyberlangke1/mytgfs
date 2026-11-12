@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 )
 
 // desktopPath 返回当前用户的 autostart 文件路径。
@@ -34,7 +34,7 @@ func Enable(exe string) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(p, []byte(desktopEntry(exe)), 0o644)
+	return atomic.WriteFile(p, strings.NewReader(desktopEntry(exe)))
 }
 
 // Disable 删除 autostart 文件。

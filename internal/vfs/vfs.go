@@ -17,9 +17,11 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 
+	"github.com/hashicorp/golang-lru/v2"
 	"github.com/winfsp/cgofuse/fuse"
 
 	"mytgfs/internal/index"
@@ -75,6 +77,141 @@ type FS struct {
 	// 输入：无；输出：无；预期：Release 提交与 Rename/Unlink 不会交错执行，
 	// 否则改名可能拿到提交前的旧消息号（Telegram 返回 MESSAGE_ID_INVALID）
 	opMu sync.Mutex
+
+	// progMu 保护下载进度表；进度只用于展示，不参与任何逻辑
+	progMu sync.Mutex
+	prog   map[string]*Transfer
+
+	// rc 是预读窗口的 LRU 缓存（hashicorp/golang-lru 自带淘汰与并发保护）
+	rc     *lru.Cache[string, *readCache]
+	rcOnce sync.Once
+}
+
+// 预读窗口参数。
+const (
+	// readAheadWindow 是一次预读的字节数：8MB = 8 个 1MB 块并行拉取
+	readAheadWindow = 8 << 20
+	// readAheadMaxFiles 是同时缓存的窗口数上限，避免内存无限增长
+	readAheadMaxFiles = 2
+)
+
+// readCache 是一个路径最近一次预读的窗口。
+type readCache struct {
+	off  int64
+	data []byte
+}
+
+// cacheRead 命中预读窗口时直接返回，否则拉一个窗口再返回。
+//
+// 输入：file 索引条目；ofst 起始偏移；length 需要的长度
+// 输出：字节切片；是否命中缓存；error
+// 预期：窗口按 readAheadWindow 对齐；读越界由调用方先裁剪；
+// 拉取失败返回 error，由调用方报 EIO
+func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, error) {
+	f.rcOnce.Do(func() {
+		c, err := lru.New[string, *readCache](readAheadMaxFiles)
+		if err != nil {
+			// readAheadMaxFiles 固定为正数，构造失败不可能发生
+			panic(err)
+		}
+		f.rc = c
+	})
+
+	end := ofst + int64(length)
+	if c, ok := f.rc.Get(file.Path); ok && ofst >= c.off && end <= c.off+int64(len(c.data)) {
+		return c.data[ofst-c.off : end-c.off], true, nil
+	}
+
+	start := ofst / readAheadWindow * readAheadWindow
+	want := int64(readAheadWindow)
+	if start+want > file.Size {
+		want = file.Size - start
+	}
+	if want <= 0 {
+		return nil, false, nil
+	}
+	data, nfile, err := f.readRangeWithRefresh(file, start, int(want))
+	if err != nil {
+		debugf("vfs: 预读失败 %s start=%d len=%d: %v", shortPath(file.Path), start, want, err)
+		return nil, false, err
+	}
+	if end > start+int64(len(data)) {
+		return nil, false, nil
+	}
+	if nfile.DocumentID == file.DocumentID {
+		f.rc.Add(file.Path, &readCache{off: start, data: data})
+	}
+	return data[ofst-start : end-start], true, nil
+}
+
+// dropCache 清掉某个路径的预读窗口。
+//
+// 输入：p 路径
+// 输出：无
+// 预期：写、删、改名后调用，避免读到旧内容
+func (f *FS) dropCache(p string) {
+	f.rcOnce.Do(func() {
+		c, _ := lru.New[string, *readCache](readAheadMaxFiles)
+		f.rc = c
+	})
+	f.rc.Remove(p)
+}
+
+// Transfer 是一个正在下载的文件的进度。
+type Transfer struct {
+	Path  string `json:"path"`
+	Done  int64  `json:"done"`
+	Total int64  `json:"total"`
+}
+
+// Transfers 返回当前有下载活动的文件快照。
+//
+// 输入：无
+// 输出：按路径排序的进度列表；完成的条目会被移除
+// 预期：并发安全；只读，不阻塞读路径
+func (f *FS) Transfers() []Transfer {
+	f.progMu.Lock()
+	defer f.progMu.Unlock()
+	out := make([]Transfer, 0, len(f.prog))
+	for _, t := range f.prog {
+		out = append(out, *t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// trackRead 记录一次远端读取后的进度，并在跨过 10% 时打一行日志。
+//
+// 输入：p 路径；done 已读字节；total 文件总大小
+// 输出：无
+// 预期：读满时从进度表移除；日志只在整十百分比时输出，避免刷屏
+func (f *FS) trackRead(p string, done, total int64) {
+	if total <= 0 {
+		return
+	}
+	if done > total {
+		done = total
+	}
+	f.progMu.Lock()
+	if f.prog == nil {
+		f.prog = make(map[string]*Transfer)
+	}
+	prev := f.prog[p]
+	prevPct := 0
+	if prev != nil && prev.Total > 0 {
+		prevPct = int(prev.Done * 100 / prev.Total)
+	}
+	cur := int(done * 100 / total)
+	if done >= total {
+		delete(f.prog, p)
+	} else {
+		f.prog[p] = &Transfer{Path: p, Done: done, Total: total}
+	}
+	f.progMu.Unlock()
+
+	if cur/10 > prevPct/10 {
+		debugf("vfs: 下载 %s %d%% (%d/%d 字节)", shortPath(p), cur, done, total)
+	}
 }
 
 type openFile struct {
@@ -600,11 +737,20 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	if length <= 0 {
 		return 0
 	}
-	data, _, err := f.readRangeWithRefresh(file, ofst, length)
-	if err != nil {
-		debugf("vfs: Read 远端失败 %s ofst=%d len=%d msg=%d: %v", shortPath(p), ofst, length, file.MessageID, err)
+	data, hit, cerr := f.cacheRead(file, ofst, length)
+	if cerr != nil {
+		debugf("vfs: Read 远端失败 %s ofst=%d len=%d msg=%d: %v", shortPath(p), ofst, length, file.MessageID, cerr)
 		return -fuse.EIO
 	}
+	if !hit {
+		var err error
+		data, _, err = f.readRangeWithRefresh(file, ofst, length)
+		if err != nil {
+			debugf("vfs: Read 远端失败 %s ofst=%d len=%d msg=%d: %v", shortPath(p), ofst, length, file.MessageID, err)
+			return -fuse.EIO
+		}
+	}
+	f.trackRead(p, ofst+int64(len(data)), file.Size)
 	return copy(buff, data)
 }
 
@@ -634,6 +780,7 @@ func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
 // 预期：最后一个句柄关闭时才提交；0 字节文件不占 Telegram 对象，直接写索引
 func (f *FS) Release(p string, fh uint64) int {
 	debugf("vfs: Release %s fh=%d", p, fh)
+	f.dropCache(clean(p))
 	f.mu.Lock()
 	h := f.handles[fh]
 	delete(f.handles, fh)
@@ -793,6 +940,7 @@ func (f *FS) Unlink(p string) int {
 	f.opMu.Lock()
 	defer f.opMu.Unlock()
 	p = clean(p)
+	f.dropCache(p)
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
 		return -fuse.EIO
@@ -858,6 +1006,8 @@ func (f *FS) Rename(oldpath, newpath string) int {
 	defer f.opMu.Unlock()
 	oldp := clean(oldpath)
 	newp := clean(newpath)
+	f.dropCache(oldp)
+	f.dropCache(newp)
 	if oldp == newp {
 		return 0
 	}
@@ -956,6 +1106,7 @@ func (f *FS) Rename(oldpath, newpath string) int {
 // Truncate 调整待上传文件大小。
 func (f *FS) Truncate(p string, size int64, fh uint64) int {
 	debugf("vfs: Truncate %s size=%d fh=%d", p, size, fh)
+	f.dropCache(clean(p))
 	f.mu.Lock()
 	h := f.handles[fh]
 	if h == nil {

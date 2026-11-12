@@ -249,7 +249,15 @@ func Run(opts Options) error {
 				if authLost.Load() {
 					auth = "lost"
 				}
-				return map[string]any{"state": st, "auth": auth, "volumes": list}, nil
+				// 下载进度：卷名 + 路径，供面板显示「正在下载」
+				var xfers []vfs.Transfer
+				for _, v := range vs {
+					for _, t := range v.fsys.Transfers() {
+						t.Path = v.name + ":" + t.Path
+						xfers = append(xfers, t)
+					}
+				}
+				return map[string]any{"state": st, "auth": auth, "volumes": list, "transfers": xfers}, nil
 			},
 			Sync: func(ctx context.Context) (any, error) {
 				volMu.Lock()
@@ -350,7 +358,13 @@ func Run(opts Options) error {
 			fmt.Fprintf(os.Stderr, "打开索引 %s: %v\n", name, oerr)
 			return
 		}
-		store := telegramstore.New(client.API(), channelID)
+		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", i18n.T("tray.mount.failed", name, perr))
+			return
+		}
+		store := telegramstore.New(api, channelID)
+		store.SetParallel(cfg.Mount.DownloadConnections())
 		vctx, vcancel := context.WithCancel(rootCtx)
 		fsys := vfs.New(vctx, idx, store, os.TempDir())
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
@@ -382,6 +396,7 @@ func Run(opts Options) error {
 			vcancel()
 			vwg.Wait()
 			_ = idx.Close()
+			closePool()
 			volMu.Lock()
 			for i, v := range volumes {
 				if v == tv {

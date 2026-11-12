@@ -67,7 +67,9 @@ func Run(ctx context.Context) error {
 		tgclient.Options{})
 
 	return client.Run(ctx, func(ctx context.Context) error {
-		_ = telegramstore.New(client.API(), cfg.Telegram.ChannelID)
+		store := telegramstore.New(client.API(), cfg.Telegram.ChannelID)
+		store.SetParallel(cfg.Mount.DownloadParallel)
+		_ = store
 
 		srv.SetHandler(func(ctx context.Context, action string, data json.RawMessage) (any, error) {
 			switch action {

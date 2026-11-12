@@ -3,10 +3,11 @@ package daemon
 // daemon 状态文件 daemon.json。
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 	"mytgfs/internal/datadir"
 )
 
@@ -41,7 +42,7 @@ func writeState(s State) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(StatePath(), b, 0o600)
+	return atomic.WriteFile(StatePath(), bytes.NewReader(b))
 }
 
 // removeState 删除状态文件。

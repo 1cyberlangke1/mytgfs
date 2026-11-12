@@ -84,6 +84,7 @@
   "web.stat_volumes": "卷数量",
   "web.stat_files": "文件总数",
   "web.stat_used": "总占用",
+  "web.xfer": "下载中",
   "web.footer": "mytgfs · 把 Telegram 当成一块盘",
   "web.theme_tip": "切换深色 / 浅色",
   "web.refresh_tip": "刷新状态",

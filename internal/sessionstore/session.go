@@ -3,11 +3,13 @@ package sessionstore
 // 加密的 Telegram session 存储，实现 gotd 的 session.Storage。
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 
 	tgsession "github.com/gotd/td/session"
+	"github.com/natefinch/atomic"
 
 	"mytgfs/internal/crypto"
 )
@@ -45,29 +47,16 @@ func (s *Encrypted) LoadSession(ctx context.Context) ([]byte, error) {
 //
 // 输入：ctx；data 原始 session 字节
 // 输出：error
-// 预期：先写临时文件再 rename，断电不会留下半截文件
+// 预期：写盘交给 natefinch/atomic（内部走临时文件 + MoveFileEx/rename）
 func (s *Encrypted) StoreSession(ctx context.Context, data []byte) error {
 	enc, err := crypto.Encrypt(s.Key, data)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(s.Path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".session-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(enc); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.Path)
+	return atomic.WriteFile(s.Path, bytes.NewReader(enc))
 }
 
 // 编译期断言：Encrypted 满足 gotd 的 session.Storage。

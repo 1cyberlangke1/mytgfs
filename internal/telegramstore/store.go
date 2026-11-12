@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+	"golang.org/x/time/rate"
 )
 
 // MaxFileSize 是 Telegram 单条 document 消息的字节上限。
@@ -40,7 +42,13 @@ type API interface {
 	MessagesSendMessage(ctx context.Context, request *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error)
 	MessagesEditMessage(ctx context.Context, request *tg.MessagesEditMessageRequest) (tg.UpdatesClass, error)
 	ChannelsDeleteMessages(ctx context.Context, request *tg.ChannelsDeleteMessagesRequest) (*tg.MessagesAffectedMessages, error)
+
+	// 以下由 gotd 的 downloader/uploader 直接调用，Store 自己不手写分块与并发
 	UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error)
+	UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error)
+	UploadReuploadCDNFile(ctx context.Context, request *tg.UploadReuploadCDNFileRequest) ([]tg.FileHash, error)
+	UploadGetCDNFileHashes(ctx context.Context, request *tg.UploadGetCDNFileHashesRequest) ([]tg.FileHash, error)
+	UploadGetWebFile(ctx context.Context, request *tg.UploadGetWebFileRequest) (*tg.UploadWebFile, error)
 	UploadSaveFilePart(ctx context.Context, request *tg.UploadSaveFilePartRequest) (bool, error)
 	UploadSaveBigFilePart(ctx context.Context, request *tg.UploadSaveBigFilePartRequest) (bool, error)
 }
@@ -53,34 +61,65 @@ type Store struct {
 	mu      sync.Mutex
 	channel *tg.Channel
 
-	sendMu   sync.Mutex
-	lastSend time.Time
-	interval time.Duration // 发消息最小间隔，测试可调小
+	sendMu sync.Mutex
+	// limiter 是发消息节流器，x/time/rate 实现，默认每秒 1 条
+	limiter *rate.Limiter
+
+	dl          *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
+	threadCount int                    // 下载工作协程上限，0 用默认值
 }
 
 // New 创建存储。
 func New(api API, channelID int64) *Store {
-	return &Store{api: api, channelID: channelID, interval: time.Second}
+	return &Store{
+		api:       api,
+		channelID: channelID,
+		limiter:   rate.NewLimiter(rate.Every(time.Second), 1),
+		dl:        newDownloader(),
+	}
 }
 
 // SetInterval 调整发送间隔，仅供测试使用。
-func (s *Store) SetInterval(d time.Duration) { s.interval = d }
-
-// throttle 串行化发消息操作，默认最小间隔 1 秒，降低触发 FLOOD_WAIT 的概率。
-func (s *Store) throttle(ctx context.Context) error {
+//
+// 输入：d 最小间隔；<=0 表示不限制
+// 输出：无
+// 预期：替换内部限流器，已有的调用不受影响
+func (s *Store) SetInterval(d time.Duration) {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
-	if s.interval > 0 {
-		if wait := time.Until(s.lastSend.Add(s.interval)); wait > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-		}
+	if d <= 0 {
+		s.limiter = rate.NewLimiter(rate.Inf, 1)
+		return
 	}
-	s.lastSend = time.Now()
-	return nil
+	s.limiter = rate.NewLimiter(rate.Every(d), 1)
+}
+
+// SetParallel 设置下载工作协程上限。
+//
+// 输入：n 协程数；<=0 用默认值，>32 按 32 处理
+// 输出：无
+// 预期：只影响下载；实际在飞请求数仍由 downloader 的自适应窗口限制
+func (s *Store) SetParallel(n int) {
+	switch {
+	case n <= 0:
+		s.threadCount = defaultThreads
+	case n > 32:
+		s.threadCount = 32
+	default:
+		s.threadCount = n
+	}
+}
+
+// throttle 等待限流器放行，默认每秒最多发一条消息，降低触发 FLOOD_WAIT 的概率。
+//
+// 输入：ctx 用于取消等待
+// 输出：ctx 错误或 nil
+// 预期：并发调用按限流器排队，不会同时发出
+func (s *Store) throttle(ctx context.Context) error {
+	s.sendMu.Lock()
+	l := s.limiter
+	s.sendMu.Unlock()
+	return l.Wait(ctx)
 }
 
 // ChannelID 返回目标频道 ID。

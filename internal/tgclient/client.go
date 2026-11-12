@@ -6,11 +6,13 @@ package tgclient
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
 )
 
 // ConnState 是主连接状态，屏蔽 gotd 的具体枚举。
@@ -115,4 +117,22 @@ func (c *Client) Run(ctx context.Context, f func(context.Context) error) error {
 	return c.waiter.Run(ctx, func(ctx context.Context) error {
 		return c.Client.Run(ctx, f)
 	})
+}
+
+// PooledAPI 返回一个把请求分散到最多 n 条连接的 API 客户端。
+//
+// 输入：n 连接数；<=1 时退回单连接
+// 输出：API 客户端；关闭函数；error
+// 预期：
+//   - Telegram 单条 MTProto 连接的吞吐受线路往返限制，多条连接才能吃满带宽
+//   - 关闭函数必须在 API 不再使用后调用，否则连接泄漏
+func (c *Client) PooledAPI(n int) (*tg.Client, func(), error) {
+	if n <= 1 {
+		return c.API(), func() {}, nil
+	}
+	invoker, err := c.Client.Pool(int64(n))
+	if err != nil {
+		return nil, nil, fmt.Errorf("创建连接池: %w", err)
+	}
+	return tg.NewClient(invoker), func() { _ = invoker.Close() }, nil
 }

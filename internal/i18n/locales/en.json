@@ -84,6 +84,7 @@
   "web.stat_volumes": "Volumes",
   "web.stat_files": "Files",
   "web.stat_used": "Total used",
+  "web.xfer": "Downloading",
   "web.footer": "mytgfs · Telegram as a drive",
   "web.theme_tip": "Toggle light / dark",
   "web.refresh_tip": "Refresh status",

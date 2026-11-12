@@ -461,7 +461,12 @@ func runMount(args []string) {
 			if err != nil {
 				fatal(fmt.Sprintf("打开索引 %s: %v", name, err))
 			}
-			store := telegramstore.New(client.API(), channelID)
+			api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
+			if perr != nil {
+				fatal(fmt.Sprintf("创建连接池 %s: %v", name, perr))
+			}
+			store := telegramstore.New(api, channelID)
+			store.SetParallel(cfg.Mount.DownloadConnections())
 			vctx, vcancel := context.WithCancel(ctx)
 			fsys := vfs.New(vctx, idx, store, os.TempDir())
 			ctlMu.Lock()
@@ -483,6 +488,7 @@ func runMount(args []string) {
 				defer wg.Done()
 				defer idx.Close()
 				defer vcancel()
+				defer closePool()
 				if err := vfs.Mount(vctx, fsys, mp, name); err != nil {
 					fmt.Fprintf(os.Stderr, "挂载 %s 失败: %v\n", mp, err)
 				}

@@ -126,6 +126,23 @@ func (f *fakeAPI) UploadSaveBigFilePart(context.Context, *tg.UploadSaveBigFilePa
 	return true, nil
 }
 
+// 以下四个方法由 gotd 的 downloader 接口要求，测试里不触发真实校验与 CDN。
+func (f *fakeAPI) UploadGetFileHashes(context.Context, *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) UploadReuploadCDNFile(context.Context, *tg.UploadReuploadCDNFileRequest) ([]tg.FileHash, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) UploadGetCDNFileHashes(context.Context, *tg.UploadGetCDNFileHashesRequest) ([]tg.FileHash, error) {
+	return nil, nil
+}
+
+func (f *fakeAPI) UploadGetWebFile(context.Context, *tg.UploadGetWebFileRequest) (*tg.UploadWebFile, error) {
+	return &tg.UploadWebFile{}, nil
+}
+
 // ChannelsGetMessages 记录请求并返回测试预置的消息结果。
 func (f *fakeAPI) ChannelsGetMessages(_ context.Context, req *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
 	f.getMessages = append(f.getMessages, req)
@@ -263,8 +280,8 @@ func TestResolveChannelCached(t *testing.T) {
 	}
 }
 
-// TestReadRangeAlignsTo1K 读取按 1KB 对齐、按 1MB 拆分，内容与偏移一致。
-func TestReadRangeAlignsTo1K(t *testing.T) {
+// TestReadRangeAlignsToPart 读取按 partSize 对齐，内容与偏移一致。
+func TestReadRangeAlignsToPart(t *testing.T) {
 	api := newFakeAPI()
 	s := newTestStore(api)
 	api.fileData = make([]byte, 5000)
@@ -284,10 +301,10 @@ func TestReadRangeAlignsTo1K(t *testing.T) {
 		t.Fatal("没有发出 getFile 请求")
 	}
 	for _, req := range api.getFile {
-		if req.Offset%1024 != 0 {
-			t.Fatalf("offset 未按 1KB 对齐: %d", req.Offset)
+		if req.Offset%partSize != 0 {
+			t.Fatalf("offset 未按 partSize 对齐: %d", req.Offset)
 		}
-		if req.Limit > maxChunk || req.Limit%1024 != 0 {
+		if req.Limit > partSize || req.Limit%4096 != 0 {
 			t.Fatalf("limit 非法: %d", req.Limit)
 		}
 	}

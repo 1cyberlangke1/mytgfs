@@ -6,15 +6,17 @@ package web
 // 文案全部走 i18n，服务端渲染时注入语言包。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 	"mytgfs/internal/config"
 	"mytgfs/internal/daemon"
 	"mytgfs/internal/i18n"
@@ -108,6 +110,7 @@ func handlePage(canCreate bool) http.HandlerFunc {
 			"statVols":   i18n.T("web.stat_volumes"),
 			"statFiles":  i18n.T("web.stat_files"),
 			"statUsed":   i18n.T("web.stat_used"),
+			"xfer":       i18n.T("web.xfer"),
 			"footer":     i18n.T("web.footer"),
 			"lang":       i18n.Lang(),
 			"themeTip":   i18n.T("web.theme_tip"),
@@ -117,9 +120,15 @@ func handlePage(canCreate bool) http.HandlerFunc {
 			labels["canCreate"] = "1"
 		}
 		blob, _ := json.Marshal(labels)
-		_, _ = io.WriteString(w, strings.Replace(pageHTML, "__LABELS__", string(blob), 1))
+		// 用标准库 html/template 渲染，标签以 JS 字面量注入
+		if err := pageTmpl.Execute(w, struct{ Labels template.JS }{Labels: template.JS(blob)}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	}
 }
+
+// pageTmpl 是内嵌的面板页面模板，__LABELS__ 换成 {{.Labels}}。
+var pageTmpl = template.Must(template.New("page").Parse(pageHTML))
 
 // handleStatus 优先用调用方注入的状态，否则回落到 daemon IPC。
 func handleStatus(status StatusFunc) http.HandlerFunc {
@@ -234,7 +243,7 @@ func handleConfig(path string) http.HandlerFunc {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
-			if err := atomicfile.WriteFile(path, b, 0o600); err != nil {
+			if err := atomic.WriteFile(path, bytes.NewReader(b)); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
@@ -367,6 +376,7 @@ main{display:grid;gap:16px;grid-template-columns:1fr;align-items:start}
 .vol{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .vol:first-of-type{border-top:0;padding-top:0}
 .vol .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);flex:none}
+.vol .dot.busy{background:var(--blue);box-shadow:0 0 12px var(--blue);animation:breathe 1.2s ease-in-out infinite}
 .vol .name{font-weight:600;font-size:15px}
 .vol .meta{margin-left:auto;color:var(--muted);font-size:13px;text-align:right;line-height:1.5;font-variant-numeric:tabular-nums}
 .empty{color:var(--muted);font-size:14px;padding:6px 0}
@@ -542,7 +552,7 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
   <footer id="l-footer"></footer>
 </div>
 <script>
-const L = __LABELS__;
+const L = {{.Labels}};
 const $ = id => document.getElementById(id);
 document.documentElement.lang = L.lang;
 $('l-title').textContent = L.title;
@@ -624,6 +634,19 @@ function renderVolumes(data){
     const name = document.createElement('span'); name.className = 'name'; name.textContent = v.name;
     const meta = document.createElement('span'); meta.className = 'meta';
     meta.textContent = L.entries + ': ' + (v.entries ?? 0) + ' · ' + L.used + ': ' + fmtBytes(v.used);
+    el.append(dot, name, meta);
+    box.append(el);
+  }
+  // 正在下载的文件：显示百分比与字节数
+  const xf = Array.isArray(data.transfers) ? data.transfers : [];
+  for (const t of xf) {
+    const pct = t.total > 0 ? Math.min(100, Math.round(Number(t.done) * 100 / Number(t.total))) : 0;
+    const el = document.createElement('div');
+    el.className = 'vol';
+    const dot = document.createElement('span'); dot.className = 'dot busy';
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = t.path;
+    const meta = document.createElement('span'); meta.className = 'meta';
+    meta.textContent = L.xfer + ' ' + pct + '% · ' + fmtBytes(t.done) + ' / ' + fmtBytes(t.total);
     el.append(dot, name, meta);
     box.append(el);
   }

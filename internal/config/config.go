@@ -51,6 +51,24 @@ type Mount struct {
 	TotalBytes int64  `toml:"total_bytes"`
 	// SyncSeconds 是挂载期自动增量同步的间隔秒数：0 用默认 15，负数关闭。
 	SyncSeconds int `toml:"sync_seconds"`
+	// DownloadParallel 是下载并发块数：0 用默认 8，范围 1..32。
+	DownloadParallel int `toml:"download_parallel"`
+}
+
+// DownloadConnections 返回下载连接数。
+//
+// 输入：无
+// 输出：连接数，默认 4，夹在 1..8
+// 预期：单条 MTProto 连接吃不满带宽，多条才有效；过多会互相挤占
+func (m Mount) DownloadConnections() int {
+	n := m.DownloadParallel
+	if n <= 0 {
+		return 4
+	}
+	if n > 8 {
+		return 8
+	}
+	return n
 }
 
 // Ratelimit 是可选的限速覆盖，零值表示用默认。

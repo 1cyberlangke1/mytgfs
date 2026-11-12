@@ -7,6 +7,7 @@ package main
 // 预期：IPC 通知挂载进程解除 WinFsp 挂载并退出，盘符随之消失，和拔 U 盘一致
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -16,7 +17,7 @@ import (
 	"os"
 	"time"
 
-	"mytgfs/internal/atomicfile"
+	"github.com/natefinch/atomic"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/ipc"
 )
@@ -46,7 +47,7 @@ func writeMountState(s mountState) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(mountStatePath(), b, 0o600)
+	return atomic.WriteFile(mountStatePath(), bytes.NewReader(b))
 }
 
 // removeMountState 删除挂载状态文件。
