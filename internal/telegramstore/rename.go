@@ -23,6 +23,9 @@ func (s *Store) Rename(ctx context.Context, messageID int, caption string) error
 	}
 	// Message 是 flags.14?string，必须用 SetMessage 才会设置 flags。
 	req.SetMessage(caption)
+	if err := s.throttle(ctx); err != nil {
+		return err
+	}
 	if _, err := s.api.MessagesEditMessage(ctx, req); err != nil {
 		return fmt.Errorf("editMessage: %w", err)
 	}

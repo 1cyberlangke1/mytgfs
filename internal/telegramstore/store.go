@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gotd/td/tg"
 )
@@ -35,11 +36,29 @@ type Store struct {
 
 	mu      sync.Mutex
 	channel *tg.Channel
+
+	sendMu   sync.Mutex
+	lastSend time.Time
 }
 
 // New 创建存储。
 func New(api *tg.Client, channelID int64) *Store {
 	return &Store{api: api, channelID: channelID}
+}
+
+// throttle 串行化发消息操作，最小间隔 1 秒，降低触发 FLOOD_WAIT 的概率。
+func (s *Store) throttle(ctx context.Context) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	if wait := time.Until(s.lastSend.Add(time.Second)); wait > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	s.lastSend = time.Now()
+	return nil
 }
 
 // ChannelID 返回目标频道 ID。

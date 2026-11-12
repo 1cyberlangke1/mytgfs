@@ -33,6 +33,9 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		return nil, fmt.Errorf("upload: %w", err)
 	}
 
+	if err := s.throttle(ctx); err != nil {
+		return nil, err
+	}
 	updates, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 		Peer: &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
 		Media: &tg.InputMediaUploadedDocument{

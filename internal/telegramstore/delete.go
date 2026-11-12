@@ -20,6 +20,9 @@ func (s *Store) Delete(ctx context.Context, ids ...int) error {
 	if err != nil {
 		return err
 	}
+	if err := s.throttle(ctx); err != nil {
+		return err
+	}
 	_, err = s.api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
 		Channel: &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
 		ID:      ids,
