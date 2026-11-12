@@ -12,8 +12,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +34,7 @@ import (
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/vfs"
+	"mytgfs/internal/web"
 )
 
 func main() {
@@ -57,6 +61,8 @@ func main() {
 		runMount(os.Args[2:])
 	case "daemon":
 		runDaemon(os.Args[2:])
+	case "web":
+		runWeb(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -294,6 +300,49 @@ func runDaemon(args []string) {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// runWeb 启动临时本地 Web 面板。
+func runWeb(args []string) {
+	fs := flag.NewFlagSet("web", flag.ExitOnError)
+	port := fs.Int("port", 0, "port (0 = random)")
+	noOpen := fs.Bool("no-open", false, "do not open browser")
+	_ = fs.Parse(args)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", *port)
+	if *port == 0 {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			fatal(err.Error())
+		}
+		addr = ln.Addr().String()
+		_ = ln.Close()
+	}
+	url := "http://" + addr
+	fmt.Println("web:", url)
+	if !*noOpen {
+		openBrowser(url)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	if err := web.Serve(ctx, addr, "config.toml"); err != nil {
+		fatal(err.Error())
+	}
+}
+
+// openBrowser 尝试用系统默认浏览器打开 URL。
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
 }
 
 // chatID 把 channel ID 转成 Bot API 风格的 -100... 形式。
