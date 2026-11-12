@@ -29,9 +29,24 @@ type Part struct {
 	Size          int64
 }
 
+// API 是 Store 用到的 Telegram RPC 子集。
+//
+// 输入：各 RPC 参数；输出：Telegram 原始返回
+// 预期：只声明实际使用的方法，测试可注入假实现，不需要真实网络
+type API interface {
+	ChannelsGetChannels(ctx context.Context, id []tg.InputChannelClass) (tg.MessagesChatsClass, error)
+	MessagesSendMedia(ctx context.Context, request *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error)
+	MessagesSendMessage(ctx context.Context, request *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error)
+	MessagesEditMessage(ctx context.Context, request *tg.MessagesEditMessageRequest) (tg.UpdatesClass, error)
+	ChannelsDeleteMessages(ctx context.Context, request *tg.ChannelsDeleteMessagesRequest) (*tg.MessagesAffectedMessages, error)
+	UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error)
+	UploadSaveFilePart(ctx context.Context, request *tg.UploadSaveFilePartRequest) (bool, error)
+	UploadSaveBigFilePart(ctx context.Context, request *tg.UploadSaveBigFilePartRequest) (bool, error)
+}
+
 // Store 把文件读写到指定频道。
 type Store struct {
-	api       *tg.Client
+	api       API
 	channelID int64
 
 	mu      sync.Mutex
@@ -39,22 +54,28 @@ type Store struct {
 
 	sendMu   sync.Mutex
 	lastSend time.Time
+	interval time.Duration // 发消息最小间隔，测试可调小
 }
 
 // New 创建存储。
-func New(api *tg.Client, channelID int64) *Store {
-	return &Store{api: api, channelID: channelID}
+func New(api API, channelID int64) *Store {
+	return &Store{api: api, channelID: channelID, interval: time.Second}
 }
 
-// throttle 串行化发消息操作，最小间隔 1 秒，降低触发 FLOOD_WAIT 的概率。
+// SetInterval 调整发送间隔，仅供测试使用。
+func (s *Store) SetInterval(d time.Duration) { s.interval = d }
+
+// throttle 串行化发消息操作，默认最小间隔 1 秒，降低触发 FLOOD_WAIT 的概率。
 func (s *Store) throttle(ctx context.Context) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
-	if wait := time.Until(s.lastSend.Add(time.Second)); wait > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
+	if s.interval > 0 {
+		if wait := time.Until(s.lastSend.Add(s.interval)); wait > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
 		}
 	}
 	s.lastSend = time.Now()

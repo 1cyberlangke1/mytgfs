@@ -68,6 +68,11 @@ type FS struct {
 	pending map[string]*openFile
 	next    uint64
 	notify  func(p string, action uint32)
+
+	// opMu 串行化「改索引 + 改远端」的复合操作。
+	// 输入：无；输出：无；预期：Release 提交与 Rename/Unlink 不会交错执行，
+	// 否则改名可能拿到提交前的旧消息号（Telegram 返回 MESSAGE_ID_INVALID）
+	opMu sync.Mutex
 }
 
 type openFile struct {
@@ -77,6 +82,11 @@ type openFile struct {
 	size  int64
 	// refs 是同时打开该节点的 handle 数；归零才允许提交并清理 pending。
 	refs int
+	// committing 为真表示有 goroutine 正在上传该节点；此时节点仍留在
+	// pending 里，保证名字和内容对读操作依然可见。
+	committing bool
+	// done 为真表示已提交完成，后续 Release 不得重复上传。
+	done bool
 }
 
 // New 创建文件系统。
@@ -159,6 +169,9 @@ func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 		return -fuse.EIO
 	}
 	if ok {
+		// 输入：索引命中；输出：索引里的字节数
+		// 预期：调用方看到的就是已提交大小，配日志便于排查「写完读回为 0」
+		debugf("vfs: Getattr %s size=%d src=index", p, file.Size)
 		fillStat(stat, fuse.S_IFREG|0o666, file.Size, pathIno(p))
 		return 0
 	}
@@ -180,6 +193,9 @@ func (f *FS) Fgetattr(p string, stat *fuse.Stat_t, fh uint64) int {
 	if h != nil {
 		size := h.size
 		f.mu.Unlock()
+		// 输入：句柄命中；输出：句柄记录的字节数
+		// 预期：写句柄返回实时大小，读句柄返回打开时的索引大小
+		debugf("vfs: Fgetattr %s size=%d src=handle fh=%d tmp=%v", p, size, fh, h.tmp != nil)
 		fillStat(stat, fuse.S_IFREG|0o666, size, pathIno(clean(p)))
 		return 0
 	}
@@ -323,6 +339,13 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	p = clean(p)
 	f.mu.Lock()
 	if h, ok := f.pending[p]; ok {
+		// 正在提交的节点不能直接挂写句柄：临时文件马上要被关闭和删除。
+		// 写打开时另起一个节点并复制当前内容，提交完成后由新节点负责上传。
+		if h.committing && flags&(fuse.O_WRONLY|fuse.O_RDWR|fuse.O_TRUNC) != 0 {
+			src, size := h.tmp, h.size
+			f.mu.Unlock()
+			return f.openWriteFrom(p, src, size, flags)
+		}
 		hid := f.newHandle(h)
 		f.mu.Unlock()
 		return 0, hid
@@ -392,6 +415,35 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	return 0, f.newHandle(nil)
 }
 
+// openWriteFrom 用另一个临时文件的内容新建写节点。
+//
+// 输入：路径 p、来源临时文件 src、来源大小 size、打开标志 flags
+// 输出：0 与句柄，或负 errno
+// 预期：原节点正在上传时也能写打开；带 O_TRUNC 时丢弃原内容，
+//       否则复制 size 字节，由新节点在 Release 时上传
+func (f *FS) openWriteFrom(p string, src *os.File, size int64, flags int) (int, uint64) {
+	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
+	if err != nil {
+		debugf("vfs: Open %s temp error: %v", p, err)
+		return -fuse.EIO, 0
+	}
+	h := &openFile{path: p, tmp: tmp, dirty: true}
+	if flags&fuse.O_TRUNC == 0 && size > 0 {
+		if _, err := io.CopyN(tmp, io.NewSectionReader(src, 0, size), size); err != nil {
+			debugf("vfs: Open %s copy committing content failed: %v", p, err)
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return -fuse.EIO, 0
+		}
+		h.size = size
+	}
+	f.mu.Lock()
+	f.pending[p] = h
+	hid := f.newHandle(h)
+	f.mu.Unlock()
+	return 0, hid
+}
+
 // copyExisting 把索引里已有文件的内容复制到临时文件。
 //
 // 输入：索引记录 file、目标临时文件 tmp
@@ -428,8 +480,42 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 }
 
 // Read 按偏移读。
+//
+// 输入：路径 p、缓冲 buff、偏移 ofst、句柄 fh
+// 输出：读到的字节数或负 errno
+// 预期：句柄或 pending 节点还有临时文件时直接读临时文件，
+//       这样「刚写完（提交还没完成）」也能读出完整内容；否则走 Telegram 索引
 func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	p = clean(p)
+	f.mu.Lock()
+	h := f.handles[fh]
+	if h == nil || h.tmp == nil {
+		if ph, ok := f.pending[p]; ok && ph.tmp != nil {
+			h = ph
+		}
+	}
+	var (
+		tmp  *os.File
+		size int64
+	)
+	if h != nil && h.tmp != nil {
+		tmp, size = h.tmp, h.size
+	}
+	f.mu.Unlock()
+	if tmp != nil {
+		if ofst >= size {
+			return 0
+		}
+		n := len(buff)
+		if ofst+int64(n) > size {
+			n = int(size - ofst)
+		}
+		got, err := tmp.ReadAt(buff[:n], ofst)
+		if err != nil && err != io.EOF {
+			return -fuse.EIO
+		}
+		return got
+	}
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
 		return -fuse.EIO
@@ -499,9 +585,31 @@ func (f *FS) Release(p string, fh uint64) int {
 		f.mu.Unlock()
 		return 0
 	}
-	// 提交前先摘掉 pending，避免并发 Open 再挂到同一节点上重复提交
-	delete(f.pending, h.path)
+	// 已经提交过（或有别的 goroutine 正在提交）时不重复上传
+	if h.committing || h.done {
+		f.mu.Unlock()
+		return 0
+	}
+	// 提交期间保留 pending 里的节点：名字和内容对读操作仍然可见，
+	// 避免「刚写完立刻读」拿到 ENOENT（Windows 上传耗时可达数秒）
+	h.committing = true
 	f.mu.Unlock()
+
+	rc := f.commit(h)
+	// 输入：提交结果；输出：无
+	// 预期：成功才摘掉 pending 并标记 done；失败保留节点，等下次写打开重试
+	f.finishCommit(h, rc == 0)
+	return rc
+}
+
+// commit 把临时文件内容落到 Telegram 并写索引。
+//
+// 输入：已标记 committing 的节点 h
+// 输出：0 或负 errno
+// 预期：与 Rename/Unlink/Mkdir/Rmdir 串行，避免改名拿到提交前的旧消息号
+func (f *FS) commit(h *openFile) int {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
 
 	defer h.tmp.Close()
 	defer os.Remove(h.tmp.Name())
@@ -529,9 +637,6 @@ func (f *FS) Release(p string, fh uint64) int {
 			}
 		}
 		f.notifyChange(h.path, fuse.NOTIFY_CREATE)
-		f.mu.Lock()
-		delete(f.pending, h.path)
-		f.mu.Unlock()
 		return 0
 	}
 	if _, err := h.tmp.Seek(0, io.SeekStart); err != nil {
@@ -562,14 +667,32 @@ func (f *FS) Release(p string, fh uint64) int {
 		}
 	}
 	f.notifyChange(h.path, fuse.NOTIFY_CREATE)
-	f.mu.Lock()
-	delete(f.pending, h.path)
-	f.mu.Unlock()
 	return 0
+}
+
+// finishCommit 收尾提交状态。
+//
+// 输入：节点 h、是否成功
+// 输出：无
+// 预期：成功时摘掉 pending（仅当它仍指向 h）并标记 done；
+//       失败时清掉 committing 让节点留在 pending 里，下次写打开可重试上传
+func (f *FS) finishCommit(h *openFile, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !ok {
+		h.committing = false
+		return
+	}
+	if f.pending[h.path] == h {
+		delete(f.pending, h.path)
+	}
+	h.done = true
 }
 
 // Unlink 删除文件：先删消息，再删索引。
 func (f *FS) Unlink(p string) int {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
 	p = clean(p)
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
@@ -590,6 +713,8 @@ func (f *FS) Unlink(p string) int {
 
 // Mkdir 创建目录；空目录写入索引，刷新后仍然存在。
 func (f *FS) Mkdir(p string, mode uint32) int {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
 	p = clean(p)
 	if f.isDir(p) {
 		return -fuse.EEXIST
@@ -608,6 +733,8 @@ func (f *FS) Mkdir(p string, mode uint32) int {
 
 // Rmdir 删除空目录；非空目录返回 ENOTEMPTY。
 func (f *FS) Rmdir(p string) int {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
 	p = clean(p)
 	if !f.isDir(p) {
 		return -fuse.ENOENT
@@ -628,6 +755,8 @@ func (f *FS) Rmdir(p string) int {
 
 // Rename 改名或移动：改 caption + 更新索引；目录按前缀整体移动。
 func (f *FS) Rename(oldpath, newpath string) int {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
 	oldp := clean(oldpath)
 	newp := clean(newpath)
 	if oldp == newp {
@@ -636,27 +765,33 @@ func (f *FS) Rename(oldpath, newpath string) int {
 
 	file, isFile, err := f.idx.Get(f.ctx, oldp)
 	if err != nil {
+		debugf("vfs: Rename 读索引 %s 失败: %v", oldp, err)
 		return -fuse.EIO
 	}
 	if isFile {
 		target, targetOK, terr := f.idx.Get(f.ctx, newp)
 		if terr != nil {
+			debugf("vfs: Rename 读目标索引 %s 失败: %v", newp, terr)
 			return -fuse.EIO
 		}
 		if err := f.store.Rename(f.ctx, file.MessageID, tgsync.EncodeCaption(newp)); err != nil {
+			debugf("vfs: Rename 改 caption %s->%s 失败: %v", oldp, newp, err)
 			return -fuse.EIO
 		}
 		if err := f.idx.Delete(f.ctx, oldp); err != nil {
+			debugf("vfs: Rename 删旧索引 %s 失败: %v", oldp, err)
 			return -fuse.EIO
 		}
 		file.Path = newp
 		if targetOK {
 			// 覆盖目标：先删目标旧行，避免 Put 的「消息 ID 取最大」留下目标旧记录
 			if err := f.idx.Delete(f.ctx, newp); err != nil {
+				debugf("vfs: Rename 删目标索引 %s 失败: %v", newp, err)
 				return -fuse.EIO
 			}
 		}
 		if err := f.idx.Put(f.ctx, file); err != nil {
+			debugf("vfs: Rename 写新索引 %s 失败: %v", newp, err)
 			return -fuse.EIO
 		}
 		// 覆盖已有目标时删掉目标旧消息，避免频道里留孤儿
@@ -679,31 +814,38 @@ func (f *FS) Rename(oldpath, newpath string) int {
 
 	dirs, err := f.idx.Dirs(f.ctx, oldp)
 	if err != nil {
+		debugf("vfs: Rename 读目录 %s 失败: %v", oldp, err)
 		return -fuse.EIO
 	}
 	for _, d := range dirs {
 		np := newp + strings.TrimPrefix(d, oldp)
 		if err := f.idx.DeleteDir(f.ctx, d); err != nil {
+			debugf("vfs: Rename 删目录 %s 失败: %v", d, err)
 			return -fuse.EIO
 		}
 		if err := f.idx.PutDir(f.ctx, np); err != nil {
+			debugf("vfs: Rename 写目录 %s 失败: %v", np, err)
 			return -fuse.EIO
 		}
 	}
 	files, err := f.idx.ListPrefix(f.ctx, oldp)
 	if err != nil {
+		debugf("vfs: Rename 读子文件 %s 失败: %v", oldp, err)
 		return -fuse.EIO
 	}
 	for _, ff := range files {
 		np := newp + strings.TrimPrefix(ff.Path, oldp)
 		if err := f.store.Rename(f.ctx, ff.MessageID, tgsync.EncodeCaption(np)); err != nil {
+			debugf("vfs: Rename 改 caption %s->%s 失败: %v", ff.Path, np, err)
 			return -fuse.EIO
 		}
 		if err := f.idx.Delete(f.ctx, ff.Path); err != nil {
+			debugf("vfs: Rename 删旧索引 %s 失败: %v", ff.Path, err)
 			return -fuse.EIO
 		}
 		ff.Path = np
 		if err := f.idx.Put(f.ctx, ff); err != nil {
+			debugf("vfs: Rename 写新索引 %s 失败: %v", np, err)
 			return -fuse.EIO
 		}
 	}

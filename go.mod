@@ -3,13 +3,15 @@ module mytgfs
 go 1.26.1
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/gotd/contrib v0.26.0
 	github.com/gotd/td v0.165.0
+	github.com/winfsp/cgofuse v1.6.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.62.0
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -36,7 +38,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/winfsp/cgofuse v1.6.0 // indirect
 	github.com/yuin/goldmark v1.8.5 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect
 	go.opentelemetry.io/otel/metric v1.45.0 // indirect
@@ -52,7 +53,6 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

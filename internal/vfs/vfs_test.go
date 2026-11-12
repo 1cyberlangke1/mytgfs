@@ -23,6 +23,12 @@ type fakeStore struct {
 	readCalls int
 	deletes   []int
 	renames   []string // 每次 Rename 的 caption
+	renameIDs []int    // 每次 Rename 的 message id
+
+	// uploadStarted 在 Upload 开始时关闭；uploadGate 关闭后才继续。
+	// 用于测试「提交与改名并发」的时序。
+	uploadStarted chan struct{}
+	uploadGate    chan struct{}
 }
 
 func newFakeStore() *fakeStore {
@@ -30,6 +36,12 @@ func newFakeStore() *fakeStore {
 }
 
 func (s *fakeStore) Upload(_ context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error) {
+	if s.uploadStarted != nil {
+		close(s.uploadStarted)
+	}
+	if s.uploadGate != nil {
+		<-s.uploadGate
+	}
 	b, err := io.ReadAll(io.LimitReader(r, size))
 	if err != nil {
 		return nil, err
@@ -63,6 +75,7 @@ func (s *fakeStore) Delete(_ context.Context, ids ...int) error {
 
 func (s *fakeStore) Rename(_ context.Context, messageID int, caption string) error {
 	s.renames = append(s.renames, caption)
+	s.renameIDs = append(s.renameIDs, messageID)
 	return nil
 }
 
@@ -84,6 +97,51 @@ func putFile(t *testing.T, idx *index.Index, f index.File) {
 	t.Helper()
 	if err := idx.Put(context.Background(), f); err != nil {
 		t.Fatalf("写入索引: %v", err)
+	}
+}
+
+// TestVisibleDuringCommit 提交上传期间，文件名和内容仍然可读。
+//
+// 输入：Create+Write 后 Release 已进入 Upload（被闸门挡住），此时按路径 Getattr + Read
+// 输出：Getattr 返回的大小、Read 返回的内容
+// 预期：大小等于写入字节数、内容完整，而不是 ENOENT 或 0
+func TestVisibleDuringCommit(t *testing.T) {
+	store := newFakeStore()
+	store.uploadStarted = make(chan struct{})
+	store.uploadGate = make(chan struct{})
+	fs, _, _ := newTestFS(t, store)
+
+	rc, fh := fs.Create("/new.txt", fuse.O_WRONLY, 0o666)
+	if rc != 0 {
+		t.Fatalf("Create 失败: %d", rc)
+	}
+	if n := fs.Write("/new.txt", []byte("hello world"), 0, fh); n != 11 {
+		t.Fatalf("Write 返回 %d", n)
+	}
+
+	released := make(chan int, 1)
+	go func() { released <- fs.Release("/new.txt", fh) }()
+	<-store.uploadStarted // 提交已进入 Upload，尚未写索引
+
+	var st fuse.Stat_t
+	if rc := fs.Getattr("/new.txt", &st, 0); rc != 0 {
+		t.Fatalf("提交期间 Getattr 失败: %d", rc)
+	}
+	if st.Size != 11 {
+		t.Fatalf("提交期间大小应为 11，实际 %d", st.Size)
+	}
+	buf := make([]byte, 32)
+	n := fs.Read("/new.txt", buf, 0, 0)
+	if n != 11 {
+		t.Fatalf("提交期间读取应返回 11 字节，实际 %d", n)
+	}
+	if got := string(buf[:n]); got != "hello world" {
+		t.Fatalf("提交期间内容错误: %q", got)
+	}
+
+	close(store.uploadGate)
+	if rc := <-released; rc != 0 {
+		t.Fatalf("Release 失败: %d", rc)
 	}
 }
 
@@ -333,5 +391,50 @@ func TestRenameDir(t *testing.T) {
 	}
 	if len(store.renames) != 2 {
 		t.Fatalf("应改两条 caption，实际 %v", store.renames)
+	}
+}
+
+// TestRenameWaitsForCommit 关闭句柄的提交与改名并发时，改名必须等到新消息号写入索引。
+//
+// 输入：写句柄先 Release（Upload 被闸门挡住），同时发起 Rename
+// 输出：Rename 使用的消息号
+// 预期：Rename 拿到本次上传的新消息号，而不是被删掉的旧消息号
+func TestRenameWaitsForCommit(t *testing.T) {
+	store := newFakeStore()
+	store.data[1] = []byte("old")
+	store.nextID = 1 // 预置的旧消息占用 1，本次上传应为 2
+	store.uploadStarted = make(chan struct{})
+	store.uploadGate = make(chan struct{})
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{Path: "/a.txt", MessageID: 1, Size: 3})
+
+	rc, fh := fs.Open("/a.txt", fuse.O_WRONLY|fuse.O_TRUNC)
+	if rc != 0 {
+		t.Fatalf("Open 失败: %d", rc)
+	}
+	if n := fs.Write("/a.txt", []byte("new"), 0, fh); n != 3 {
+		t.Fatalf("Write 返回 %d", n)
+	}
+
+	released := make(chan int, 1)
+	go func() { released <- fs.Release("/a.txt", fh) }()
+	<-store.uploadStarted // 提交已经进入 Upload，此时索引里还是旧的 1
+
+	renamed := make(chan int, 1)
+	go func() { renamed <- fs.Rename("/a.txt", "/b.txt") }()
+
+	close(store.uploadGate) // 放行上传，Release 先完成，Rename 才能继续
+	if rc := <-released; rc != 0 {
+		t.Fatalf("Release 失败: %d", rc)
+	}
+	if rc := <-renamed; rc != 0 {
+		t.Fatalf("Rename 失败: %d", rc)
+	}
+	if len(store.renameIDs) != 1 || store.renameIDs[0] != 2 {
+		t.Fatalf("改名应使用新消息号 2，实际 %v", store.renameIDs)
+	}
+	got, ok, err := idx.Get(context.Background(), "/b.txt")
+	if err != nil || !ok || got.MessageID != 2 {
+		t.Fatalf("改名后索引错误: %+v ok=%v err=%v", got, ok, err)
 	}
 }
