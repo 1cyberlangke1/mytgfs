@@ -9,11 +9,30 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+// metaFetcher 是读取元信息消息所需的最小能力。
+//
+// 输入：channels.getMessages 参数
+// 输出：消息列表
+// 预期：用户会话与 bot 会话都满足，测试可注入假实现
+type metaFetcher interface {
+	ChannelsGetMessages(ctx context.Context, request *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
+}
+
+// HistoryAPI 是历史回填所需的最小 RPC 子集。
+//
+// 输入：messages.getHistory / channels.getMessages 参数
+// 输出：消息列表
+// 预期：只声明用到的两个方法，单测可 mock，不需要真实网络
+type HistoryAPI interface {
+	MessagesGetHistory(ctx context.Context, request *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error)
+	ChannelsGetMessages(ctx context.Context, request *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
+}
+
 // TelegramFetcher 用 user 会话拉频道历史。
 //
 // 注意：messages.getHistory 是 user-only，bot 调用会 BOT_METHOD_INVALID。
 type TelegramFetcher struct {
-	API        *tg.Client
+	API        HistoryAPI
 	ChannelID  int64
 	AccessHash int64 // user 视角
 }
@@ -31,31 +50,70 @@ func parseRef(s string) (int, bool) {
 	return r.Ref, true
 }
 
-// fetchMeta 按消息 ID 拉取完整元信息文本。
-func (f TelegramFetcher) fetchMeta(ctx context.Context, ref int) (string, error) {
-	res, err := f.API.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: &tg.InputChannel{ChannelID: f.ChannelID, AccessHash: f.AccessHash},
+// fetchMetaText 按消息 ID 拉取完整元信息文本。
+//
+// 输入：api 客户端、频道 ID 与 access hash、ref 元信息消息 ID
+// 输出：消息正文、error
+// 预期：channels.getMessages 对 bot/user 都可用；消息不存在时报错
+func fetchMetaText(ctx context.Context, api metaFetcher, channelID, accessHash int64, ref int) (string, error) {
+	res, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash},
 		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: ref}},
 	})
 	if err != nil {
 		return "", err
 	}
-
-	var msgs []tg.MessageClass
-	switch m := res.(type) {
-	case *tg.MessagesMessages:
-		msgs = m.Messages
-	case *tg.MessagesMessagesSlice:
-		msgs = m.Messages
-	case *tg.MessagesChannelMessages:
-		msgs = m.Messages
-	}
-	for _, mc := range msgs {
+	for _, mc := range messagesOf(res) {
 		if msg, ok := mc.(*tg.Message); ok {
 			return msg.Message, nil
 		}
 	}
 	return "", fmt.Errorf("元信息消息 %d 不存在", ref)
+}
+
+// messagesOf 把 MessagesMessagesClass 的三种形态摊平成消息列表。
+func messagesOf(res tg.MessagesMessagesClass) []tg.MessageClass {
+	switch m := res.(type) {
+	case *tg.MessagesMessages:
+		return m.Messages
+	case *tg.MessagesMessagesSlice:
+		return m.Messages
+	case *tg.MessagesChannelMessages:
+		return m.Messages
+	}
+	return nil
+}
+
+// messageFromTG 把 TL 消息转成本包的 Message。
+//
+// 输入：ctx、api、频道 ID 与 access hash、TL 消息
+// 输出：Message、是否是需要同步的文件消息、error
+// 预期：非 document 消息返回 ok=false；caption 是 {"ref":id} 时回查完整元信息
+func messageFromTG(ctx context.Context, api metaFetcher, channelID, accessHash int64, msg *tg.Message) (Message, bool, error) {
+	media, ok := msg.Media.(*tg.MessageMediaDocument)
+	if !ok {
+		return Message{}, false, nil
+	}
+	doc, ok := media.Document.(*tg.Document)
+	if !ok {
+		return Message{}, false, nil
+	}
+
+	caption := msg.Message
+	if ref, ok := parseRef(caption); ok {
+		if full, err := fetchMetaText(ctx, api, channelID, accessHash, ref); err == nil {
+			caption = full
+		}
+	}
+	return Message{
+		ID:            msg.ID,
+		Caption:       caption,
+		DocumentID:    doc.ID,
+		AccessHash:    doc.AccessHash,
+		FileReference: doc.FileReference,
+		Size:          doc.Size,
+		Date:          time.Unix(int64(msg.Date), 0),
+	}, true, nil
 }
 
 // History 拉取最近 limit 条消息。
@@ -88,46 +146,21 @@ func (f TelegramFetcher) history(ctx context.Context, minID, limit int) ([]Messa
 	if err != nil {
 		return nil, fmt.Errorf("getHistory: %w", err)
 	}
-	var msgs []tg.MessageClass
-	switch m := res.(type) {
-	case *tg.MessagesMessages:
-		msgs = m.Messages
-	case *tg.MessagesMessagesSlice:
-		msgs = m.Messages
-	case *tg.MessagesChannelMessages:
-		msgs = m.Messages
-	}
+	msgs := messagesOf(res)
 	out := make([]Message, 0, len(msgs))
 	for _, mc := range msgs {
 		msg, ok := mc.(*tg.Message)
 		if !ok {
 			continue
 		}
-		media, ok := msg.Media.(*tg.MessageMediaDocument)
-		if !ok {
+		m, isFile, err := messageFromTG(ctx, f.API, f.ChannelID, f.AccessHash, msg)
+		if err != nil {
+			return nil, err
+		}
+		if !isFile {
 			continue
 		}
-		doc, ok := media.Document.(*tg.Document)
-		if !ok {
-			continue
-		}
-
-		caption := msg.Message
-		if ref, ok := parseRef(caption); ok {
-			if full, err := f.fetchMeta(ctx, ref); err == nil {
-				caption = full
-			}
-		}
-
-		out = append(out, Message{
-			ID:            msg.ID,
-			Caption:       caption,
-			DocumentID:    doc.ID,
-			AccessHash:    doc.AccessHash,
-			FileReference: doc.FileReference,
-			Size:          doc.Size,
-			Date:          time.Unix(int64(msg.Date), 0),
-		})
+		out = append(out, m)
 	}
 	return out, nil
 }

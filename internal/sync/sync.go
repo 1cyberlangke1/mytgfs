@@ -27,9 +27,10 @@ type Fetcher interface {
 // Replay 把消息重放进索引。
 //
 // 输入：ctx；idx 索引；msgs 消息（顺序无关）
-// 输出：error
+// 输出：实际写入的条数（caption 不合法的消息被跳过）、error
 // 预期：只处理带合法 caption 的消息；同 path 保留 message_id 最大者
-func Replay(ctx context.Context, idx *index.Index, msgs []Message) error {
+func Replay(ctx context.Context, idx *index.Index, msgs []Message) (int, error) {
+	n := 0
 	for _, m := range msgs {
 		path, ok := ParseCaption(m.Caption)
 		if !ok {
@@ -45,10 +46,11 @@ func Replay(ctx context.Context, idx *index.Index, msgs []Message) error {
 			Mtime:         m.Date.Unix(),
 		}
 		if err := idx.Put(ctx, f); err != nil {
-			return err
+			return n, err
 		}
+		n++
 	}
-	return nil
+	return n, nil
 }
 
 // Sync 增量拉取并重放。
@@ -65,5 +67,6 @@ func Sync(ctx context.Context, idx *index.Index, f Fetcher, limit int) error {
 	if err != nil {
 		return err
 	}
-	return Replay(ctx, idx, msgs)
+	_, err = Replay(ctx, idx, msgs)
+	return err
 }

@@ -22,8 +22,13 @@ type fakeAPI struct {
 	editMessage  []*tg.MessagesEditMessageRequest
 	deleteMsgs   []*tg.ChannelsDeleteMessagesRequest
 	getFile      []*tg.UploadGetFileRequest
+	getMessages  []*tg.ChannelsGetMessagesRequest
 
-	nextID  int
+	// getMessagesRes/getMessagesErr 控制 ChannelsGetMessages 的返回，供 Refresh 测试使用。
+	getMessagesRes tg.MessagesMessagesClass
+	getMessagesErr error
+
+	nextID   int
 	fileData []byte
 	// uploadSize 是假 sendMedia 回显的 document.size，由测试在调用前设置。
 	uploadSize int64
@@ -112,6 +117,15 @@ func (f *fakeAPI) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequ
 
 func (f *fakeAPI) UploadSaveBigFilePart(context.Context, *tg.UploadSaveBigFilePartRequest) (bool, error) {
 	return true, nil
+}
+
+// ChannelsGetMessages 记录请求并返回测试预置的消息结果。
+func (f *fakeAPI) ChannelsGetMessages(_ context.Context, req *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
+	f.getMessages = append(f.getMessages, req)
+	if f.getMessagesErr != nil {
+		return nil, f.getMessagesErr
+	}
+	return f.getMessagesRes, nil
 }
 
 // newTestStore 创建关闭限速的 Store，避免单测被 1 秒间隔拖慢。

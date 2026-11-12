@@ -4,12 +4,15 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/winfsp/cgofuse/fuse"
+
+	"github.com/gotd/td/tgerr"
 
 	"mytgfs/internal/index"
 	"mytgfs/internal/telegramstore"
@@ -29,10 +32,31 @@ type fakeStore struct {
 	// 用于测试「提交与改名并发」的时序。
 	uploadStarted chan struct{}
 	uploadGate    chan struct{}
+
+	// expired 里的消息号下一次读取会返回 FILE_REFERENCE_EXPIRED；
+	// refreshErr 让 Refresh 直接失败，用于覆盖刷新失败的路径。
+	expired      map[int]bool
+	refreshErr   error
+	refreshCalls int
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{data: map[int][]byte{}}
+}
+
+// Refresh 模拟按消息 ID 重新拉取 document 元数据。
+func (s *fakeStore) Refresh(_ context.Context, messageID int) (*telegramstore.Part, error) {
+	s.refreshCalls++
+	if s.refreshErr != nil {
+		return nil, s.refreshErr
+	}
+	return &telegramstore.Part{
+		MessageID:     messageID,
+		DocumentID:    1,
+		AccessHash:    2,
+		FileReference: []byte("new-ref"),
+		Size:          int64(len(s.data[messageID])),
+	}, nil
 }
 
 func (s *fakeStore) Upload(_ context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error) {
@@ -57,6 +81,11 @@ func (s *fakeStore) Upload(_ context.Context, r io.Reader, size int64, name, mim
 
 func (s *fakeStore) ReadRange(_ context.Context, p *telegramstore.Part, offset int64, length int) ([]byte, error) {
 	s.readCalls++
+	// 模拟 Telegram 的 file_reference 过期：第一次读报错，刷新后即可读
+	if s.expired[p.MessageID] {
+		delete(s.expired, p.MessageID)
+		return nil, tgerr.New(400, "FILE_REFERENCE_EXPIRED")
+	}
 	b := s.data[p.MessageID]
 	if offset >= int64(len(b)) {
 		return nil, nil
@@ -436,5 +465,53 @@ func TestRenameWaitsForCommit(t *testing.T) {
 	got, ok, err := idx.Get(context.Background(), "/b.txt")
 	if err != nil || !ok || got.MessageID != 2 {
 		t.Fatalf("改名后索引错误: %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+// TestReadRefreshesFileReference file_reference 过期时按消息号刷新并把新引用写回索引。
+//
+// 输入：索引里一条旧引用的文件，假存储第一次读取返回 FILE_REFERENCE_EXPIRED
+// 输出：读取成功拿到原始内容
+// 预期：只刷新一次，索引里的 file_reference 更新为刷新结果
+func TestReadRefreshesFileReference(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	store.data[5] = []byte("hello")
+	store.expired = map[int]bool{5: true}
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{
+		Path: "/r.txt", MessageID: 5, DocumentID: 9, AccessHash: 8,
+		FileReference: []byte("old-ref"), Size: 5,
+	})
+
+	buf := make([]byte, 8)
+	n := fs.Read("/r.txt", buf, 0, 0)
+	if n != 5 || string(buf[:n]) != "hello" {
+		t.Fatalf("刷新后读取失败: n=%d content=%q", n, buf[:n])
+	}
+	if store.refreshCalls != 1 {
+		t.Fatalf("应刷新 1 次，实际 %d", store.refreshCalls)
+	}
+	got, ok, err := idx.Get(ctx, "/r.txt")
+	if err != nil || !ok {
+		t.Fatalf("索引读取失败: ok=%v err=%v", ok, err)
+	}
+	if string(got.FileReference) != "new-ref" {
+		t.Fatalf("新引用未写回索引: %q", got.FileReference)
+	}
+}
+
+// TestReadRefreshFailure 刷新失败时返回 EIO，不把错误当成功。
+func TestReadRefreshFailure(t *testing.T) {
+	store := newFakeStore()
+	store.data[5] = []byte("hello")
+	store.expired = map[int]bool{5: true}
+	store.refreshErr = errors.New("getMessages failed")
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{Path: "/r.txt", MessageID: 5, Size: 5})
+
+	buf := make([]byte, 8)
+	if n := fs.Read("/r.txt", buf, 0, 0); n != -fuse.EIO {
+		t.Fatalf("应返回 EIO，实际 %d", n)
 	}
 }

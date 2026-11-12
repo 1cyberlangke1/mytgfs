@@ -33,6 +33,9 @@ type Entry struct {
 	File  *File
 }
 
+// MetaKeyChannelPts 是频道 pts 游标在 meta 表里的键名。
+const MetaKeyChannelPts = "channel_pts"
+
 // Index 是本地 SQLite 物化索引。
 type Index struct {
 	db *sql.DB
@@ -52,6 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
 CREATE TABLE IF NOT EXISTS dirs (
 	path TEXT PRIMARY KEY,
 	mtime INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (
+	key TEXT PRIMARY KEY,
+	value INTEGER NOT NULL
 );
 `
 
@@ -101,6 +108,28 @@ ON CONFLICT(path) DO UPDATE SET
 	size = excluded.size,
 	mtime = excluded.mtime
 WHERE excluded.message_id > files.message_id`,
+		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime)
+	return err
+}
+
+// Replace 无条件覆盖一条记录。
+//
+// 输入：f 文件记录
+// 输出：error
+// 预期：用于同一条消息的元数据刷新（file_reference 过期后重新拉取），
+//
+//	不受「message_id 更大才覆盖」的限制
+func (i *Index) Replace(ctx context.Context, f File) error {
+	_, err := i.db.ExecContext(ctx, `
+INSERT INTO files(path, message_id, document_id, access_hash, file_reference, size, mtime)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET
+	message_id = excluded.message_id,
+	document_id = excluded.document_id,
+	access_hash = excluded.access_hash,
+	file_reference = excluded.file_reference,
+	size = excluded.size,
+	mtime = excluded.mtime`,
 		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime)
 	return err
 }
@@ -283,6 +312,48 @@ func (i *Index) Dirs(ctx context.Context, dir string) ([]string, error) {
 // Delete 删除一条记录。
 func (i *Index) Delete(ctx context.Context, path string) error {
 	_, err := i.db.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, path)
+	return err
+}
+
+// DeleteByMessageID 按 Telegram 消息号删除记录。
+//
+// 输入：messageID 频道消息 ID
+// 输出：error
+// 预期：频道侧删除/改名的推送到来时用它清掉旧行；不存在时不算错误
+func (i *Index) DeleteByMessageID(ctx context.Context, messageID int) error {
+	if messageID <= 0 {
+		return nil
+	}
+	_, err := i.db.ExecContext(ctx, `DELETE FROM files WHERE message_id = ?`, messageID)
+	return err
+}
+
+// GetMeta 读取一条持久化的整数状态。
+//
+// 输入：key 状态名（如 channel_pts）
+// 输出：值、是否存在、error
+// 预期：不存在时返回 (0, false, nil)，不当作错误
+func (i *Index) GetMeta(ctx context.Context, key string) (int64, bool, error) {
+	var v int64
+	err := i.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return v, true, nil
+}
+
+// PutMeta 写入一条持久化的整数状态。
+//
+// 输入：key 状态名、value 值
+// 输出：error
+// 预期：同 key 覆盖写；用于保存 pts 游标
+func (i *Index) PutMeta(ctx context.Context, key string, value int64) error {
+	_, err := i.db.ExecContext(ctx, `
+INSERT INTO meta(key, value) VALUES(?, ?)
+ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 

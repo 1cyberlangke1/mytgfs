@@ -296,10 +296,18 @@ func runChannelInit(args []string) {
 }
 
 // runSync 增量拉取频道消息并更新本地索引。
+// runSync 用频道 pts 游标增量同步，或用 user 会话回填历史。
+//
+// 输入：命令行参数（--limit 单轮上限、--name 卷名、--backfill 走历史回填）
+// 输出：无（打印统计；失败退出）
+// 预期：默认走 updates.getChannelDifference，bot 会话即可，只拉新变化；
+//
+//	--backfill 走 messages.getHistory（user-only），用于首次深挖旧文件
 func runSync(args []string) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
-	limit := fs.Int("limit", 200, "messages to fetch")
+	limit := fs.Int("limit", 100, "每轮事件上限 / 回填条数")
 	name := fs.String("name", "mytgfs", "volume name")
+	backfill := fs.Bool("backfill", false, "用 user 会话回填历史消息")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
@@ -323,20 +331,39 @@ func runSync(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
-
-	err = client.Run(ctx, func(ctx context.Context) error {
-		f := tgsync.TelegramFetcher{
-			API:        client.API(),
-			ChannelID:  cfg.Telegram.ChannelID,
-			AccessHash: cfg.Telegram.AccessHash,
+	if *backfill {
+		client := tgclient.New(cfg.Telegram.APIID, apiHash,
+			&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+			tgclient.Options{})
+		err = client.Run(ctx, func(ctx context.Context) error {
+			f := tgsync.TelegramFetcher{
+				API:        client.API(),
+				ChannelID:  cfg.Telegram.ChannelID,
+				AccessHash: cfg.Telegram.AccessHash,
+			}
+			return tgsync.Sync(ctx, idx, f, *limit)
+		})
+		if err != nil {
+			fatal(fmt.Sprintf("回填失败: %v", err))
 		}
-		return tgsync.Sync(ctx, idx, f, *limit)
-	})
-	if err != nil {
-		fatal(fmt.Sprintf("同步失败: %v", err))
+	} else {
+		client := tgclient.New(cfg.Telegram.APIID, apiHash,
+			&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+			tgclient.Options{})
+		var res tgsync.ChannelSyncResult
+		err = client.Run(ctx, func(ctx context.Context) error {
+			d := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: cfg.Telegram.ChannelID}
+			var serr error
+			res, serr = tgsync.SyncChannel(ctx, idx, d, *limit)
+			return serr
+		})
+		if err != nil {
+			fatal(fmt.Sprintf("同步失败: %v", err))
+		}
+		if res.Truncated {
+			fmt.Println("警告: 差异过大，只拿到最新消息；可用 --backfill 补历史")
+		}
+		fmt.Printf("PULLED=%d DELETED=%d PTS=%d ROUNDS=%d\n", res.Pulled, res.Deleted, res.Pts, res.Rounds)
 	}
 
 	entries, err := idx.List(ctx, "/")
@@ -345,6 +372,7 @@ func runSync(args []string) {
 	}
 	fmt.Printf("OK synced, root entries=%d\n", len(entries))
 }
+
 // runMount 挂载一个或多个卷；每个群组一个盘。
 func runMount(args []string) {
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)

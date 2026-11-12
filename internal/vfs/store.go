@@ -18,4 +18,6 @@ type Store interface {
 	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int) ([]byte, error)
 	Delete(ctx context.Context, ids ...int) error
 	Rename(ctx context.Context, messageID int, caption string) error
+	// Refresh 按消息 ID 重新拉取 document 元数据；file_reference 过期时用
+	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
 }

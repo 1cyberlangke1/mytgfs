@@ -100,6 +100,54 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+// TestDeleteByMessageID 按消息号删除，且不影响其他记录。
+func TestDeleteByMessageID(t *testing.T) {
+	idx := newTestIndex(t)
+	ctx := context.Background()
+
+	_ = idx.Put(ctx, File{Path: "/a.txt", MessageID: 11})
+	_ = idx.Put(ctx, File{Path: "/b.txt", MessageID: 12})
+
+	if err := idx.DeleteByMessageID(ctx, 11); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := idx.Get(ctx, "/a.txt"); ok {
+		t.Fatal("消息 11 对应的记录应被删除")
+	}
+	if _, ok, _ := idx.Get(ctx, "/b.txt"); !ok {
+		t.Fatal("消息 12 不应受影响")
+	}
+	// 幂等：不存在的消息号不算错误
+	if err := idx.DeleteByMessageID(ctx, 999); err != nil {
+		t.Fatalf("幂等删除报错: %v", err)
+	}
+	if err := idx.DeleteByMessageID(ctx, 0); err != nil {
+		t.Fatalf("0 消息号应直接忽略: %v", err)
+	}
+}
+
+// TestMeta 持久化整数状态，缺失时返回 false 而不是错误。
+func TestMeta(t *testing.T) {
+	idx := newTestIndex(t)
+	ctx := context.Background()
+
+	if v, ok, err := idx.GetMeta(ctx, MetaKeyChannelPts); err != nil || ok || v != 0 {
+		t.Fatalf("缺失状态应返回 (0,false,nil)，实际 (%d,%v,%v)", v, ok, err)
+	}
+	if err := idx.PutMeta(ctx, MetaKeyChannelPts, 55); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, err := idx.GetMeta(ctx, MetaKeyChannelPts); err != nil || !ok || v != 55 {
+		t.Fatalf("读回失败: (%d,%v,%v)", v, ok, err)
+	}
+	if err := idx.PutMeta(ctx, MetaKeyChannelPts, 77); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := idx.GetMeta(ctx, MetaKeyChannelPts); v != 77 {
+		t.Fatalf("覆盖写失败: %d", v)
+	}
+}
+
 func hasEntry(entries []Entry, name string, isDir bool) bool {
 	for _, e := range entries {
 		if e.Name == name && e.IsDir == isDir {

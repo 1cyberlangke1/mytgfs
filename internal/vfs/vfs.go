@@ -21,8 +21,8 @@ import (
 	"github.com/winfsp/cgofuse/fuse"
 
 	"mytgfs/internal/index"
-	"mytgfs/internal/telegramstore"
 	tgsync "mytgfs/internal/sync"
+	"mytgfs/internal/telegramstore"
 )
 
 // fillStat 补齐 WinFsp 需要的 Stat_t 字段。
@@ -333,7 +333,8 @@ func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
 // 输入：路径 p、flags
 // 输出：0 与句柄（永不返回 ENOENT）
 // 预期：命中待上传节点用同一个节点加引用；命中索引给只读句柄；
-//       都未命中时给空句柄，让上层自己拿到 EBADF，而不是在这里抛 ENOENT
+//
+//	都未命中时给空句柄，让上层自己拿到 EBADF，而不是在这里抛 ENOENT
 func (f *FS) Open(p string, flags int) (int, uint64) {
 	debugf("vfs: Open %s flags=%d", p, flags)
 	p = clean(p)
@@ -420,7 +421,8 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 // 输入：路径 p、来源临时文件 src、来源大小 size、打开标志 flags
 // 输出：0 与句柄，或负 errno
 // 预期：原节点正在上传时也能写打开；带 O_TRUNC 时丢弃原内容，
-//       否则复制 size 字节，由新节点在 Release 时上传
+//
+//	否则复制 size 字节，由新节点在 Release 时上传
 func (f *FS) openWriteFrom(p string, src *os.File, size int64, flags int) (int, uint64) {
 	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
 	if err != nil {
@@ -450,13 +452,6 @@ func (f *FS) openWriteFrom(p string, src *os.File, size int64, flags int) (int, 
 // 输出：error
 // 预期：按 4 MiB 分块从 Telegram 拉取，写打开后未截断时保留原内容
 func (f *FS) copyExisting(file index.File, tmp *os.File) error {
-	part := &telegramstore.Part{
-		MessageID:     file.MessageID,
-		DocumentID:    file.DocumentID,
-		AccessHash:    file.AccessHash,
-		FileReference: file.FileReference,
-		Size:          file.Size,
-	}
 	const chunk = 4 << 20
 	var off int64
 	for off < file.Size {
@@ -464,7 +459,7 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 		if off+n > file.Size {
 			n = file.Size - off
 		}
-		data, err := f.store.ReadRange(f.ctx, part, off, int(n))
+		data, newFile, err := f.readRangeWithRefresh(file, off, int(n))
 		if err != nil {
 			return err
 		}
@@ -474,9 +469,47 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 		if _, err := tmp.WriteAt(data, off); err != nil {
 			return err
 		}
+		file = newFile
 		off += int64(len(data))
 	}
 	return nil
+}
+
+// partOf 把索引记录转成远程读取用的 Part。
+func partOf(file index.File) *telegramstore.Part {
+	return &telegramstore.Part{
+		MessageID:     file.MessageID,
+		DocumentID:    file.DocumentID,
+		AccessHash:    file.AccessHash,
+		FileReference: file.FileReference,
+		Size:          file.Size,
+	}
+}
+
+// readRangeWithRefresh 读远程区间，file_reference 过期时刷新后重试一次。
+//
+// 输入：索引记录 file、偏移 ofst、长度 length
+// 输出：数据、可能已更新的索引记录、error
+// 预期：刷新成功时把新引用写回索引；失败时返回原始错误，不修改索引
+func (f *FS) readRangeWithRefresh(file index.File, ofst int64, length int) ([]byte, index.File, error) {
+	data, err := f.store.ReadRange(f.ctx, partOf(file), ofst, length)
+	if err == nil || !telegramstore.IsFileReferenceError(err) {
+		return data, file, err
+	}
+	debugf("vfs: file_reference 失效 %s msg=%d，按消息 ID 刷新", shortPath(file.Path), file.MessageID)
+	np, rerr := f.store.Refresh(f.ctx, file.MessageID)
+	if rerr != nil {
+		return nil, file, fmt.Errorf("刷新 file_reference: %w", rerr)
+	}
+	file.DocumentID = np.DocumentID
+	file.AccessHash = np.AccessHash
+	file.FileReference = np.FileReference
+	file.Size = np.Size
+	if perr := f.idx.Replace(f.ctx, file); perr != nil {
+		debugf("vfs: 刷新引用后写索引失败 %s: %v", shortPath(file.Path), perr)
+	}
+	data, err = f.store.ReadRange(f.ctx, partOf(file), ofst, length)
+	return data, file, err
 }
 
 // Read 按偏移读。
@@ -484,7 +517,8 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 // 输入：路径 p、缓冲 buff、偏移 ofst、句柄 fh
 // 输出：读到的字节数或负 errno
 // 预期：句柄或 pending 节点还有临时文件时直接读临时文件，
-//       这样「刚写完（提交还没完成）」也能读出完整内容；否则走 Telegram 索引
+//
+//	这样「刚写完（提交还没完成）」也能读出完整内容；否则走 Telegram 索引
 func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	p = clean(p)
 	f.mu.Lock()
@@ -518,9 +552,11 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	}
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
+		debugf("vfs: Read 索引查询失败 %s: %v", shortPath(p), err)
 		return -fuse.EIO
 	}
 	if !ok {
+		debugf("vfs: Read 索引里没有 %s", shortPath(p))
 		return -fuse.ENOENT
 	}
 	if ofst >= file.Size {
@@ -533,15 +569,9 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	if length <= 0 {
 		return 0
 	}
-	part := &telegramstore.Part{
-		MessageID:     file.MessageID,
-		DocumentID:    file.DocumentID,
-		AccessHash:    file.AccessHash,
-		FileReference: file.FileReference,
-		Size:          file.Size,
-	}
-	data, err := f.store.ReadRange(f.ctx, part, ofst, length)
+	data, _, err := f.readRangeWithRefresh(file, ofst, length)
 	if err != nil {
+		debugf("vfs: Read 远端失败 %s ofst=%d len=%d msg=%d: %v", shortPath(p), ofst, length, file.MessageID, err)
 		return -fuse.EIO
 	}
 	return copy(buff, data)
@@ -675,7 +705,8 @@ func (f *FS) commit(h *openFile) int {
 // 输入：节点 h、是否成功
 // 输出：无
 // 预期：成功时摘掉 pending（仅当它仍指向 h）并标记 done；
-//       失败时清掉 committing 让节点留在 pending 里，下次写打开可重试上传
+//
+//	失败时清掉 committing 让节点留在 pending 里，下次写打开可重试上传
 func (f *FS) finishCommit(h *openFile, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -927,4 +958,17 @@ func clean(p string) string {
 		return "/"
 	}
 	return p
+}
+
+// shortPath 压缩超长路径，避免日志被 1000+ 字符的深路径刷屏。
+//
+// 输入：任意路径
+// 输出：长度 <= 80 时原样返回；否则「前 40 + ... + 后 28」并附总长
+// 预期：日志里仍能区分不同深路径，又不至于爆行
+func shortPath(p string) string {
+	const keep = 40
+	if len(p) <= keep+40 {
+		return p
+	}
+	return fmt.Sprintf("%s...%s(len=%d)", p[:keep], p[len(p)-28:], len(p))
 }
