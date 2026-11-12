@@ -8,8 +8,10 @@ package web
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"net/http"
@@ -22,6 +24,33 @@ import (
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/ipc"
 )
+
+//go:embed static/htmx.min.js
+var htmxJS []byte
+
+// tmplFuncs 是模板里可用的辅助函数。
+var tmplFuncs = template.FuncMap{
+	"bytes": formatBytes,
+}
+
+// formatBytes 把字节数格式化成人类可读的字符串。
+//
+// 输入：n 字节数
+// 输出：如 "0 B"、"12.3 MB"
+// 预期：保留一位小数（字节级除外），与旧前端显示风格一致
+func formatBytes(n int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	f := float64(n)
+	i := 0
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%d %s", n, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", f, units[i])
+}
 
 // StatusFunc 返回面板要展示的状态；nil 时回落到 daemon IPC。
 type StatusFunc func(ctx context.Context) (any, error)
@@ -56,7 +85,14 @@ func Serve(ctx context.Context, addr, configPath string) error {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时尝试连 daemon
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil))
+	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, configPath))
+	// htmx 随二进制分发：面板不依赖任何外网 CDN
+	mux.HandleFunc("/static/htmx.min.js", handleAsset("application/javascript; charset=utf-8", htmxJS))
+	// 片段接口：htmx 轮询/提交的目标，返回 HTML 而不是 JSON
+	mux.HandleFunc("/frag/status", handleFragStatus(opts.Status))
+	mux.HandleFunc("/frag/sync", handleFragSync(opts.Sync))
+	mux.HandleFunc("/frag/config", handleFragConfig(configPath))
+	mux.HandleFunc("/frag/volume", handleFragVolume(opts.CreateVolume, configPath))
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
@@ -74,93 +110,154 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	return err
 }
 
-// handlePage 输出内嵌的静态页面，并把当前语言的文案注入进去。
+// pageLabels 是页面全部文案，统一取自 i18n。
 //
-// 输入：canCreate 是否支持建卷（决定是否显示建卷卡片）
+// 模板里不出现任何硬编码的用户可见字符串，换语言只改语言包。
+type pageLabels struct {
+	Title, Subtitle, Volumes, Actions                      string
+	Sync, Syncing, SyncDone                                string
+	Config, Save, Saved                                    string
+	Entries, Used, NoDaemon, LoadError                     string
+	NewVolume, FieldName, FieldTitle, FieldPoint           string
+	Create, Creating, Created, Restart, AuthLost, NameNeed string
+	StatVols, StatFiles, StatUsed, Xfer                    string
+	Footer, Lang, ThemeTip, RefreshTip                     string
+	// CanCreate 决定建卷卡片是否渲染
+	CanCreate bool
+}
+
+// loadLabels 读取当前语言的页面文案。
+//
+// 输入：canCreate 是否支持建卷
+// 输出：文案集合
+// 预期：语言由 i18n.Lang() 决定，与托盘/CLI 保持一致
+func loadLabels(canCreate bool) pageLabels {
+	return pageLabels{
+		Title:      i18n.T("web.title"),
+		Subtitle:   i18n.T("web.subtitle"),
+		Volumes:    i18n.T("web.volumes"),
+		Actions:    i18n.T("web.actions"),
+		Sync:       i18n.T("web.sync"),
+		Syncing:    i18n.T("web.syncing"),
+		SyncDone:   i18n.T("web.sync_done"),
+		Config:     i18n.T("web.config"),
+		Save:       i18n.T("web.save"),
+		Saved:      i18n.T("web.saved"),
+		Entries:    i18n.T("web.entries"),
+		Used:       i18n.T("web.used"),
+		NoDaemon:   i18n.T("web.no_daemon"),
+		LoadError:  i18n.T("web.load_error"),
+		NewVolume:  i18n.T("web.new_volume"),
+		FieldName:  i18n.T("web.field_name"),
+		FieldTitle: i18n.T("web.field_title"),
+		FieldPoint: i18n.T("web.field_point"),
+		Create:     i18n.T("web.create"),
+		Creating:   i18n.T("web.creating"),
+		Created:    i18n.T("web.created"),
+		Restart:    i18n.T("web.restart_hint"),
+		AuthLost:   i18n.T("web.auth_lost"),
+		NameNeed:   i18n.T("web.name_required"),
+		StatVols:   i18n.T("web.stat_volumes"),
+		StatFiles:  i18n.T("web.stat_files"),
+		StatUsed:   i18n.T("web.stat_used"),
+		Xfer:       i18n.T("web.xfer"),
+		Footer:     i18n.T("web.footer"),
+		Lang:       i18n.Lang(),
+		ThemeTip:   i18n.T("web.theme_tip"),
+		RefreshTip: i18n.T("web.refresh_tip"),
+		CanCreate:  canCreate,
+	}
+}
+
+// pageData 是整页渲染所需的数据。
+type pageData struct {
+	Labels pageLabels
+	Config string
+}
+
+// handlePage 输出内嵌的静态页面。
+//
+// 输入：canCreate 是否显示建卷卡片；configPath 配置文件路径（空串表示不预载）
 // 输出：HTML
-// 预期：语言包以 JSON 注入，前端不硬编码任何用户可见文案
-func handlePage(canCreate bool) http.HandlerFunc {
+// 预期：文案与配置正文都在服务端渲染，前端只负责主题切换
+func handlePage(canCreate bool, configPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		labels := map[string]string{
-			"title":      i18n.T("web.title"),
-			"subtitle":   i18n.T("web.subtitle"),
-			"volumes":    i18n.T("web.volumes"),
-			"actions":    i18n.T("web.actions"),
-			"sync":       i18n.T("web.sync"),
-			"syncing":    i18n.T("web.syncing"),
-			"syncDone":   i18n.T("web.sync_done"),
-			"config":     i18n.T("web.config"),
-			"save":       i18n.T("web.save"),
-			"saved":      i18n.T("web.saved"),
-			"entries":    i18n.T("web.entries"),
-			"used":       i18n.T("web.used"),
-			"nodaemon":   i18n.T("web.no_daemon"),
-			"loadError":  i18n.T("web.load_error"),
-			"newVolume":  i18n.T("web.new_volume"),
-			"fieldName":  i18n.T("web.field_name"),
-			"fieldTitle": i18n.T("web.field_title"),
-			"fieldPoint": i18n.T("web.field_point"),
-			"create":     i18n.T("web.create"),
-			"creating":   i18n.T("web.creating"),
-			"created":    i18n.T("web.created"),
-			"restart":    i18n.T("web.restart_hint"),
-			"authLost":   i18n.T("web.auth_lost"),
-			"nameNeed":   i18n.T("web.name_required"),
-			"statVols":   i18n.T("web.stat_volumes"),
-			"statFiles":  i18n.T("web.stat_files"),
-			"statUsed":   i18n.T("web.stat_used"),
-			"xfer":       i18n.T("web.xfer"),
-			"footer":     i18n.T("web.footer"),
-			"lang":       i18n.Lang(),
-			"themeTip":   i18n.T("web.theme_tip"),
-			"refreshTip": i18n.T("web.refresh_tip"),
+		data := pageData{Labels: loadLabels(canCreate)}
+		if configPath != "" {
+			if b, err := os.ReadFile(configPath); err == nil {
+				data.Config = string(b)
+			}
 		}
-		if canCreate {
-			labels["canCreate"] = "1"
-		}
-		blob, _ := json.Marshal(labels)
-		// 用标准库 html/template 渲染，标签以 JS 字面量注入
-		if err := pageTmpl.Execute(w, struct{ Labels template.JS }{Labels: template.JS(blob)}); err != nil {
+		if err := pageTmpl.Execute(w, data); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
 }
 
-// pageTmpl 是内嵌的面板页面模板，__LABELS__ 换成 {{.Labels}}。
-var pageTmpl = template.Must(template.New("page").Parse(pageHTML))
+// pageTmpl 是内嵌的面板页面模板。
+var pageTmpl = template.Must(template.New("page").Funcs(tmplFuncs).Parse(pageHTML))
 
-// handleStatus 优先用调用方注入的状态，否则回落到 daemon IPC。
+// handleAsset 输出内嵌的静态资源。
+//
+// 输入：contentType MIME 类型；data 资源内容
+// 输出：HTTP handler
+// 预期：内容随二进制固定不变，可长期缓存
+func handleAsset(contentType string, data []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		_, _ = w.Write(data)
+	}
+}
+
+// loadStatus 取当前状态：优先调用方注入，否则回落到 daemon IPC。
+//
+// 输入：ctx；status 可选的注入实现
+// 输出：任意可 JSON 序列化的状态对象；取不到时返回 noDaemon
+// 预期：daemon 状态文件残留但进程已退出时也返回 noDaemon，不报 502
+func loadStatus(ctx context.Context, status StatusFunc) any {
+	if status != nil {
+		v, err := status(ctx)
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+		return v
+	}
+	st, err := daemon.ReadState()
+	if err != nil {
+		return noDaemon()
+	}
+	data, err := ipc.Call(ctx, st.Addr, st.Token, "status", nil)
+	if err != nil {
+		return noDaemon()
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return noDaemon()
+	}
+	return v
+}
+
+// noDaemon 是「没有 daemon 在跑」时的状态。
+func noDaemon() map[string]any {
+	return map[string]any{
+		"state":   i18n.T("web.no_daemon"),
+		"volumes": []any{},
+	}
+}
+
+// handleStatus 输出 JSON 状态，供程序化调用（面板本身走 /frag/status）。
 func handleStatus(status StatusFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if status != nil {
-			v, err := status(r.Context())
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		v := loadStatus(r.Context(), status)
+		if m, ok := v.(map[string]any); ok {
+			if e, has := m["error"]; has {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprint(e)})
 				return
 			}
-			writeJSON(w, http.StatusOK, v)
-			return
 		}
-		st, err := daemon.ReadState()
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"state":   i18n.T("web.no_daemon"),
-				"volumes": []any{},
-			})
-			return
-		}
-		data, err := ipc.Call(r.Context(), st.Addr, st.Token, "status", nil)
-		if err != nil {
-			// daemon 状态文件残留但进程已退出：面板照常显示，不报 502
-			writeJSON(w, http.StatusOK, map[string]any{
-				"state":   i18n.T("web.no_daemon"),
-				"volumes": []any{},
-			})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(data)
+		writeJSON(w, http.StatusOK, v)
 	}
 }
 
@@ -254,6 +351,268 @@ func handleConfig(path string) http.HandlerFunc {
 	}
 }
 
+// ---- htmx 片段接口 ----
+//
+// 面板不再手写 fetch 与 DOM 拼接：轮询和提交都打这些接口，服务端直接返回 HTML。
+// 状态类片段用 hx-swap-oob 就地替换状态条、统计与卷列表，整页不刷新。
+
+// statusView 是从状态负载归一化出来的渲染视图。
+type statusView struct {
+	State      string
+	Kind       string
+	AuthLost   bool
+	Volumes    []volumeView
+	Transfers  []transferView
+	TotalFiles int64
+	TotalUsed  int64
+	Empty      string
+}
+
+// volumeView 是一个卷的展示数据。
+type volumeView struct {
+	Name    string
+	Entries int64
+	Used    int64
+}
+
+// transferView 是一个正在下载的文件的进度。
+type transferView struct {
+	Path  string
+	Done  int64
+	Total int64
+	Pct   int
+}
+
+// statusFragData 是状态片段的模板数据。
+type statusFragData struct {
+	Labels pageLabels
+	statusView
+}
+
+// msgData 是操作反馈片段的模板数据。
+//
+// Config 非空时一并把配置正文送回页面，省掉一次额外请求。
+type msgData struct {
+	Class  string
+	Text   string
+	Config string
+}
+
+// rawStatus 对应 /api/status 的 JSON 形状。
+//
+// 托盘给 volumes/transfers，daemon 只给 entries，两种都兼容。
+type rawStatus struct {
+	State   string `json:"state"`
+	Auth    string `json:"auth"`
+	Entries *int64 `json:"entries"`
+	Volumes []struct {
+		Name    string `json:"name"`
+		Entries int64  `json:"entries"`
+		Used    int64  `json:"used"`
+	} `json:"volumes"`
+	Transfers []struct {
+		Path  string `json:"path"`
+		Done  int64  `json:"done"`
+		Total int64  `json:"total"`
+	} `json:"transfers"`
+}
+
+// viewOf 把任意状态负载转成渲染视图。
+//
+// 输入：v loadStatus 的返回值；l 当前文案
+// 输出：statusView
+// 预期：形状不符时退化成空列表并显示「无 daemon」，不 panic、不显示半截数据
+func viewOf(v any, l pageLabels) statusView {
+	view := statusView{Empty: l.NoDaemon}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return view
+	}
+	var rs rawStatus
+	if err := json.Unmarshal(b, &rs); err != nil {
+		return view
+	}
+	view.State = rs.State
+	view.AuthLost = rs.Auth == "lost"
+	view.Kind = pillKind(rs.State, view.AuthLost)
+	for _, vol := range rs.Volumes {
+		view.Volumes = append(view.Volumes, volumeView{Name: vol.Name, Entries: vol.Entries, Used: vol.Used})
+		view.TotalFiles += vol.Entries
+		view.TotalUsed += vol.Used
+	}
+	for _, t := range rs.Transfers {
+		tv := transferView{Path: t.Path, Done: t.Done, Total: t.Total}
+		if t.Total > 0 {
+			tv.Pct = int(t.Done * 100 / t.Total)
+			if tv.Pct > 100 {
+				tv.Pct = 100
+			}
+		}
+		view.Transfers = append(view.Transfers, tv)
+	}
+	if len(view.Volumes) == 0 && rs.Entries != nil {
+		view.Empty = fmt.Sprintf("%s: %d", l.Entries, *rs.Entries)
+	}
+	return view
+}
+
+// pillKind 决定状态条的颜色语义。
+//
+// 输入：state 状态文本；lost 凭证是否失效
+// 输出：ok / warn / bad / 空串
+// 预期：凭证失效最优先，其次重连中，最后才是已连接
+func pillKind(state string, lost bool) string {
+	if lost {
+		return "bad"
+	}
+	lower := strings.ToLower(state)
+	switch {
+	case strings.Contains(lower, "reconnect"), strings.Contains(lower, "disconnect"),
+		strings.Contains(state, "重连"), strings.Contains(state, "断开"):
+		return "warn"
+	case strings.Contains(lower, "connect"), strings.Contains(lower, "ready"),
+		strings.Contains(state, "连接"):
+		return "ok"
+	}
+	return ""
+}
+
+// statusFragHTML 是状态片段：全部元素用 hx-swap-oob 替换同 id 的节点。
+const statusFragHTML = `<span id="pill" class="pill{{with .Kind}} {{.}}{{end}}" hx-swap-oob="true">{{.State}}</span>
+<div id="authbar" class="banner{{if .AuthLost}} show{{end}}" hx-swap-oob="true">{{.Labels.AuthLost}}</div>
+<div id="stats" class="stats" hx-swap-oob="true">
+<div class="stat"><span class="k">{{.Labels.StatVols}}</span><strong>{{len .Volumes}}</strong></div>
+<div class="stat"><span class="k">{{.Labels.StatFiles}}</span><strong>{{.TotalFiles}}</strong></div>
+<div class="stat"><span class="k">{{.Labels.StatUsed}}</span><strong>{{bytes .TotalUsed}}</strong></div>
+</div>
+<div id="volumes" hx-swap-oob="true">{{if .Volumes}}{{range .Volumes}}
+<div class="vol"><span class="dot"></span><span class="name">{{.Name}}</span><span class="meta">{{$.Labels.Entries}}: {{.Entries}} · {{$.Labels.Used}}: {{bytes .Used}}</span></div>{{end}}{{else}}
+<div class="empty">{{.Empty}}</div>{{end}}{{range .Transfers}}
+<div class="vol"><span class="dot busy"></span><span class="name">{{.Path}}</span><span class="meta">{{$.Labels.Xfer}} {{.Pct}}% · {{bytes .Done}} / {{bytes .Total}}</span></div>{{end}}
+</div>`
+
+// msgFragHTML 是操作反馈片段。
+const msgFragHTML = `<span class="{{.Class}}">{{.Text}}</span>`
+
+// volumeFragHTML 是建卷结果：反馈 + 新配置正文。
+const volumeFragHTML = `{{if .Config}}<textarea id="cfg" name="content" spellcheck="false" hx-swap-oob="true">{{.Config}}</textarea>{{end}}<span class="{{.Class}}">{{.Text}}</span>`
+
+var (
+	statusFrag = template.Must(template.New("status").Funcs(tmplFuncs).Parse(statusFragHTML))
+	msgFrag    = template.Must(template.New("msg").Parse(msgFragHTML))
+	volumeFrag = template.Must(template.New("volume").Parse(volumeFragHTML))
+)
+
+// renderFragment 输出 HTML 片段。
+//
+// 输入：w 响应；tmpl 模板；data 模板数据
+// 输出：无
+// 预期：一律 no-store，避免浏览器缓存旧状态
+func renderFragment(w http.ResponseWriter, tmpl *template.Template, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleFragStatus 返回状态片段：状态条、统计、卷列表、下载进度。
+func handleFragStatus(status StatusFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		l := loadLabels(false)
+		renderFragment(w, statusFrag, statusFragData{
+			Labels:     l,
+			statusView: viewOf(loadStatus(r.Context(), status), l),
+		})
+	}
+}
+
+// handleFragSync 立即同步一次并返回反馈。
+//
+// 输入：sync 同步实现，nil 表示当前模式不支持
+// 输出：反馈 HTML
+// 预期：出错也返回 200 + 错误文案，htmx 默认不替换 4xx/5xx 的响应体
+func handleFragSync(sync SyncFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		l := loadLabels(false)
+		msg := msgData{Class: "ok", Text: l.SyncDone}
+		if sync == nil {
+			msg = msgData{Class: "err", Text: i18n.T("web.sync_unavailable")}
+		} else if _, err := sync(r.Context()); err != nil {
+			msg = msgData{Class: "err", Text: err.Error()}
+		}
+		renderFragment(w, msgFrag, msg)
+	}
+}
+
+// handleFragConfig 保存配置正文（表单字段 content）。
+func handleFragConfig(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		l := loadLabels(false)
+		if err := r.ParseForm(); err != nil {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: err.Error()})
+			return
+		}
+		if err := atomic.WriteFile(path, strings.NewReader(r.PostFormValue("content"))); err != nil {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: err.Error()})
+			return
+		}
+		renderFragment(w, msgFrag, msgData{Class: "ok", Text: l.Saved})
+	}
+}
+
+// handleFragVolume 建卷（表单字段 name/title/point）。
+//
+// 输出：反馈 HTML；成功时附带改写后的配置正文
+// 预期：重名/参数错误都返回 200 + 错误文案，由页面就地显示
+func handleFragVolume(create CreateVolumeFunc, configPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		l := loadLabels(true)
+		if create == nil {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: i18n.T("web.create_unavailable")})
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: err.Error()})
+			return
+		}
+		name := strings.TrimSpace(r.PostFormValue("name"))
+		if name == "" {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: l.NameNeed})
+			return
+		}
+		title := strings.TrimSpace(r.PostFormValue("title"))
+		point := strings.TrimSpace(r.PostFormValue("point"))
+		if _, err := create(r.Context(), name, title, point); err != nil {
+			renderFragment(w, msgFrag, msgData{Class: "err", Text: err.Error()})
+			return
+		}
+		msg := msgData{Class: "ok", Text: l.Created + " · " + l.Restart}
+		if configPath != "" {
+			if b, err := os.ReadFile(configPath); err == nil {
+				msg.Config = string(b)
+			}
+		}
+		renderFragment(w, volumeFrag, msg)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -261,7 +620,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 const pageHTML = `<!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="{{.Labels.Lang}}" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -422,6 +781,9 @@ textarea::-webkit-scrollbar-track{background:transparent}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 .banner{grid-column:1/-1;border-radius:14px;padding:12px 16px;font-size:13px;line-height:1.6;display:none;
   color:var(--banner-text);background:var(--banner-bg);border:1px solid var(--banner-line)}
+.banner.show{display:block}
+.ok{color:var(--green)}
+.err{color:var(--red)}
 footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
 </style>
 </head>
@@ -438,14 +800,14 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
       <rect x="153" y="170" width="78" height="44" rx="10" fill="#4a5866"/>
       <rect x="153" y="170" width="78" height="15" rx="7" fill="#707f8d"/>
       <rect x="163" y="190" width="58" height="5" rx="2.5" fill="#212d38"/>
-      <circle cx="221" y="203" r="5" fill="#3ddc84"/>
+      <circle cx="221" cy="203" r="5" fill="#3ddc84"/>
     </svg>
     <div>
-      <h1 id="l-title">mytgfs</h1>
-      <p class="sub" id="l-subtitle"></p>
+      <h1>{{.Labels.Title}}</h1>
+      <p class="sub">{{.Labels.Subtitle}}</p>
     </div>
     <div class="head-actions">
-      <button id="theme" class="ghost iconbtn" type="button">
+      <button id="theme" class="ghost iconbtn" type="button" title="{{.Labels.ThemeTip}}" aria-label="{{.Labels.ThemeTip}}">
         <svg class="ic theme-sun" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="4"/>
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
@@ -459,7 +821,7 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
   </header>
 
   <main>
-    <div id="authbar" class="banner"></div>
+    <div id="authbar" class="banner">{{.Labels.AuthLost}}</div>
 
     <section class="card">
       <h2>
@@ -469,7 +831,7 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
           <line x1="6" x2="6.01" y1="16" y2="16"/>
           <line x1="10" x2="10.01" y1="16" y2="16"/>
         </svg>
-        <span id="l-volumes"></span>
+        <span>{{.Labels.Volumes}}</span>
       </h2>
       <div id="volumes"><div class="empty">…</div></div>
     </section>
@@ -479,22 +841,22 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
         </svg>
-        <span id="l-actions"></span>
+        <span>{{.Labels.Actions}}</span>
       </h2>
-      <div class="stats">
-        <div class="stat"><span class="k" id="l-stat-vols"></span><strong id="stat-vols">0</strong></div>
-        <div class="stat"><span class="k" id="l-stat-files"></span><strong id="stat-files">0</strong></div>
-        <div class="stat"><span class="k" id="l-stat-used"></span><strong id="stat-used">—</strong></div>
+      <div id="stats" class="stats">
+        <div class="stat"><span class="k">{{.Labels.StatVols}}</span><strong>0</strong></div>
+        <div class="stat"><span class="k">{{.Labels.StatFiles}}</span><strong>0</strong></div>
+        <div class="stat"><span class="k">{{.Labels.StatUsed}}</span><strong>—</strong></div>
       </div>
       <div class="row">
-        <button id="sync">
+        <button hx-post="/frag/sync" hx-target="#syncmsg" hx-swap="innerHTML" hx-disabled-elt="this">
           <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85 1.03 6.53 2.7L21 8"/>
             <path d="M21 3v5h-5"/>
           </svg>
-          <span id="l-sync"></span>
+          <span>{{.Labels.Sync}}</span>
         </button>
-        <button id="reload" class="ghost iconbtn" type="button">
+        <button class="ghost iconbtn" type="button" hx-get="/frag/status" hx-swap="none" title="{{.Labels.RefreshTip}}" aria-label="{{.Labels.RefreshTip}}">
           <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
             <path d="M3 3v5h5"/>
@@ -503,223 +865,88 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
       </div>
       <p class="msg" id="syncmsg"></p>
     </section>
-
+{{if .Labels.CanCreate}}
     <section class="card" style="grid-column:1/-1">
       <h2>
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
           <path d="M12 10v6M9 13h6"/>
         </svg>
-        <span id="l-newvol"></span>
+        <span>{{.Labels.NewVolume}}</span>
       </h2>
-      <div class="form">
-        <input id="nv-name" autocomplete="off">
-        <input id="nv-title" autocomplete="off">
-        <input id="nv-point" autocomplete="off">
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button id="nv-create">
-          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-          <span id="l-create"></span>
-        </button>
-        <span class="msg" id="nv-msg"></span>
-      </div>
+      <form hx-post="/frag/volume" hx-target="#nv-msg" hx-swap="innerHTML">
+        <div class="form">
+          <input name="name" autocomplete="off" placeholder="{{.Labels.FieldName}}">
+          <input name="title" autocomplete="off" placeholder="{{.Labels.FieldTitle}}">
+          <input name="point" autocomplete="off" placeholder="{{.Labels.FieldPoint}}">
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button type="submit">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            <span>{{.Labels.Create}}</span>
+          </button>
+          <span class="msg" id="nv-msg"></span>
+        </div>
+      </form>
     </section>
-
+{{end}}
     <section class="card" style="grid-column:1/-1">
       <h2>
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 20h9"/>
           <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
         </svg>
-        <span id="l-config"></span>
+        <span>{{.Labels.Config}}</span>
       </h2>
-      <textarea id="cfg" spellcheck="false"></textarea>
-      <div class="row" style="margin-top:12px">
-        <button id="save">
-          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/>
-            <path d="M17 21v-8H7v8M7 3v5h8"/>
-          </svg>
-          <span id="l-save"></span>
-        </button>
-        <span class="msg" id="savemsg"></span>
-      </div>
+      <form hx-put="/frag/config" hx-target="#savemsg" hx-swap="innerHTML">
+        <textarea id="cfg" name="content" spellcheck="false">{{.Config}}</textarea>
+        <div class="row" style="margin-top:12px">
+          <button type="submit">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/>
+              <path d="M17 21v-8H7v8M7 3v5h8"/>
+            </svg>
+            <span>{{.Labels.Save}}</span>
+          </button>
+          <span class="msg" id="savemsg"></span>
+        </div>
+      </form>
     </section>
   </main>
-  <footer id="l-footer"></footer>
+  <footer>{{.Labels.Footer}}</footer>
 </div>
+<div id="poller" hx-get="/frag/status" hx-trigger="load, every 3s" hx-swap="none"></div>
+<script src="/static/htmx.min.js"></script>
 <script>
-const L = {{.Labels}};
-const $ = id => document.getElementById(id);
-document.documentElement.lang = L.lang;
-$('l-title').textContent = L.title;
-$('l-subtitle').textContent = L.subtitle;
-$('l-volumes').textContent = L.volumes;
-$('l-actions').textContent = L.actions;
-$('l-config').textContent = L.config;
-$('l-newvol').textContent = L.newVolume;
-$('l-sync').textContent = L.sync;
-$('l-save').textContent = L.save;
-$('l-create').textContent = L.create;
-$('l-stat-vols').textContent = L.statVols;
-$('l-stat-files').textContent = L.statFiles;
-$('l-stat-used').textContent = L.statUsed;
-$('l-footer').textContent = L.footer;
-$('nv-name').placeholder = L.fieldName;
-$('nv-title').placeholder = L.fieldTitle;
-$('nv-point').placeholder = L.fieldPoint;
-$('authbar').textContent = L.authLost;
-$('reload').title = L.refreshTip;
-$('reload').setAttribute('aria-label', L.refreshTip);
-if (L.canCreate !== '1') { $('l-newvol').closest('section').style.display = 'none'; }
-
-// 深浅色：跟随系统，允许手动覆盖并记住选择
-const root = document.documentElement;
-const themeBtn = $('theme');
-function paintTheme(){
-  themeBtn.title = L.themeTip;
-  themeBtn.setAttribute('aria-label', L.themeTip);
-  themeBtn.setAttribute('aria-pressed', root.dataset.theme === 'light' ? 'true' : 'false');
-}
-themeBtn.onclick = () => {
-  root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
-  try { localStorage.setItem('mytgfs-theme', root.dataset.theme); } catch (e) {}
-  paintTheme();
-};
-paintTheme();
-if (window.matchMedia) {
-  const mq = window.matchMedia('(prefers-color-scheme: light)');
-  const onChange = (e) => {
-    try { if (localStorage.getItem('mytgfs-theme')) return; } catch (err) {}
-    root.dataset.theme = e.matches ? 'light' : 'dark';
-    paintTheme();
+// 主题：首屏已在 head 里定好，这里只处理手动切换与系统偏好变更。
+// 状态刷新、表单提交全部交给 htmx，页面里没有轮询代码。
+(function(){
+  var root = document.documentElement;
+  var btn = document.getElementById('theme');
+  if (!btn) return;
+  var paint = function(){
+    btn.setAttribute('aria-pressed', root.dataset.theme === 'light' ? 'true' : 'false');
   };
-  if (mq.addEventListener) mq.addEventListener('change', onChange);
-  else if (mq.addListener) mq.addListener(onChange);
-}
-
-let lastState = '', lastKind = '';
-function setPill(state, kind){
-  const p = $('pill');
-  p.textContent = state || '—';
-  p.className = 'pill ' + (kind || '');
-}
-function fmtBytes(n){
-  if (n === null || n === undefined) return '—';
-  const u = ['B','KB','MB','GB','TB']; let i = 0, v = Number(n);
-  while (v >= 1024 && i < u.length-1) { v /= 1024; i++; }
-  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
-}
-function renderVolumes(data){
-  const box = $('volumes');
-  const vols = Array.isArray(data.volumes) ? data.volumes : [];
-  let files = 0, used = 0;
-  for (const v of vols) { files += Number(v.entries) || 0; used += Number(v.used) || 0; }
-  $('stat-vols').textContent = String(vols.length);
-  $('stat-files').textContent = String(files);
-  $('stat-used').textContent = fmtBytes(used);
-  if (!vols.length) {
-    box.innerHTML = '<div class="empty">' + (data.entries !== undefined
-      ? L.entries + ': ' + data.entries : L.nodaemon) + '</div>';
-    return;
+  btn.addEventListener('click', function(){
+    root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+    try { localStorage.setItem('mytgfs-theme', root.dataset.theme); } catch (e) {}
+    paint();
+  });
+  paint();
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    var onChange = function(e){
+      try { if (localStorage.getItem('mytgfs-theme')) return; } catch (err) {}
+      root.dataset.theme = e.matches ? 'light' : 'dark';
+      paint();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
   }
-  box.innerHTML = '';
-  for (const v of vols) {
-    const el = document.createElement('div');
-    el.className = 'vol';
-    const dot = document.createElement('span'); dot.className = 'dot';
-    const name = document.createElement('span'); name.className = 'name'; name.textContent = v.name;
-    const meta = document.createElement('span'); meta.className = 'meta';
-    meta.textContent = L.entries + ': ' + (v.entries ?? 0) + ' · ' + L.used + ': ' + fmtBytes(v.used);
-    el.append(dot, name, meta);
-    box.append(el);
-  }
-  // 正在下载的文件：显示百分比与字节数
-  const xf = Array.isArray(data.transfers) ? data.transfers : [];
-  for (const t of xf) {
-    const pct = t.total > 0 ? Math.min(100, Math.round(Number(t.done) * 100 / Number(t.total))) : 0;
-    const el = document.createElement('div');
-    el.className = 'vol';
-    const dot = document.createElement('span'); dot.className = 'dot busy';
-    const name = document.createElement('span'); name.className = 'name'; name.textContent = t.path;
-    const meta = document.createElement('span'); meta.className = 'meta';
-    meta.textContent = L.xfer + ' ' + pct + '% · ' + fmtBytes(t.done) + ' / ' + fmtBytes(t.total);
-    el.append(dot, name, meta);
-    box.append(el);
-  }
-}
-async function refresh(){
-  try {
-    const r = await fetch('/api/status');
-    const data = await r.json();
-    if (data.error) { setPill(data.error, 'bad'); return; }
-    const lost = data.auth === 'lost';
-    $('authbar').style.display = lost ? 'block' : 'none';
-    $('sync').disabled = lost;
-    $('nv-create').disabled = lost;
-    const s = String(data.state || '');
-    const kind = lost ? 'bad'
-      : /connect|已连接|connecting|ready/i.test(s) && !/reconnect|断开|disconnect/i.test(s) ? 'ok'
-      : /reconnect|重连|disconnect|断开/i.test(s) ? 'warn' : '';
-    if (s !== lastState || kind !== lastKind) { lastState = s; lastKind = kind; setPill(s, kind); }
-    renderVolumes(data);
-  } catch (e) {
-    setPill(L.loadError, 'bad');
-  }
-}
-$('sync').onclick = async () => {
-  const b = $('sync'); b.disabled = true; $('syncmsg').textContent = L.syncing;
-  try {
-    const r = await fetch('/api/sync', {method:'POST'});
-    const data = await r.json();
-    $('syncmsg').textContent = data.error ? data.error : L.syncDone;
-    await refresh();
-  } catch (e) { $('syncmsg').textContent = String(e); }
-  finally { b.disabled = false; }
-};
-$('reload').onclick = refresh;
-fetch('/api/config').then(r=>r.text()).then(t=>{ $('cfg').value = t; });
-$('save').onclick = async () => {
-  $('savemsg').textContent = '';
-  const r = await fetch('/api/config', {method:'PUT', body: $('cfg').value});
-  const data = await r.json();
-  $('savemsg').textContent = data.error || L.saved;
-};
-$('nv-create').onclick = async () => {
-  const name = $('nv-name').value.trim();
-  if (!name) { $('nv-msg').textContent = L.nameNeed; return; }
-  const b = $('nv-create');
-  b.disabled = true; $('nv-msg').textContent = L.creating;
-  try {
-    const r = await fetch('/api/volumes', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        name,
-        title: $('nv-title').value.trim(),
-        point: $('nv-point').value.trim(),
-      }),
-    });
-    const data = await r.json();
-    if (data.error) {
-      $('nv-msg').textContent = data.error;
-    } else {
-      $('nv-msg').textContent = L.created + ' · ' + L.restart;
-      $('nv-name').value = ''; $('nv-title').value = ''; $('nv-point').value = '';
-      fetch('/api/config').then(x=>x.text()).then(t=>{ $('cfg').value = t; });
-      await refresh();
-    }
-  } catch (e) {
-    $('nv-msg').textContent = String(e);
-  } finally {
-    b.disabled = false;
-  }
-};
-refresh();
-setInterval(refresh, 3000);
+})();
 </script>
 </body>
+</html>
 </html>`
