@@ -23,6 +23,7 @@ import (
 
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/queue"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 )
@@ -50,6 +51,8 @@ type FileSystem struct {
 	idx   *index.Index
 	store Store
 	chunk int64
+	// q 可选：非空时上传走串行队列，避免批量写入把 Telegram 打出 FLOOD_WAIT
+	q *queue.Queue
 }
 
 // New 创建 WebDAV 文件系统。
@@ -63,6 +66,16 @@ func New(ctx context.Context, idx *index.Index, store Store, chunk int64) *FileS
 	}
 	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk}
 }
+
+// SetQueue 挂上串行队列。
+//
+// 输入：q 队列，可为 nil（直接上传）
+// 输出：无
+// 预期：只有写入路径受影响，读取不变
+func (d *FileSystem) SetQueue(q *queue.Queue) { d.q = q }
+
+// Queue 返回当前队列，nil 表示未启用。
+func (d *FileSystem) Queue() *queue.Queue { return d.q }
 
 // Mkdir 创建目录。
 func (d *FileSystem) Mkdir(_ context.Context, name string, _ os.FileMode) error {
@@ -200,10 +213,26 @@ func (f *file) Close() error {
 			sha = hex.EncodeToString(f.sum.Sum(nil))
 		}
 		caption := tgsync.EncodeCaptionHash(f.name, sha)
-		part, err := f.d.store.UploadResumable(f.d.ctx, f.tmp, st.Size(), sha,
-			path.Base(f.name), "application/octet-stream", caption)
-		if err != nil {
+		var part *telegramstore.Part
+		upload := func(ctx context.Context) error {
+			p, uerr := f.d.store.UploadResumable(ctx, f.tmp, st.Size(), sha,
+				path.Base(f.name), "application/octet-stream", caption)
+			if uerr != nil {
+				return uerr
+			}
+			part = p
+			return nil
+		}
+		// 有队列时串行上传：批量写入不会互相抢限流额度
+		if f.d.q != nil {
+			if err := f.d.q.Do(f.d.ctx, f.name, upload); err != nil {
+				return err
+			}
+		} else if err := upload(f.d.ctx); err != nil {
 			return err
+		}
+		if part == nil {
+			return errors.New(i18n.T("err.upload_no_result"))
 		}
 		// 覆盖写：旧消息要删掉，否则频道里会堆同路径的孤儿消息
 		old, hadOld, gerr := f.d.idx.Get(f.d.ctx, f.name)

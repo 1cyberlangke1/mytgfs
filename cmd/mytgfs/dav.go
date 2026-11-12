@@ -27,6 +27,7 @@ import (
 	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
@@ -72,15 +73,23 @@ func runWebDAV(args []string) {
 		tgclient.Options{})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
-		store := telegramstore.New(client.API(), volume.ChatID)
+		// 多条 MTProto 连接并行取数：单连接受 RTT 限制，池化后吞吐随连接数上升
+		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
+		if perr != nil {
+			return perr
+		}
+		defer closePool()
+		store := telegramstore.New(api, volume.ChatID)
 		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		// 上传断点落在 data/uploads，中断后按内容 sha256 续传
 		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
+		fsys := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
+		// 写入走串行队列：批量拷贝时不会互相抢 Telegram 的发消息配额
+		fsys.SetQueue(queue.New(1, 3))
 		handler := &webdav.Handler{
 			Prefix:     "/",
-			FileSystem: dav.New(ctx, idx, store, cfg.Mount.ReadChunk()),
+			FileSystem: fsys,
 			LockSystem: webdav.NewMemLS(),
 		}
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
