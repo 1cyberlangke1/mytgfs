@@ -87,5 +87,6 @@
   "web.footer": "mytgfs · 把 Telegram 当成一块盘",
   "web.theme_tip": "切换深色 / 浅色",
   "web.refresh_tip": "刷新状态",
-  "tray.state.auth_lost": "凭据失效，请重新登录"
+  "tray.state.auth_lost": "凭据失效，请重新登录",
+  "tray.headless": "没有检测到图形会话，托盘已禁用，按无托盘模式运行（Ctrl+C 退出）"
 }

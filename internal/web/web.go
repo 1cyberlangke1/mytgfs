@@ -337,6 +337,28 @@ header .sub{margin:2px 0 0;color:var(--muted);font-size:13px}
 .head-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
 main{display:grid;gap:16px;grid-template-columns:1fr;align-items:start}
 @media(min-width:860px){main{grid-template-columns:1.15fr .85fr}}
+/* 窄屏（手机 / 竖屏平板）：单列、按钮铺满、避免横向溢出 */
+@media(max-width:640px){
+  body{padding:18px 12px 36px}
+  header{flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  header .logo{width:44px;height:44px}
+  header h1{font-size:18px}
+  header .sub{font-size:12px}
+  .head-actions{margin-left:0;width:100%;justify-content:flex-end}
+  .card{padding:14px;border-radius:14px}
+  .vol{flex-wrap:wrap;align-items:flex-start}
+  .vol .meta{margin-left:0;width:100%;text-align:left}
+  .card button:not(.iconbtn){width:100%;justify-content:center}
+  .form{grid-template-columns:1fr}
+  textarea{min-height:140px}
+  .row{gap:8px}
+}
+/* 超窄屏：状态条与标题各占一行 */
+@media(max-width:400px){
+  .head-actions{justify-content:space-between}
+  .pill{padding:6px 10px;font-size:12px}
+  .stats{grid-template-columns:1fr}
+}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 18px 16px;
   box-shadow:var(--shadow);transition:border-color .18s ease, transform .18s ease, background-color .2s ease}
 .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
@@ -348,7 +370,7 @@ main{display:grid;gap:16px;grid-template-columns:1fr;align-items:start}
 .vol .name{font-weight:600;font-size:15px}
 .vol .meta{margin-left:auto;color:var(--muted);font-size:13px;text-align:right;line-height:1.5;font-variant-numeric:tabular-nums}
 .empty{color:var(--muted);font-size:14px;padding:6px 0}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px}
 .stat{background:var(--stat);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
 .stat .k{display:block;color:var(--muted);font-size:11px;letter-spacing:.4px;margin-bottom:4px}
 .stat strong{font-size:17px;font-weight:650;font-variant-numeric:tabular-nums}

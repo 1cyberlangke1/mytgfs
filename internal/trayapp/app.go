@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -464,7 +465,15 @@ func Run(opts Options) error {
 			rootCancel()
 		},
 	}
-	tray.Run(actions, connText)
+	if tray.Supported() {
+		tray.Run(actions, connText)
+	} else {
+		// 无图形环境：不起托盘，挂载与自动同步照常跑，Ctrl+C / SIGINT 退出
+		fmt.Fprintln(os.Stderr, i18n.T("tray.headless"))
+		sigCtx, stop := signal.NotifyContext(rootCtx, os.Interrupt)
+		defer stop()
+		<-sigCtx.Done()
+	}
 
 	// 托盘退出后收尾：再确保卸载与取消，最多等 5 秒让 WinFsp 完成卸载
 	unmountAll()
