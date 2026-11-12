@@ -57,6 +57,7 @@ type Volume struct {
 	Enabled    bool   `toml:"enabled"`
 	Layout     string `toml:"layout"`
 	OnConflict string `toml:"on_conflict"`
+	Point      string `toml:"point"`
 }
 
 // Load 读取 TOML 配置。

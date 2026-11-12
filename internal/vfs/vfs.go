@@ -9,6 +9,7 @@ package vfs
 import (
 	"context"
 	"io"
+	"log"
 	"os"
 	"path"
 	"strings"
@@ -20,6 +21,15 @@ import (
 	"mytgfs/internal/telegramstore"
 	tgsync "mytgfs/internal/sync"
 )
+
+// debug 由 MYTGFS_DEBUG=1 打开，默认关闭。
+var debug = os.Getenv("MYTGFS_DEBUG") != ""
+
+func debugf(format string, args ...any) {
+	if debug {
+		log.Printf(format, args...)
+	}
+}
 
 // FS 是挂载的文件系统。
 type FS struct {
@@ -177,6 +187,7 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 
 // Create 新建文件（写入临时文件，Release 时上传）。
 func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
+	debugf("vfs: Create %s flags=%d", p, flags)
 	p = clean(p)
 	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
 	if err != nil {
@@ -192,6 +203,7 @@ func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
 
 // Write 写入临时文件。
 func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
+	debugf("vfs: Write %s ofst=%d len=%d fh=%d", p, ofst, len(buff), fh)
 	f.mu.Lock()
 	h := f.handles[fh]
 	f.mu.Unlock()
@@ -210,6 +222,7 @@ func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
 
 // Release 关闭文件；有内容时上传并更新索引。
 func (f *FS) Release(p string, fh uint64) int {
+	debugf("vfs: Release %s fh=%d", p, fh)
 	f.mu.Lock()
 	h := f.handles[fh]
 	delete(f.handles, fh)
@@ -229,6 +242,7 @@ func (f *FS) Release(p string, fh uint64) int {
 	part, err := f.store.Upload(f.ctx, io.LimitReader(h.tmp, h.size), h.size,
 		path.Base(h.path), "application/octet-stream", caption)
 	if err != nil {
+		debugf("vfs: Release upload %s failed: %v", h.path, err)
 		return -fuse.EIO
 	}
 	if err := f.idx.Put(f.ctx, index.File{
@@ -240,6 +254,7 @@ func (f *FS) Release(p string, fh uint64) int {
 		Size:          part.Size,
 		Mtime:         nowUnix(),
 	}); err != nil {
+		debugf("vfs: Release index %s failed: %v", h.path, err)
 		return -fuse.EIO
 	}
 	return 0

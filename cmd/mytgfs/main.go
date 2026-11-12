@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mytgfs/internal/auth"
@@ -201,7 +202,7 @@ func runSync(args []string) {
 	fmt.Printf("OK synced, root entries=%d\n", len(entries))
 }
 
-// runMount 挂载 FUSE 文件系统。
+// runMount 挂载一个或多个卷；每个群组一个盘。
 func runMount(args []string) {
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)
 	point := fs.String("point", "", "mount point")
@@ -214,9 +215,6 @@ func runMount(args []string) {
 	if *point == "" {
 		*point = cfg.Mount.Point
 	}
-	if *point == "" {
-		fatal("需要 --point 或 config.mount.point")
-	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
 		fatal(i18n.T("err.missing_api_hash"))
@@ -225,11 +223,6 @@ func runMount(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open("index.db")
-	if err != nil {
-		fatal(fmt.Sprintf("打开索引: %v", err))
-	}
-	defer idx.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -239,9 +232,46 @@ func runMount(args []string) {
 		tgclient.Options{})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
-		store := telegramstore.New(client.API(), cfg.Telegram.ChannelID)
-		fsys := vfs.New(ctx, idx, store, os.TempDir())
-		return vfs.Mount(ctx, fsys, *point, "mytgfs")
+		var wg sync.WaitGroup
+		defer wg.Wait()
+
+		mountOne := func(name string, channelID int64, mp string) {
+			if mp == "" {
+				fatal("卷 " + name + " 缺少挂载点")
+			}
+			idx, err := index.Open("index-" + name + ".db")
+			if err != nil {
+				fatal(fmt.Sprintf("打开索引 %s: %v", name, err))
+			}
+			store := telegramstore.New(client.API(), channelID)
+			fsys := vfs.New(ctx, idx, store, os.TempDir())
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer idx.Close()
+				if err := vfs.Mount(ctx, fsys, mp, name); err != nil {
+					fmt.Fprintf(os.Stderr, "挂载 %s 失败: %v\n", mp, err)
+				}
+			}()
+			fmt.Printf("mounted %s at %s\n", name, mp)
+		}
+
+		if len(cfg.Volumes) == 0 {
+			mountOne("mytgfs", cfg.Telegram.ChannelID, *point)
+		} else {
+			for _, v := range cfg.Volumes {
+				if !v.Enabled {
+					continue
+				}
+				mp := v.Point
+				if mp == "" {
+					mp = *point
+				}
+				mountOne(v.Name, v.ChatID, mp)
+			}
+		}
+		<-ctx.Done()
+		return nil
 	})
 	if err != nil {
 		fatal(fmt.Sprintf("挂载失败: %v", err))
