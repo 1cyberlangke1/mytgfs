@@ -111,8 +111,17 @@ func cleanupMappings(addr string) {
 	if err != nil {
 		return
 	}
+	// net use 把 host:port 显示成 host@port，两种写法都要匹配
+	patterns := []string{addr, strings.Replace(addr, ":", "@", 1)}
 	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, addr) {
+		matched := false
+		for _, p := range patterns {
+			if p != "" && strings.Contains(line, p) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			continue
 		}
 		for _, f := range strings.Fields(line) {
