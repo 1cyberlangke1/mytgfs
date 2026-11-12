@@ -21,6 +21,7 @@ type Message struct {
 // Fetcher 拉取频道消息。
 type Fetcher interface {
 	History(ctx context.Context, limit int) ([]Message, error)
+	HistorySince(ctx context.Context, minID int, limit int) ([]Message, error)
 }
 
 // Replay 把消息重放进索引。
@@ -50,13 +51,17 @@ func Replay(ctx context.Context, idx *index.Index, msgs []Message) error {
 	return nil
 }
 
-// Sync 拉取并重放。
+// Sync 增量拉取并重放。
 //
 // 输入：ctx；idx 索引；f 数据源；limit 拉取条数
 // 输出：error
-// 预期：拉取失败不修改索引
+// 预期：先读索引最大消息 ID，只拉取更新的消息；拉取失败不修改索引
 func Sync(ctx context.Context, idx *index.Index, f Fetcher, limit int) error {
-	msgs, err := f.History(ctx, limit)
+	minID, err := idx.MaxMessageID(ctx)
+	if err != nil {
+		return err
+	}
+	msgs, err := f.HistorySince(ctx, minID, limit)
 	if err != nil {
 		return err
 	}

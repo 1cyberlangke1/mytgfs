@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 安装 FUSE
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev
+      - name: 构建
+        run: go build ./...
+      - name: 静态检查
+        run: go vet ./...
+      - name: 测试
+        run: go test ./... -cover
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 安装 WinFsp 与 gcc
+        run: choco install winfsp mingw -y --no-progress
+      - name: 构建
+        env:
+          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
+          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
+        run: go build ./...
+      - name: 静态检查
+        env:
+          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
+          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
+        run: go vet ./...
+      - name: 测试
+        env:
+          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
+          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
+        run: go test ./... -cover
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 安装 macFUSE
+        run: brew install --cask macfuse
+      - name: 构建
+        env:
+          CGO_CFLAGS: -I/usr/local/include/fuse
+        run: go build ./...
+      - name: 静态检查
+        env:
+          CGO_CFLAGS: -I/usr/local/include/fuse
+        run: go vet ./...
+      - name: 测试
+        env:
+          CGO_CFLAGS: -I/usr/local/include/fuse
+        run: go test ./... -cover

@@ -16,6 +16,8 @@ import (
 func Mount(ctx context.Context, fs *FS, point, volname string) error {
 	host := fuse.NewFileSystemHost(fs)
 	host.SetCapReaddirPlus(true)
+	// 目录变更后主动通知资源管理器刷新，否则新文件要按 F5 才出现
+	fs.SetNotify(func(p string, action uint32) { host.Notify(p, action) })
 
 	go func() {
 		<-ctx.Done()

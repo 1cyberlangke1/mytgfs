@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS files (
 	mtime INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
+CREATE TABLE IF NOT EXISTS dirs (
+	path TEXT PRIMARY KEY,
+	mtime INTEGER NOT NULL
+);
 `
 
 // Open 打开或创建索引文件。
@@ -119,8 +124,8 @@ FROM files WHERE path = ?`, path)
 // List 列出目录的直接子项。
 //
 // 输入：dir 目录路径（"/" 表示根）
-// 输出：直接子文件与子目录
-// 预期：目录由 path 推导，不单独存储
+// 输出：直接子文件与子目录（含显式创建的空目录）
+// 预期：目录可由子项推导，也可由 dirs 表显式记录
 func (i *Index) List(ctx context.Context, dir string) ([]Entry, error) {
 	prefix := normalizeDir(dir)
 	rows, err := i.db.QueryContext(ctx, `
@@ -129,13 +134,13 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	seen := map[string]bool{}
 	var out []Entry
 	for rows.Next() {
 		var f File
 		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		rest := strings.TrimPrefix(f.Path, prefix)
@@ -154,18 +159,125 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 		ff := f
 		out = append(out, Entry{Name: rest, File: &ff})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	// 显式目录：空文件夹也能列出来
+	dirRows, err := i.db.QueryContext(ctx, `SELECT path FROM dirs WHERE path LIKE ?`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer dirRows.Close()
+	for dirRows.Next() {
+		var p string
+		if err := dirRows.Scan(&p); err != nil {
+			return nil, err
+		}
+		rest := strings.TrimPrefix(p, prefix)
+		if rest == "" {
+			continue
+		}
+		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		if seen[rest] {
+			continue
+		}
+		seen[rest] = true
+		out = append(out, Entry{Name: rest, IsDir: true})
+	}
+	return out, dirRows.Err()
 }
 
 // Used 返回索引里所有文件的字节总数。
-//
-// 输入：ctx
-// 输出：已用字节数、error
-// 预期：空表返回 0
 func (i *Index) Used(ctx context.Context) (int64, error) {
 	var n int64
 	err := i.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size), 0) FROM files`).Scan(&n)
 	return n, err
+}
+
+// MaxMessageID 返回索引里最大的文件消息 ID，用于增量拉取。
+func (i *Index) MaxMessageID(ctx context.Context) (int, error) {
+	var n int
+	err := i.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(message_id), 0) FROM files WHERE message_id > 0`).Scan(&n)
+	return n, err
+}
+
+// PutDir 记录一个显式目录。
+func (i *Index) PutDir(ctx context.Context, p string) error {
+	_, err := i.db.ExecContext(ctx, `
+INSERT INTO dirs(path, mtime) VALUES(?, ?)
+ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime`, p, time.Now().Unix())
+	return err
+}
+
+// DeleteDir 删除一条目录记录。
+func (i *Index) DeleteDir(ctx context.Context, p string) error {
+	_, err := i.db.ExecContext(ctx, `DELETE FROM dirs WHERE path = ?`, p)
+	return err
+}
+
+// IsDir 判断路径是否为目录（显式目录或存在子项）。
+func (i *Index) IsDir(ctx context.Context, p string) (bool, error) {
+	if p == "/" {
+		return true, nil
+	}
+	prefix := normalizeDir(p)
+	var n int
+	row := i.db.QueryRowContext(ctx, `
+SELECT (SELECT COUNT(*) FROM files WHERE path LIKE ?)
+     + (SELECT COUNT(*) FROM dirs WHERE path LIKE ?)`, prefix+"%", prefix+"%")
+	if err := row.Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dirs WHERE path = ?`, p).Scan(&n)
+	return n > 0, err
+}
+
+// ListPrefix 返回目录下所有文件（含深层）。
+func (i *Index) ListPrefix(ctx context.Context, dir string) ([]File, error) {
+	prefix := normalizeDir(dir)
+	rows, err := i.db.QueryContext(ctx, `
+SELECT path, message_id, document_id, access_hash, file_reference, size, mtime
+FROM files WHERE path LIKE ?`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []File
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// Dirs 返回目录下所有显式目录（含深层）。
+func (i *Index) Dirs(ctx context.Context, dir string) ([]string, error) {
+	prefix := normalizeDir(dir)
+	rows, err := i.db.QueryContext(ctx, `SELECT path FROM dirs WHERE path = ? OR path LIKE ?`, dir, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // Delete 删除一条记录。

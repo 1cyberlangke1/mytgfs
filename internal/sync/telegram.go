@@ -64,10 +64,27 @@ func (f TelegramFetcher) fetchMeta(ctx context.Context, ref int) (string, error)
 // 输出：只含 document 消息；caption 为 {"ref":id} 时自动拉取完整元信息
 // 预期：非 document 消息被跳过
 func (f TelegramFetcher) History(ctx context.Context, limit int) ([]Message, error) {
-	res, err := f.API.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+	return f.history(ctx, 0, limit)
+}
+
+// HistorySince 增量拉取 ID 大于 minID 的消息。
+//
+// 输入：minID 已同步的最大消息 ID；limit 条数
+// 输出：同 History
+// 预期：minID 为 0 时退化为拉最近 limit 条
+func (f TelegramFetcher) HistorySince(ctx context.Context, minID int, limit int) ([]Message, error) {
+	return f.history(ctx, minID, limit)
+}
+
+func (f TelegramFetcher) history(ctx context.Context, minID, limit int) ([]Message, error) {
+	req := &tg.MessagesGetHistoryRequest{
 		Peer:  &tg.InputPeerChannel{ChannelID: f.ChannelID, AccessHash: f.AccessHash},
 		Limit: limit,
-	})
+	}
+	if minID > 0 {
+		req.MinID = minID
+	}
+	res, err := f.API.MessagesGetHistory(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("getHistory: %w", err)
 	}

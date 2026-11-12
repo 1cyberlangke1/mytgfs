@@ -67,6 +67,7 @@ type FS struct {
 	handles map[uint64]*openFile
 	pending map[string]*openFile
 	next    uint64
+	notify  func(p string, action uint32)
 }
 
 type openFile struct {
@@ -94,6 +95,23 @@ func New(ctx context.Context, idx *index.Index, store Store, tmpDir string) *FS 
 		tmpDir:  tmpDir,
 		handles: map[uint64]*openFile{},
 		pending: map[string]*openFile{},
+	}
+}
+
+// SetNotify 设置目录变更通知回调，由 Mount 在挂载前注入。
+func (f *FS) SetNotify(fn func(p string, action uint32)) {
+	f.mu.Lock()
+	f.notify = fn
+	f.mu.Unlock()
+}
+
+// notifyChange 通知资源管理器某个路径发生变化。
+func (f *FS) notifyChange(p string, action uint32) {
+	f.mu.Lock()
+	fn := f.notify
+	f.mu.Unlock()
+	if fn != nil {
+		fn(p, action)
 	}
 }
 
@@ -258,6 +276,7 @@ func (f *FS) Mknod(p string, mode uint32, dev uint64) int {
 	}
 	f.pending[p] = &openFile{path: p, tmp: tmp, dirty: true}
 	f.mu.Unlock()
+	f.notifyChange(p, fuse.NOTIFY_CREATE)
 	return 0
 }
 
@@ -289,6 +308,7 @@ func (f *FS) Create(p string, flags int, mode uint32) (int, uint64) {
 	f.pending[p] = h
 	hid := f.newHandle(h)
 	f.mu.Unlock()
+	f.notifyChange(p, fuse.NOTIFY_CREATE)
 	return 0, hid
 }
 
@@ -349,6 +369,7 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 		f.pending[p] = h
 		hid := f.newHandle(h)
 		f.mu.Unlock()
+		f.notifyChange(p, fuse.NOTIFY_CREATE)
 		return 0, hid
 	}
 	f.mu.Unlock()
@@ -485,6 +506,9 @@ func (f *FS) Release(p string, fh uint64) int {
 	defer h.tmp.Close()
 	defer os.Remove(h.tmp.Name())
 
+	// 覆盖写：记下旧的索引记录，提交成功后删掉旧消息，避免频道里留孤儿
+	old, hadOld, _ := f.idx.Get(f.ctx, h.path)
+
 	if h.size == 0 {
 		// 空文件：先删旧记录再写入 0 字节记录，保证「截断为空」也生效
 		if err := f.idx.Delete(f.ctx, h.path); err != nil {
@@ -499,6 +523,12 @@ func (f *FS) Release(p string, fh uint64) int {
 			debugf("vfs: Release empty index %s failed: %v", h.path, err)
 			return -fuse.EIO
 		}
+		if hadOld && old.MessageID > 0 {
+			if err := f.store.Delete(f.ctx, old.MessageID); err != nil {
+				debugf("vfs: Release 空文件删除旧消息 %d 失败: %v", old.MessageID, err)
+			}
+		}
+		f.notifyChange(h.path, fuse.NOTIFY_CREATE)
 		f.mu.Lock()
 		delete(f.pending, h.path)
 		f.mu.Unlock()
@@ -526,6 +556,12 @@ func (f *FS) Release(p string, fh uint64) int {
 		debugf("vfs: Release index %s failed: %v", h.path, err)
 		return -fuse.EIO
 	}
+	if hadOld && old.MessageID > 0 {
+		if err := f.store.Delete(f.ctx, old.MessageID); err != nil {
+			debugf("vfs: Release 删除旧消息 %d 失败: %v", old.MessageID, err)
+		}
+	}
+	f.notifyChange(h.path, fuse.NOTIFY_CREATE)
 	f.mu.Lock()
 	delete(f.pending, h.path)
 	f.mu.Unlock()
@@ -548,36 +584,131 @@ func (f *FS) Unlink(p string) int {
 	if err := f.idx.Delete(f.ctx, p); err != nil {
 		return -fuse.EIO
 	}
+	f.notifyChange(p, fuse.NOTIFY_UNLINK)
 	return 0
 }
 
-// Mkdir 目录由 path 推导，这里直接成功。
-func (f *FS) Mkdir(p string, mode uint32) int { return 0 }
+// Mkdir 创建目录；空目录写入索引，刷新后仍然存在。
+func (f *FS) Mkdir(p string, mode uint32) int {
+	p = clean(p)
+	if f.isDir(p) {
+		return -fuse.EEXIST
+	}
+	if _, ok, err := f.idx.Get(f.ctx, p); err != nil {
+		return -fuse.EIO
+	} else if ok {
+		return -fuse.EEXIST
+	}
+	if err := f.idx.PutDir(f.ctx, p); err != nil {
+		return -fuse.EIO
+	}
+	f.notifyChange(p, fuse.NOTIFY_MKDIR)
+	return 0
+}
 
-// Rmdir 目录由 path 推导，这里直接成功。
-func (f *FS) Rmdir(p string) int { return 0 }
-
-// Rename 改名或移动：改 caption + 更新索引。
-func (f *FS) Rename(oldpath, newpath string) int {
-	oldp := clean(oldpath)
-	newp := clean(newpath)
-	file, ok, err := f.idx.Get(f.ctx, oldp)
+// Rmdir 删除空目录；非空目录返回 ENOTEMPTY。
+func (f *FS) Rmdir(p string) int {
+	p = clean(p)
+	if !f.isDir(p) {
+		return -fuse.ENOENT
+	}
+	entries, err := f.idx.List(f.ctx, p)
 	if err != nil {
 		return -fuse.EIO
 	}
-	if !ok {
+	if len(entries) > 0 {
+		return -fuse.ENOTEMPTY
+	}
+	if err := f.idx.DeleteDir(f.ctx, p); err != nil {
+		return -fuse.EIO
+	}
+	f.notifyChange(p, fuse.NOTIFY_RMDIR)
+	return 0
+}
+
+// Rename 改名或移动：改 caption + 更新索引；目录按前缀整体移动。
+func (f *FS) Rename(oldpath, newpath string) int {
+	oldp := clean(oldpath)
+	newp := clean(newpath)
+	if oldp == newp {
+		return 0
+	}
+
+	file, isFile, err := f.idx.Get(f.ctx, oldp)
+	if err != nil {
+		return -fuse.EIO
+	}
+	if isFile {
+		target, targetOK, terr := f.idx.Get(f.ctx, newp)
+		if terr != nil {
+			return -fuse.EIO
+		}
+		if err := f.store.Rename(f.ctx, file.MessageID, tgsync.EncodeCaption(newp)); err != nil {
+			return -fuse.EIO
+		}
+		if err := f.idx.Delete(f.ctx, oldp); err != nil {
+			return -fuse.EIO
+		}
+		file.Path = newp
+		if targetOK {
+			// 覆盖目标：先删目标旧行，避免 Put 的「消息 ID 取最大」留下目标旧记录
+			if err := f.idx.Delete(f.ctx, newp); err != nil {
+				return -fuse.EIO
+			}
+		}
+		if err := f.idx.Put(f.ctx, file); err != nil {
+			return -fuse.EIO
+		}
+		// 覆盖已有目标时删掉目标旧消息，避免频道里留孤儿
+		if targetOK && target.MessageID != file.MessageID {
+			if err := f.store.Delete(f.ctx, target.MessageID); err != nil {
+				debugf("vfs: Rename 删除目标旧消息 %d 失败: %v", target.MessageID, err)
+			}
+		}
+		f.notifyChange(oldp, fuse.NOTIFY_UNLINK)
+		f.notifyChange(newp, fuse.NOTIFY_CREATE)
+		return 0
+	}
+
+	if !f.isDir(oldp) {
 		return -fuse.ENOENT
 	}
-	if err := f.store.Rename(f.ctx, file.MessageID, tgsync.EncodeCaption(newp)); err != nil {
+	if f.isDir(newp) {
+		return -fuse.EEXIST
+	}
+
+	dirs, err := f.idx.Dirs(f.ctx, oldp)
+	if err != nil {
 		return -fuse.EIO
 	}
-	if err := f.idx.Delete(f.ctx, oldp); err != nil {
+	for _, d := range dirs {
+		np := newp + strings.TrimPrefix(d, oldp)
+		if err := f.idx.DeleteDir(f.ctx, d); err != nil {
+			return -fuse.EIO
+		}
+		if err := f.idx.PutDir(f.ctx, np); err != nil {
+			return -fuse.EIO
+		}
+	}
+	files, err := f.idx.ListPrefix(f.ctx, oldp)
+	if err != nil {
 		return -fuse.EIO
 	}
-	file.Path = newp
-	if err := f.idx.Put(f.ctx, file); err != nil {
-		return -fuse.EIO
+	for _, ff := range files {
+		np := newp + strings.TrimPrefix(ff.Path, oldp)
+		if err := f.store.Rename(f.ctx, ff.MessageID, tgsync.EncodeCaption(np)); err != nil {
+			return -fuse.EIO
+		}
+		if err := f.idx.Delete(f.ctx, ff.Path); err != nil {
+			return -fuse.EIO
+		}
+		ff.Path = np
+		if err := f.idx.Put(f.ctx, ff); err != nil {
+			return -fuse.EIO
+		}
 	}
+	f.notifyChange(oldp, fuse.NOTIFY_UNLINK)
+	f.notifyChange(newp, fuse.NOTIFY_CREATE)
 	return 0
 }
 
@@ -641,20 +772,10 @@ func (f *FS) Statfs(p string, stat *fuse.Statfs_t) int {
 	return 0
 }
 
-// isDir 判断路径是否是目录（由子项推导）。
+// isDir 判断路径是否是目录（显式目录或由子项推导）。
 func (f *FS) isDir(p string) bool {
-	parent := path.Dir(p)
-	base := path.Base(p)
-	entries, err := f.idx.List(f.ctx, parent)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.IsDir && e.Name == base {
-			return true
-		}
-	}
-	return false
+	ok, err := f.idx.IsDir(f.ctx, p)
+	return err == nil && ok
 }
 
 // clean 规整路径。

@@ -295,10 +295,11 @@ func runChannelInit(args []string) {
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
-// runSync 拉取频道历史并重建本地索引。
+// runSync 增量拉取频道消息并更新本地索引。
 func runSync(args []string) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	limit := fs.Int("limit", 200, "messages to fetch")
+	name := fs.String("name", "mytgfs", "volume name")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
@@ -313,7 +314,7 @@ func runSync(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open(datadir.Path("index.db"))
+	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
 	if err != nil {
 		fatal(fmt.Sprintf("打开索引: %v", err))
 	}
@@ -344,7 +345,6 @@ func runSync(args []string) {
 	}
 	fmt.Printf("OK synced, root entries=%d\n", len(entries))
 }
-
 // runMount 挂载一个或多个卷；每个群组一个盘。
 func runMount(args []string) {
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)

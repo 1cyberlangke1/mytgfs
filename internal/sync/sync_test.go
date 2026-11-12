@@ -35,12 +35,24 @@ func TestReplayLatestWins(t *testing.T) {
 }
 
 type fakeFetcher struct {
-	msgs []Message
-	err  error
+	msgs   []Message
+	err    error
+	minIDs []int
 }
 
-func (f fakeFetcher) History(context.Context, int) ([]Message, error) {
+func (f *fakeFetcher) History(context.Context, int) ([]Message, error) {
 	return f.msgs, f.err
+}
+
+func (f *fakeFetcher) HistorySince(_ context.Context, minID int, _ int) ([]Message, error) {
+	f.minIDs = append(f.minIDs, minID)
+	var out []Message
+	for _, m := range f.msgs {
+		if m.ID > minID {
+			out = append(out, m)
+		}
+	}
+	return out, f.err
 }
 
 func TestSync(t *testing.T) {
@@ -51,7 +63,7 @@ func TestSync(t *testing.T) {
 	defer idx.Close()
 
 	ctx := context.Background()
-	f := fakeFetcher{msgs: []Message{
+	f := &fakeFetcher{msgs: []Message{
 		{ID: 1, Caption: `{"path":"/x.txt"}`, Size: 10},
 	}}
 	if err := Sync(ctx, idx, f, 10); err != nil {
@@ -64,5 +76,17 @@ func TestSync(t *testing.T) {
 	}
 	if got.Size != 10 {
 		t.Fatalf("unexpected: %+v", got)
+	}
+
+	// 第二次增量：只拉 ID 大于 1 的新消息
+	f.msgs = append(f.msgs, Message{ID: 2, Caption: `{"path":"/y.txt"}`, Size: 20})
+	if err := Sync(ctx, idx, f, 10); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.minIDs) != 2 || f.minIDs[0] != 0 || f.minIDs[1] != 1 {
+		t.Fatalf("增量游标错误: %v", f.minIDs)
+	}
+	if _, ok, _ := idx.Get(ctx, "/y.txt"); !ok {
+		t.Fatal("增量拉取没有写入 /y.txt")
 	}
 }
