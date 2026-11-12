@@ -51,11 +51,23 @@ func main() {
 		}
 		runAuth(os.Args[2])
 	case "channel":
-		if len(os.Args) < 3 || os.Args[2] != "init" {
+		if len(os.Args) < 3 {
 			usage()
 			os.Exit(2)
 		}
-		runChannelInit(os.Args[3:])
+		switch os.Args[2] {
+		case "create":
+			runChannelCreate(os.Args[3:])
+		case "init":
+			runChannelInit(os.Args[3:])
+		case "list":
+			runChannelList()
+		case "add":
+			runChannelAdd(os.Args[3:])
+		default:
+			usage()
+			os.Exit(2)
+		}
 	case "sync":
 		runSync(os.Args[2:])
 	case "mount":
@@ -117,7 +129,114 @@ func runAuth(sub string) {
 	}
 }
 
-// runChannelInit 用 user 会话建频道、拉 bot、提权。
+// runChannelCreate 创建频道，可选把 bot 设为管理员。
+func runChannelCreate(args []string) {
+	fs := flag.NewFlagSet("channel create", flag.ExitOnError)
+	name := fs.String("name", "mytgfs", "channel title")
+	bot := fs.String("bot", "", "optional bot username")
+	_ = fs.Parse(args)
+
+	apiID, apiHash := loadAPI()
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	client := tgclient.New(apiID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+		tgclient.Options{})
+
+	var res *channel.Result
+	err = client.Run(ctx, func(ctx context.Context) error {
+		r, err := channel.Create(ctx, client.Client, *name)
+		if err != nil {
+			return err
+		}
+		if *bot != "" {
+			id, err := channel.AddBot(ctx, client.Client, r, *bot)
+			if err != nil {
+				return err
+			}
+			r.BotID = id
+		}
+		res = r
+		return nil
+	})
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.channel_init_prefix"), err))
+	}
+	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
+}
+
+// runChannelList 列出当前 user 的频道。
+func runChannelList() {
+	apiID, apiHash := loadAPI()
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	client := tgclient.New(apiID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+		tgclient.Options{})
+
+	err = client.Run(ctx, func(ctx context.Context) error {
+		items, err := channel.List(ctx, client.Client)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			fmt.Printf("%d\t%s\t%s\tcreator=%v\n", it.ID, it.Title, it.Username, it.Creator)
+		}
+		return nil
+	})
+	if err != nil {
+		fatal(fmt.Sprintf("列出频道失败: %v", err))
+	}
+}
+
+// runChannelAdd 把 bot 加到已有频道。
+func runChannelAdd(args []string) {
+	fs := flag.NewFlagSet("channel add", flag.ExitOnError)
+	channelID := fs.Int64("channel", 0, "channel id")
+	bot := fs.String("bot", "", "bot username")
+	_ = fs.Parse(args)
+
+	if *channelID == 0 || *bot == "" {
+		fatal("需要 --channel 和 --bot")
+	}
+	apiID, apiHash := loadAPI()
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	client := tgclient.New(apiID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+		tgclient.Options{})
+
+	var res *channel.Result
+	err = client.Run(ctx, func(ctx context.Context) error {
+		r, err := channel.Add(ctx, client.Client, *channelID, *bot)
+		res = r
+		return err
+	})
+	if err != nil {
+		fatal(fmt.Sprintf("添加 bot 失败: %v", err))
+	}
+	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
+}
+
+// runChannelInit 建频道并给 bot 提权（等价 channel create --bot）。
 func runChannelInit(args []string) {
 	fs := flag.NewFlagSet("channel init", flag.ExitOnError)
 	name := fs.String("name", "mytgfs", "channel title")
