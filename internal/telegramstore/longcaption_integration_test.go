@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -83,6 +84,11 @@ func TestSmokeLongCaption(t *testing.T) {
 			t.Fatalf("meta mismatch: got len=%d want len=%d", len(meta.Message), len(longCaption))
 		}
 
+		fmt.Printf("REF=%d META=%d meta_len=%d\n", part.MessageID, ref.Ref, len(meta.Message))
+		if os.Getenv("MYTGFS_KEEP") != "" {
+			fmt.Println("KEEP: 已保留消息")
+			return nil
+		}
 		return store.Delete(ctx, part.MessageID, ref.Ref)
 	})
 	if err != nil {
