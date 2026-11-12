@@ -24,6 +24,9 @@ type File struct {
 	FileReference []byte
 	Size          int64
 	Mtime         int64
+	// Sha256 是文件内容的摘要（小写十六进制），用于同目录去重。
+	// 空字符串表示未知（旧版本写入的记录、未回填的历史消息），不参与去重比对。
+	Sha256 string
 }
 
 // Entry 是目录列表里的一项。
@@ -49,7 +52,8 @@ CREATE TABLE IF NOT EXISTS files (
 	access_hash INTEGER NOT NULL,
 	file_reference BLOB,
 	size INTEGER NOT NULL,
-	mtime INTEGER NOT NULL
+	mtime INTEGER NOT NULL,
+	sha256 TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_files_message ON files(message_id);
 CREATE TABLE IF NOT EXISTS dirs (
@@ -98,17 +102,18 @@ func (i *Index) Close() error { return i.db.Close() }
 // 预期：同 path 只保留 message_id 更大的版本（后写赢）
 func (i *Index) Put(ctx context.Context, f File) error {
 	_, err := i.db.ExecContext(ctx, `
-INSERT INTO files(path, message_id, document_id, access_hash, file_reference, size, mtime)
-VALUES(?, ?, ?, ?, ?, ?, ?)
+INSERT INTO files(path, message_id, document_id, access_hash, file_reference, size, mtime, sha256)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
 	message_id = excluded.message_id,
 	document_id = excluded.document_id,
 	access_hash = excluded.access_hash,
 	file_reference = excluded.file_reference,
 	size = excluded.size,
-	mtime = excluded.mtime
+	mtime = excluded.mtime,
+	sha256 = excluded.sha256
 WHERE excluded.message_id > files.message_id`,
-		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime)
+		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime, f.Sha256)
 	return err
 }
 
@@ -121,26 +126,27 @@ WHERE excluded.message_id > files.message_id`,
 //	不受「message_id 更大才覆盖」的限制
 func (i *Index) Replace(ctx context.Context, f File) error {
 	_, err := i.db.ExecContext(ctx, `
-INSERT INTO files(path, message_id, document_id, access_hash, file_reference, size, mtime)
-VALUES(?, ?, ?, ?, ?, ?, ?)
+INSERT INTO files(path, message_id, document_id, access_hash, file_reference, size, mtime, sha256)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
 	message_id = excluded.message_id,
 	document_id = excluded.document_id,
 	access_hash = excluded.access_hash,
 	file_reference = excluded.file_reference,
 	size = excluded.size,
-	mtime = excluded.mtime`,
-		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime)
+	mtime = excluded.mtime,
+	sha256 = excluded.sha256`,
+		f.Path, f.MessageID, f.DocumentID, f.AccessHash, f.FileReference, f.Size, f.Mtime, f.Sha256)
 	return err
 }
 
 // Get 按路径查询。
 func (i *Index) Get(ctx context.Context, path string) (File, bool, error) {
 	row := i.db.QueryRowContext(ctx, `
-SELECT path, message_id, document_id, access_hash, file_reference, size, mtime
+SELECT path, message_id, document_id, access_hash, file_reference, size, mtime, sha256
 FROM files WHERE path = ?`, path)
 	var f File
-	err := row.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime)
+	err := row.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256)
 	if err == sql.ErrNoRows {
 		return File{}, false, nil
 	}
@@ -148,6 +154,49 @@ FROM files WHERE path = ?`, path)
 		return File{}, false, err
 	}
 	return f, true, nil
+}
+
+// FindContent 在整块盘（整个频道）里查找内容相同的文件，用于引用复用。
+//
+// 输入：dir 写入方所在目录（同目录优先）；size 字节数；sha 内容摘要
+// 输出：命中的记录、是否存在、error
+// 预期：sha 为空时判定未命中（旧记录没有摘要，不参与复用）；
+//
+//	先同目录，再按消息号从新到旧，保证复用的 document 尽量新、引用尽量有效
+func (i *Index) FindContent(ctx context.Context, dir string, size int64, sha string) (File, bool, error) {
+	if sha == "" {
+		return File{}, false, nil
+	}
+	prefix := normalizeDir(dir)
+	row := i.db.QueryRowContext(ctx, `
+SELECT path, message_id, document_id, access_hash, file_reference, size, mtime, sha256
+FROM files
+WHERE size = ? AND sha256 = ?
+ORDER BY CASE WHEN path LIKE ? THEN 0 ELSE 1 END, message_id DESC
+LIMIT 1`, size, sha, prefix+"%")
+	var f File
+	err := row.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256)
+	if err == sql.ErrNoRows {
+		return File{}, false, nil
+	}
+	if err != nil {
+		return File{}, false, err
+	}
+	return f, true, nil
+}
+
+// CountRefs 统计某个 document 还有多少条路径在引用。
+//
+// 输入：documentID Telegram document ID
+// 输出：引用条数、error
+// 预期：每条文件消息算一个引用；归零表示这份内容已经没有任何路径在用
+func (i *Index) CountRefs(ctx context.Context, documentID int64) (int, error) {
+	if documentID == 0 {
+		return 0, nil
+	}
+	var n int
+	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files WHERE document_id = ?`, documentID).Scan(&n)
+	return n, err
 }
 
 // List 列出目录的直接子项。
@@ -158,7 +207,7 @@ FROM files WHERE path = ?`, path)
 func (i *Index) List(ctx context.Context, dir string) ([]Entry, error) {
 	prefix := normalizeDir(dir)
 	rows, err := i.db.QueryContext(ctx, `
-SELECT path, message_id, document_id, access_hash, file_reference, size, mtime
+SELECT path, message_id, document_id, access_hash, file_reference, size, mtime, sha256
 FROM files WHERE path LIKE ?`, prefix+"%")
 	if err != nil {
 		return nil, err
@@ -168,7 +217,7 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 	var out []Entry
 	for rows.Next() {
 		var f File
-		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime); err != nil {
+		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -273,7 +322,7 @@ SELECT (SELECT COUNT(*) FROM files WHERE path LIKE ?)
 func (i *Index) ListPrefix(ctx context.Context, dir string) ([]File, error) {
 	prefix := normalizeDir(dir)
 	rows, err := i.db.QueryContext(ctx, `
-SELECT path, message_id, document_id, access_hash, file_reference, size, mtime
+SELECT path, message_id, document_id, access_hash, file_reference, size, mtime, sha256
 FROM files WHERE path LIKE ?`, prefix+"%")
 	if err != nil {
 		return nil, err
@@ -282,7 +331,7 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 	var out []File
 	for rows.Next() {
 		var f File
-		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime); err != nil {
+		if err := rows.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256); err != nil {
 			return nil, err
 		}
 		out = append(out, f)

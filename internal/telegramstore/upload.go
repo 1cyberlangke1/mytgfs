@@ -31,12 +31,9 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 	}
 
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	if len(caption) > maxCaption {
-		refID, err := s.sendMeta(ctx, peer, caption)
-		if err != nil {
-			return nil, err
-		}
-		caption = fmt.Sprintf(`{"ref":%d}`, refID)
+	caption, err = s.prepareCaption(ctx, peer, caption)
+	if err != nil {
+		return nil, err
 	}
 
 	up := uploader.NewUploader(s.api).WithPartSize(512 * 1024)
@@ -75,6 +72,22 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		FileReference: doc.FileReference,
 		Size:          doc.Size,
 	}, nil
+}
+
+// prepareCaption 把超长 caption 拆成「元信息文本消息 + 短引用」。
+//
+// 输入：ctx、peer 目标频道、caption 完整说明文字
+// 输出：实际写到文件消息上的 caption
+// 预期：不超过 900 字符时原样返回；超过时先发文本消息再返回 {"ref":id}
+func (s *Store) prepareCaption(ctx context.Context, peer tg.InputPeerClass, caption string) (string, error) {
+	if len(caption) <= maxCaption {
+		return caption, nil
+	}
+	refID, err := s.sendMeta(ctx, peer, caption)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`{"ref":%d}`, refID), nil
 }
 
 // sendMeta 发送一条文本消息，返回消息 ID。

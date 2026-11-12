@@ -73,6 +73,8 @@ func main() {
 		}
 	case "sync":
 		runSync(os.Args[2:])
+	case "cp":
+		runCopy(os.Args[2:])
 	case "volume":
 		runVolume(os.Args[2:])
 	case "mount":

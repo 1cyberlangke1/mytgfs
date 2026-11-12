@@ -5,7 +5,8 @@
 // 输入：无（尺寸与配色写死在常量里）
 // 输出：assets/icon.ico（Windows 多尺寸）与 assets/icon.png（其它平台）
 // 预期：go run gen/main.go 覆盖生成；所有尺寸都用 4 倍超采样再降采样抗锯齿，
-//       不依赖任何第三方绘图库
+//
+//	不依赖任何第三方绘图库
 package main
 
 import (

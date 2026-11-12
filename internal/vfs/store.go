@@ -20,4 +20,6 @@ type Store interface {
 	Rename(ctx context.Context, messageID int, caption string) error
 	// Refresh 按消息 ID 重新拉取 document 元数据；file_reference 过期时用
 	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
+	// Copy 复用已有 document 发一条新消息，不传输文件内容；用于复制与去重
+	Copy(ctx context.Context, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, error)
 }

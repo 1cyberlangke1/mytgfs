@@ -9,6 +9,8 @@ package vfs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -491,6 +493,19 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 	return nil
 }
 
+// fileSHA256 计算临时文件前 size 字节的 sha256。
+//
+// 输入：tmp 临时文件；size 有效字节数
+// 输出：小写十六进制摘要、error
+// 预期：只读前 size 字节（临时文件可能因截断前写入而更长）
+func fileSHA256(tmp *os.File, size int64) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, io.NewSectionReader(tmp, 0, size)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // partOf 把索引记录转成远程读取用的 Part。
 func partOf(file index.File) *telegramstore.Part {
 	return &telegramstore.Part{
@@ -688,12 +703,48 @@ func (f *FS) commit(h *openFile) int {
 	if _, err := h.tmp.Seek(0, io.SeekStart); err != nil {
 		return -fuse.EIO
 	}
-	caption := tgsync.EncodeCaption(h.path)
-	part, err := f.store.Upload(f.ctx, io.LimitReader(h.tmp, h.size), h.size,
-		path.Base(h.path), "application/octet-stream", caption)
+	// 内容摘要：同目录去重靠它，写进 caption 后冷启动重建索引也能拿到
+	sha, err := fileSHA256(h.tmp, h.size)
 	if err != nil {
-		debugf("vfs: Release upload %s failed: %v", h.path, err)
+		debugf("vfs: Release 计算摘要 %s 失败: %v", shortPath(h.path), err)
 		return -fuse.EIO
+	}
+	caption := tgsync.EncodeCaptionHash(h.path, sha)
+
+	// 同路径内容没变：不用新建消息，引用数也不变，只把摘要和时间写回索引
+	if hadOld && old.Sha256 != "" && old.Sha256 == sha && old.Size == h.size {
+		old.Mtime = nowUnix()
+		if err := f.idx.Replace(f.ctx, old); err != nil {
+			debugf("vfs: 内容未变写索引失败 %s: %v", shortPath(h.path), err)
+			return -fuse.EIO
+		}
+		debugf("vfs: %s 内容未变，跳过上传 msg=%d", shortPath(h.path), old.MessageID)
+		f.notifyChange(h.path, fuse.NOTIFY_CREATE)
+		return 0
+	}
+
+	// 频道里已有相同内容：不传输字节，只加一条引用同一 document 的消息。
+	// 文件本体只有一份，多个路径各持一条引用；删除路径只摘自己的引用。
+	dup, found, derr := f.idx.FindContent(f.ctx, path.Dir(h.path), h.size, sha)
+	if derr != nil {
+		debugf("vfs: 查询同内容文件失败 %s: %v", shortPath(h.path), derr)
+	}
+	var part *telegramstore.Part
+	if found {
+		part, err = f.store.Copy(f.ctx, partOf(dup), path.Base(h.path), "application/octet-stream", caption)
+		if err != nil {
+			debugf("vfs: Release 复用失败 %s <- %s: %v", shortPath(h.path), shortPath(dup.Path), err)
+			return -fuse.EIO
+		}
+		debugf("vfs: %s 复用 %s 的 document=%d msg=%d",
+			shortPath(h.path), shortPath(dup.Path), dup.DocumentID, part.MessageID)
+	} else {
+		part, err = f.store.Upload(f.ctx, io.LimitReader(h.tmp, h.size), h.size,
+			path.Base(h.path), "application/octet-stream", caption)
+		if err != nil {
+			debugf("vfs: Release upload %s failed: %v", h.path, err)
+			return -fuse.EIO
+		}
 	}
 	if err := f.idx.Put(f.ctx, index.File{
 		Path:          h.path,
@@ -703,6 +754,7 @@ func (f *FS) commit(h *openFile) int {
 		FileReference: part.FileReference,
 		Size:          part.Size,
 		Mtime:         nowUnix(),
+		Sha256:        sha,
 	}); err != nil {
 		debugf("vfs: Release index %s failed: %v", h.path, err)
 		return -fuse.EIO

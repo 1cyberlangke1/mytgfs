@@ -32,7 +32,7 @@ type Fetcher interface {
 func Replay(ctx context.Context, idx *index.Index, msgs []Message) ([]string, error) {
 	paths := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		path, ok := ParseCaption(m.Caption)
+		path, sha, ok := ParseFile(m.Caption)
 		if !ok {
 			continue
 		}
@@ -44,6 +44,7 @@ func Replay(ctx context.Context, idx *index.Index, msgs []Message) ([]string, er
 			FileReference: m.FileReference,
 			Size:          m.Size,
 			Mtime:         m.Date.Unix(),
+			Sha256:        sha,
 		}
 		if err := idx.Put(ctx, f); err != nil {
 			return paths, err

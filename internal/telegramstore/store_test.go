@@ -35,6 +35,8 @@ type fakeAPI struct {
 	resolveErr error
 	sendErr    error
 	fileErr    error
+	// fileErrOnce 只让下一次 getFile 失败，用于测试 file_reference 刷新后重试。
+	fileErrOnce error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -97,6 +99,11 @@ func (f *fakeAPI) ChannelsDeleteMessages(_ context.Context, req *tg.ChannelsDele
 
 func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {
 	f.getFile = append(f.getFile, req)
+	if f.fileErrOnce != nil {
+		err := f.fileErrOnce
+		f.fileErrOnce = nil
+		return nil, err
+	}
 	if f.fileErr != nil {
 		return nil, f.fileErr
 	}

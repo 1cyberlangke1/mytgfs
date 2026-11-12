@@ -4,6 +4,8 @@ package vfs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +40,35 @@ type fakeStore struct {
 	expired      map[int]bool
 	refreshErr   error
 	refreshCalls int
+
+	// copyCalls 记录复用式复制次数；copySources 记录每次复用的源消息号。
+	copyCalls   int
+	copySources []int
+	copyErr     error
+}
+
+// Copy 模拟频道内复制：复用源消息内容，只新增一条消息。
+//
+// 输入：src 源记录；name/mime/caption 新消息元信息
+// 输出：新消息 Part
+// 预期：不产生 uploads 记录（证明没有重新上传字节）
+func (s *fakeStore) Copy(_ context.Context, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, error) {
+	if s.copyErr != nil {
+		return nil, s.copyErr
+	}
+	s.copyCalls++
+	s.copySources = append(s.copySources, src.MessageID)
+	s.nextID++
+	if b, ok := s.data[src.MessageID]; ok {
+		s.data[s.nextID] = b
+	}
+	return &telegramstore.Part{
+		MessageID:     s.nextID,
+		DocumentID:    src.DocumentID + 1000,
+		AccessHash:    src.AccessHash,
+		FileReference: []byte("copy-ref"),
+		Size:          src.Size,
+	}, nil
 }
 
 func newFakeStore() *fakeStore {
@@ -99,6 +130,10 @@ func (s *fakeStore) ReadRange(_ context.Context, p *telegramstore.Part, offset i
 
 func (s *fakeStore) Delete(_ context.Context, ids ...int) error {
 	s.deletes = append(s.deletes, ids...)
+	// 模拟消息级引用：删消息只摘掉它自己那份引用，内容是否还存在由其他消息决定
+	for _, id := range ids {
+		delete(s.data, id)
+	}
 	return nil
 }
 
@@ -513,5 +548,168 @@ func TestReadRefreshFailure(t *testing.T) {
 	buf := make([]byte, 8)
 	if n := fs.Read("/r.txt", buf, 0, 0); n != -fuse.EIO {
 		t.Fatalf("应返回 EIO，实际 %d", n)
+	}
+}
+
+// shaOf 计算测试内容的 sha256（与 fileSHA256 同格式）。
+func shaOf(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// writeNew 新建文件并写入内容，返回 Release 结果。
+func writeNew(fs *FS, t *testing.T, p, content string) int {
+	t.Helper()
+	rc, fh := fs.Open(p, fuse.O_WRONLY|fuse.O_CREAT)
+	if rc != 0 {
+		t.Fatalf("Open %s 失败: %d", p, rc)
+	}
+	if n := fs.Write(p, []byte(content), 0, fh); n != len(content) {
+		t.Fatalf("Write %s 返回 %d", p, n)
+	}
+	return fs.Release(p, fh)
+}
+
+// TestWriteReusesSameDirDuplicate 同目录已有相同内容时复用 document，不重新上传。
+//
+// 输入：索引里 /d/a.txt 已存 "hello"（带 sha256），再新建 /d/b.txt 写同样内容
+// 输出：fakeStore 的上传次数与复用次数、索引里的新记录
+// 预期：上传 0 次、复用 1 次、/d/b.txt 指向新消息且摘要与内容一致
+func TestWriteReusesSameDirDuplicate(t *testing.T) {
+	store := newFakeStore()
+	store.data[10] = []byte("hello")
+	store.nextID = 10
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{
+		Path: "/d/a.txt", MessageID: 10, DocumentID: 77, Size: 5, Mtime: 1, Sha256: shaOf("hello"),
+	})
+
+	if rc := writeNew(fs, t, "/d/b.txt", "hello"); rc != 0 {
+		t.Fatalf("Release 失败: %d", rc)
+	}
+	if len(store.uploads) != 0 {
+		t.Fatalf("重复内容不应上传，实际上传 %d 次", len(store.uploads))
+	}
+	if store.copyCalls != 1 || store.copySources[0] != 10 {
+		t.Fatalf("应复用消息 10，实际 calls=%d sources=%v", store.copyCalls, store.copySources)
+	}
+	got, ok, err := idx.Get(context.Background(), "/d/b.txt")
+	if err != nil || !ok {
+		t.Fatalf("索引缺少 /d/b.txt: ok=%v err=%v", ok, err)
+	}
+	if got.Sha256 != shaOf("hello") || got.Size != 5 {
+		t.Fatalf("索引记录不正确: %+v", got)
+	}
+	buf := make([]byte, 8)
+	if n := fs.Read("/d/b.txt", buf, 0, 0); n != 5 || string(buf[:n]) != "hello" {
+		t.Fatalf("复用后读回失败: n=%d content=%q", n, buf[:n])
+	}
+}
+
+// TestWriteUnchangedPathSkipsUpload 同一路径重写相同内容时连消息都不新建。
+//
+// 输入：先写 /a.txt，再写一次同样内容
+// 输出：上传次数、索引消息号
+// 预期：只上传 1 次，消息号不变，摘要写回索引
+func TestWriteUnchangedPathSkipsUpload(t *testing.T) {
+	store := newFakeStore()
+	fs, idx, _ := newTestFS(t, store)
+
+	if rc := writeNew(fs, t, "/a.txt", "same"); rc != 0 {
+		t.Fatalf("第一次 Release 失败: %d", rc)
+	}
+	first, _, err := idx.Get(context.Background(), "/a.txt")
+	if err != nil {
+		t.Fatalf("读索引: %v", err)
+	}
+	if rc := writeNew(fs, t, "/a.txt", "same"); rc != 0 {
+		t.Fatalf("第二次 Release 失败: %d", rc)
+	}
+	if len(store.uploads) != 1 || store.copyCalls != 0 {
+		t.Fatalf("内容未变不应上传/复制: uploads=%d copy=%d", len(store.uploads), store.copyCalls)
+	}
+	second, _, err := idx.Get(context.Background(), "/a.txt")
+	if err != nil {
+		t.Fatalf("读索引: %v", err)
+	}
+	if second.MessageID != first.MessageID {
+		t.Fatalf("消息号应保持不变: %d -> %d", first.MessageID, second.MessageID)
+	}
+	if second.Sha256 != shaOf("same") {
+		t.Fatalf("摘要未写入索引: %+v", second)
+	}
+	if len(store.deletes) != 0 {
+		t.Fatalf("未新建消息时不应删除: %v", store.deletes)
+	}
+}
+
+// TestWriteReusesAcrossDirs 复用按整块盘（整频道）看内容，跨目录也能命中。
+func TestWriteReusesAcrossDirs(t *testing.T) {
+	store := newFakeStore()
+	store.data[10] = []byte("hello")
+	store.nextID = 10
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{
+		Path: "/d1/a.txt", MessageID: 10, DocumentID: 77, Size: 5, Mtime: 1, Sha256: shaOf("hello"),
+	})
+
+	if rc := writeNew(fs, t, "/d2/b.txt", "hello"); rc != 0 {
+		t.Fatalf("Release 失败: %d", rc)
+	}
+	if store.copyCalls != 1 || len(store.uploads) != 0 {
+		t.Fatalf("同频道相同内容应复用: copy=%d uploads=%d", store.copyCalls, len(store.uploads))
+	}
+}
+
+// TestDeleteReferenceKeepsContent 删掉一条引用不影响其他路径读取。
+//
+// 输入：两条路径引用同一个 document（77），先删 b 再删 a
+// 输出：每一步的引用计数、a 是否还能读
+// 预期：删 b 后引用计数为 1 且 a 可读；删 a 后计数归零
+func TestDeleteReferenceKeepsContent(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	store.data[10] = []byte("hello")
+	store.data[11] = []byte("hello")
+	store.nextID = 11
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{Path: "/a.txt", MessageID: 10, DocumentID: 77, Size: 5, Sha256: shaOf("hello")})
+	putFile(t, idx, index.File{Path: "/b.txt", MessageID: 11, DocumentID: 77, Size: 5, Sha256: shaOf("hello")})
+
+	if rc := fs.Unlink("/b.txt"); rc != 0 {
+		t.Fatalf("删除 b 失败: %d", rc)
+	}
+	if n, err := idx.CountRefs(ctx, 77); err != nil || n != 1 {
+		t.Fatalf("删一条后应剩 1 个引用，实际 n=%d err=%v", n, err)
+	}
+	buf := make([]byte, 8)
+	if n := fs.Read("/a.txt", buf, 0, 0); n != 5 || string(buf[:n]) != "hello" {
+		t.Fatalf("另一条引用应仍可读: n=%d content=%q", n, buf[:n])
+	}
+
+	if rc := fs.Unlink("/a.txt"); rc != 0 {
+		t.Fatalf("删除 a 失败: %d", rc)
+	}
+	if n, err := idx.CountRefs(ctx, 77); err != nil || n != 0 {
+		t.Fatalf("全部删除后引用应归零，实际 n=%d err=%v", n, err)
+	}
+}
+
+// TestWriteDuplicateCopyFailure 复用失败时返回 EIO，索引保持原样。
+func TestWriteDuplicateCopyFailure(t *testing.T) {
+	store := newFakeStore()
+	store.data[10] = []byte("hello")
+	store.nextID = 10
+	store.copyErr = errors.New("rpc 400 MESSAGE_ID_INVALID")
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{
+		Path: "/d/a.txt", MessageID: 10, Size: 5, Mtime: 1, Sha256: shaOf("hello"),
+	})
+
+	if rc := writeNew(fs, t, "/d/b.txt", "hello"); rc != -fuse.EIO {
+		t.Fatalf("应返回 EIO，实际 %d", rc)
+	}
+	if _, ok, _ := idx.Get(context.Background(), "/d/b.txt"); ok {
+		t.Fatal("失败时不应写入索引")
 	}
 }
