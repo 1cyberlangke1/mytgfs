@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mytgfs/internal/autostart"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
@@ -432,12 +433,30 @@ func Run(opts Options) error {
 		fmt.Fprintf(os.Stderr, "Telegram 连接结束: %v\n", rerr)
 	}()
 
+	// 开机自启：状态以系统注册项为准，默认关闭
+	autoOn, aerr := autostart.Enabled()
+	if aerr != nil {
+		autoOn = false
+		fmt.Fprintf(os.Stderr, "读取开机自启状态失败: %v\n", aerr)
+	}
+	exePath, exeErr := os.Executable()
+
 	actions := tray.Actions{
 		OpenWeb: func() {
 			addr := startWeb()
 			OpenBrowser("http://" + addr)
 		},
-		CloseWeb: stopWeb,
+		CloseWeb:         stopWeb,
+		AutostartEnabled: autoOn,
+		SetAutostart: func(on bool) error {
+			if exeErr != nil {
+				return exeErr
+			}
+			if on {
+				return autostart.Enable(exePath)
+			}
+			return autostart.Disable()
+		},
 		Quit: func() {
 			setState(i18n.T("tray.state.unmounted"))
 			unmountAll()

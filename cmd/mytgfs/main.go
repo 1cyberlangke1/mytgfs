@@ -83,6 +83,8 @@ func main() {
 		runDaemon(os.Args[2:])
 	case "web":
 		runWeb(os.Args[2:])
+	case "startup":
+		runStartup(os.Args[2:])
 	case "tray":
 		runTray(os.Args[2:])
 	default:

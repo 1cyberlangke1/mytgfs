@@ -8,6 +8,8 @@ package tray
 //   - 卸载并退出：卸载所有磁盘后结束整个程序（卸载与退出是一件事）
 
 import (
+	"fmt"
+	"os"
 	"sync"
 
 	"fyne.io/systray"
@@ -20,6 +22,11 @@ type Actions struct {
 	OpenWeb  func()
 	CloseWeb func()
 	Quit     func()
+
+	// AutostartEnabled 是启动时从系统读到的开机自启状态。
+	AutostartEnabled bool
+	// SetAutostart 打开/关闭开机自启；返回 error 时菜单保持原状态。
+	SetAutostart func(bool) error
 }
 
 var (
@@ -65,6 +72,11 @@ func onReady(a Actions, initial string) {
 	systray.AddSeparator()
 	mOpen := systray.AddMenuItem(i18n.T("tray.menu.open"), i18n.T("tray.menu.open.tip"))
 	mClose := systray.AddMenuItem(i18n.T("tray.menu.close"), i18n.T("tray.menu.close.tip"))
+	mAuto := systray.AddMenuItemCheckbox(
+		i18n.T("tray.menu.autostart"),
+		i18n.T("tray.menu.autostart.tip"),
+		a.AutostartEnabled,
+	)
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem(i18n.T("tray.menu.quit"), i18n.T("tray.menu.quit.tip"))
 
@@ -85,6 +97,21 @@ func onReady(a Actions, initial string) {
 			case <-mClose.ClickedCh:
 				if a.CloseWeb != nil {
 					a.CloseWeb()
+				}
+			case <-mAuto.ClickedCh:
+				if a.SetAutostart == nil {
+					continue
+				}
+				next := !mAuto.Checked()
+				if err := a.SetAutostart(next); err != nil {
+					fmt.Fprintf(os.Stderr, "autostart: %v\n", err)
+					continue
+				}
+				// 菜单勾选状态跟随系统写入结果，不提前翻转
+				if next {
+					mAuto.Check()
+				} else {
+					mAuto.Uncheck()
 				}
 			case <-mQuit.ClickedCh:
 				if a.Quit != nil {
