@@ -52,6 +52,40 @@ func writeMountState(s mountState) error {
 // removeMountState 删除挂载状态文件。
 func removeMountState() { _ = os.Remove(mountStatePath()) }
 
+// umountPointIfRunning 请求卸载指定挂载点。
+//
+// 输入：point 挂载点，例如 "Y:"
+// 输出：error；没有挂载进程时返回 nil（视为已完成）
+// 预期：发出 IPC 后最多等 5 秒让进程清理；超时不视为失败，
+// 因为同一进程可能还挂着别的卷
+func umountPointIfRunning(point string) error {
+	b, err := os.ReadFile(mountStatePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var st mountState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return err
+	}
+	if _, err := ipc.Call(context.Background(), st.Addr, st.Token, "umount", map[string]string{"point": point}); err != nil {
+		// 连接不上说明挂载进程已经死了，留下的是崩溃残留的状态文件；
+		// 清掉它并视为已卸载，否则每次删卷都会报一次假失败
+		removeMountState()
+		return nil
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(mountStatePath()); os.IsNotExist(err) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
 // runUmount 安全移除挂载点。
 //
 // 输入：--point 挂载点（省略表示全部）

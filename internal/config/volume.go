@@ -65,6 +65,80 @@ func AppendVolume(path string, v Volume) error {
 	return atomicfile.WriteFile(path, b.Bytes(), 0o600)
 }
 
+// ErrVolumeNotFound 表示配置里没有这个卷。
+var ErrVolumeNotFound = errors.New("volume not found")
+
+// RemoveVolume 从配置文件里删除指定名字的 [[volumes]] 整段。
+//
+// 输入：path 配置文件；name 卷名（忽略大小写）
+// 输出：error；没有同名卷返回 ErrVolumeNotFound
+// 预期：按行切段处理，保留其它段落与注释原样；写入走临时文件 + rename
+func RemoveVolume(path, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("卷名不能为空")
+	}
+
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(old), "\n")
+
+	var out []string
+	removed := false
+	for i := 0; i < len(lines); {
+		if strings.TrimSpace(lines[i]) != "[[volumes]]" {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+		// 找到本段结尾：下一个以 [ 开头的行
+		j := i + 1
+		for j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "[") {
+			j++
+		}
+		if volumeName(lines[i:j]) == "" || !strings.EqualFold(volumeName(lines[i:j]), name) {
+			out = append(out, lines[i:j]...)
+			i = j
+			continue
+		}
+		// 命中：连同紧随其后的空行一起丢掉，避免留下连续空行
+		k := j
+		for k < len(lines) && strings.TrimSpace(lines[k]) == "" {
+			k++
+		}
+		removed = true
+		i = k
+	}
+	if !removed {
+		return ErrVolumeNotFound
+	}
+	return atomicfile.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600)
+}
+
+// volumeName 从 [[volumes]] 段落里取 name 值。
+//
+// 输入：block 段落的所有行（含 [[volumes]] 头）
+// 输出：去掉引号的卷名；没有 name 键时返回空串
+// 预期：只认首个 name = "..." 行，支持单双引号
+func volumeName(block []string) string {
+	for _, line := range block {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "name") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(t, "name"))
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		v := strings.TrimSpace(strings.TrimPrefix(rest, "="))
+		v = strings.Trim(v, `"'`)
+		return v
+	}
+	return ""
+}
+
 // tomlString 输出 TOML 基本字符串。
 //
 // 输入：s 任意文本（不含换行）

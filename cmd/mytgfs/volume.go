@@ -16,8 +16,10 @@ import (
 	"strings"
 
 	"mytgfs/internal/auth"
+	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
+	"mytgfs/internal/datadir"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
@@ -36,10 +38,92 @@ func runVolume(args []string) {
 	switch args[0] {
 	case "create":
 		runVolumeCreate(args[1:])
+	case "delete":
+		runVolumeDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+// runVolumeDelete 删除一个卷：删 Telegram 频道 → 移除配置条目 → 删本地索引。
+//
+// 输入：--name 卷名（必填）；--config 配置文件
+// 输出：打印删除结果
+// 预期：频道删除失败时中止，不改本地配置；一旦频道删掉，本地清理失败也继续
+func runVolumeDelete(args []string) {
+	fs := flag.NewFlagSet("volume delete", flag.ExitOnError)
+	name := fs.String("name", "", "volume name")
+	cfgPath := fs.String("config", "config.toml", "config file")
+	_ = fs.Parse(args)
+
+	volName := strings.TrimSpace(*name)
+	if volName == "" {
+		fatal(i18n.T("err.volume_name_required"))
+	}
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fatal(fmt.Sprintf("读取配置: %v", err))
+	}
+	var target *config.Volume
+	for i := range cfg.Volumes {
+		if strings.EqualFold(cfg.Volumes[i].Name, volName) {
+			target = &cfg.Volumes[i]
+			break
+		}
+	}
+	if target == nil {
+		fatal(i18n.T("err.volume_not_found", volName))
+	}
+
+	apiHash := cfg.APIHash()
+	if apiHash == "" {
+		fatal(i18n.T("err.missing_api_hash"))
+	}
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	channelID := target.ChatID
+	// 先卸掉这个卷的挂载点：不然索引文件被占着，删不掉
+	if p := strings.TrimSpace(target.Point); p != "" {
+		if uerr := umountPointIfRunning(p); uerr != nil {
+			fmt.Println(i18n.T("volume.umount_failed", p, uerr))
+		} else {
+			fmt.Println(i18n.T("volume.umounted", p))
+		}
+	}
+
+	client := tgclient.New(cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+		tgclient.Options{})
+	err = client.Run(ctx, func(ctx context.Context) error {
+		res, rerr := channel.Resolve(ctx, client.API(), channelID)
+		if rerr != nil {
+			return rerr
+		}
+		return channel.Delete(ctx, client.API(), res)
+	})
+	if err != nil {
+		failErr(i18n.T("err.volume_delete_prefix"), err)
+	}
+	fmt.Println(i18n.T("volume.channel_deleted", channelID))
+
+	if err := config.RemoveVolume(*cfgPath, volName); err != nil {
+		failErr(i18n.T("err.volume_config_remove_prefix"), err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		p := datadir.Path("index-" + volName + ".db" + suffix)
+		if rmErr := os.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
+			fmt.Println(i18n.T("volume.index_remove_failed", p, rmErr))
+		}
+	}
+	fmt.Println(i18n.T("volume.deleted", volName))
 }
 
 // runVolumeCreate 新建一个卷并写入配置文件。
