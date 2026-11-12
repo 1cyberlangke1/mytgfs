@@ -59,7 +59,7 @@ func debugf(format string, args ...any) {
 type FS struct {
 	fuse.FileSystemBase
 	idx    *index.Index
-	store  *telegramstore.Store
+	store  Store
 	ctx    context.Context
 	tmpDir string
 
@@ -83,7 +83,7 @@ type openFile struct {
 // 输入：ctx；idx 索引；store 存储；tmpDir 写入临时目录
 // 输出：*FS
 // 预期：tmpDir 为空时使用系统临时目录
-func New(ctx context.Context, idx *index.Index, store *telegramstore.Store, tmpDir string) *FS {
+func New(ctx context.Context, idx *index.Index, store Store, tmpDir string) *FS {
 	if tmpDir == "" {
 		tmpDir = os.TempDir()
 	}
