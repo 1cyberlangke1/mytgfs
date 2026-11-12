@@ -89,43 +89,45 @@ type FS struct {
 	rc     *lru.Cache[string, *readCache]
 	rcOnce sync.Once
 
-	// ra 记录每个路径的顺序读进度，用于自适应放大预读窗口
-	ra     *lru.Cache[string, *readAhead]
-	raOnce sync.Once
-
 	// retryBase 是上传重试的首次等待时长，之后逐次翻倍；测试置 0 跳过等待
 	retryBase time.Duration
 }
 
 // 预读窗口参数。
 const (
-	// firstReadWindow 是第一次预读的窗口：缩略图/属性读取只需要文件头，
-	// 用 256KB 起步，避免看一眼图片就把 8MB 拉下来
-	firstReadWindow = 256 << 10
-	// maxReadWindow 是顺序读放大后的窗口上限：8MB = 8 个 1MB 块并行拉取
-	maxReadWindow = 8 << 20
-	// readAheadMaxFiles 是同时缓存的窗口数上限，避免内存无限增长
-	readAheadMaxFiles = 2
+	// readWindow 是缓存块大小，与下载器的 partSize 对齐
+	readWindow = 1 << 20
+	// probeSpan 是文件首次访问时的拉取跨度：缩略图/属性只要文件头，
+	// 不值得为了看一眼就把整页拉下来
+	probeSpan = 1 << 20
+	// fetchSpan 是第二次及以后每次拉取的跨度：一次 getFile 覆盖多块并行下载，
+	// 避免按 1MB 反复发起请求被单次往返开销拖死
+	fetchSpan = 8 << 20
+	// maxWindowsPerFile 是单文件最多缓存的块数（约 10MB）
+	maxWindowsPerFile = 10
+	// readAheadMaxFiles 是同时缓存的文件数上限，内存上限约 30MB
+	readAheadMaxFiles = 3
 )
 
-// readAhead 记录一个路径的顺序读进度。
-type readAhead struct {
-	next   int64 // 上次预读结束的绝对偏移
-	window int64 // 当前窗口大小
-}
-
-// readCache 是一个路径最近一次预读的窗口。
+// readCache 是一个文件已下载的若干块。
 type readCache struct {
-	off  int64
-	data []byte
+	// windows 以块起点为键，值恰为 [start, start+len) 的字节
+	windows map[int64][]byte
+	// order 记录块插入顺序，超出上限时淘汰最早的一块
+	order []int64
+	// primed 为真表示已经探测过文件头，后续按大跨度拉取
+	primed bool
 }
 
-// cacheRead 命中预读窗口时直接返回，否则拉一个窗口再返回。
+// cacheRead 命中已缓存的块时直接返回，否则拉一段再返回。
 //
 // 输入：file 索引条目；ofst 起始偏移；length 需要的长度
 // 输出：字节切片；是否命中缓存；error
-// 预期：窗口由 windowFor 自适应决定；读越界由调用方先裁剪；
-// 拉取失败返回 error，由调用方报 EIO
+// 预期：
+//   - 首次访问按 probeSpan、之后按 fetchSpan 对齐拉取，拉到的数据拆成
+//     readWindow 大小的块，任意偏移命中即可用
+//   - 请求跨段时返回未命中，由调用方按精确范围再读一次
+//   - 拉取失败返回 error，由调用方报 EIO
 func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, error) {
 	f.rcOnce.Do(func() {
 		c, err := lru.New[string, *readCache](readAheadMaxFiles)
@@ -137,58 +139,78 @@ func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, e
 	})
 
 	end := ofst + int64(length)
-	if c, ok := f.rc.Get(file.Path); ok && ofst >= c.off && end <= c.off+int64(len(c.data)) {
-		return c.data[ofst-c.off : end-c.off], true, nil
+	block := ofst / readWindow * readWindow
+	c, cached := f.rc.Get(file.Path)
+	if cached {
+		if data, ok := c.windows[block]; ok && end <= block+int64(len(data)) {
+			return data[ofst-block : end-block], true, nil
+		}
 	}
 
-	start, want, window := f.windowFor(file, ofst)
+	span := int64(fetchSpan)
+	if !cached || !c.primed {
+		span = probeSpan
+	}
+	start := ofst / span * span
+	want := span
+	if start+want > file.Size {
+		want = file.Size - start
+	}
 	if want <= 0 {
 		return nil, false, nil
 	}
+	// 请求可能跨出本段：把本段拉到能覆盖请求为止
+	if end-start > want && end-start <= fetchSpan {
+		want = end - start
+	}
+
+	t0 := time.Now()
 	data, nfile, err := f.readRangeWithRefresh(file, start, int(want), func(done int64) {
+		// downloader 的进度是文件内绝对偏移，直接透传
 		f.trackRead(file.Path, done, file.Size)
 	})
 	if err != nil {
 		debugf("vfs: 预读失败 %s start=%d len=%d: %v", shortPath(file.Path), start, want, err)
 		return nil, false, err
 	}
+	debugf("vfs: 拉取 %s start=%d len=%d 耗时=%s 命中=否", shortPath(file.Path), start, len(data), time.Since(t0).Round(time.Millisecond))
 	if end > start+int64(len(data)) {
 		return nil, false, nil
 	}
 	if nfile.DocumentID == file.DocumentID {
-		f.rc.Add(file.Path, &readCache{off: start, data: data})
-		f.ra.Add(file.Path, &readAhead{next: start + int64(len(data)), window: window})
+		f.putSpan(file.Path, start, data)
 	}
 	return data[ofst-start : end-start], true, nil
 }
 
-// windowFor 选本次预读的起点与窗口大小。
+// putSpan 把一段数据按 readWindow 拆块放进缓存，超出块数上限时淘汰最早的块。
 //
-// 输入：file 索引条目；ofst 请求偏移
-// 输出：窗口起点；窗口长度；本轮窗口大小
-// 预期：顺序读从 256KB 起步，每次翻 4 倍直到 8MB；
-// 跳读或换位置回落到 256KB，避免看一张缩略图就拉 8MB
-func (f *FS) windowFor(file index.File, ofst int64) (start, want, window int64) {
-	f.raOnce.Do(func() {
-		c, err := lru.New[string, *readAhead](64)
-		if err != nil {
-			panic(err)
-		}
-		f.ra = c
-	})
-	window = firstReadWindow
-	if st, ok := f.ra.Get(file.Path); ok && ofst == st.next {
-		window = st.window * 4
-		if window > maxReadWindow {
-			window = maxReadWindow
-		}
+// 输入：path 路径；start 段起点（按 readWindow 对齐）；data 段内容
+// 输出：无
+// 预期：并发安全；同一块重复写入时覆盖；标记该文件已探测过文件头
+func (f *FS) putSpan(path string, start int64, data []byte) {
+	c, ok := f.rc.Get(path)
+	if !ok {
+		c = &readCache{windows: map[int64][]byte{}}
 	}
-	start = ofst / window * window
-	want = window
-	if start+want > file.Size {
-		want = file.Size - start
+	c.primed = true
+	for off := 0; off < len(data); off += readWindow {
+		blockStart := start + int64(off)
+		end := off + readWindow
+		if end > len(data) {
+			end = len(data)
+		}
+		if _, exists := c.windows[blockStart]; !exists {
+			c.order = append(c.order, blockStart)
+		}
+		c.windows[blockStart] = data[off:end]
 	}
-	return start, want, window
+	for len(c.order) > maxWindowsPerFile {
+		old := c.order[0]
+		c.order = c.order[1:]
+		delete(c.windows, old)
+	}
+	f.rc.Add(path, c)
 }
 
 // dropCache 清掉某个路径的预读窗口。
@@ -202,9 +224,6 @@ func (f *FS) dropCache(p string) {
 		f.rc = c
 	})
 	f.rc.Remove(p)
-	if f.ra != nil {
-		f.ra.Remove(p)
-	}
 }
 
 // Transfer 是一个正在下载的文件的进度。

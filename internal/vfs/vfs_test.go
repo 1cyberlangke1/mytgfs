@@ -568,9 +568,9 @@ func TestReadRefreshFailure(t *testing.T) {
 
 // TestReadReportsDownloadProgress 进度来自下载器的实际写入量，而不是读取位置估算。
 //
-// 输入：9MiB 文件；先读 128KiB（首窗 256KiB），再读一个顺序位置（窗口放大到 1MiB），最后读末尾 1 字节
+// 输入：9MiB 文件；先读 128KiB（拉第 1 块 1MiB），再读第 2 块，最后读末尾 1 字节
 // 输出：Transfers 的快照
-// 预期：进度依次是 256KiB、256KiB+1MiB；读到文件末尾后条目消失
+// 预期：进度依次是 1MiB、2MiB；读到文件末尾后条目消失
 func TestReadReportsDownloadProgress(t *testing.T) {
 	store := newFakeStore()
 	data := make([]byte, 9<<20)
@@ -586,21 +586,20 @@ func TestReadReportsDownloadProgress(t *testing.T) {
 	if len(ts) != 1 {
 		t.Fatalf("应有 1 条进度，实际 %d", len(ts))
 	}
-	if ts[0].Path != "/big.bin" || ts[0].Done != int64(firstReadWindow) || ts[0].Total != int64(len(data)) {
-		t.Fatalf("首窗进度不符合实际下载量: %+v", ts[0])
+	if ts[0].Path != "/big.bin" || ts[0].Done != probeSpan || ts[0].Total != int64(len(data)) {
+		t.Fatalf("进度不符合实际下载量: %+v", ts[0])
 	}
 
-	// 紧接着上次窗口末尾继续读：窗口放大到 1MiB
-	second := int64(firstReadWindow)
-	if n := fs.Read("/big.bin", buf, second, 0); n != len(buf) {
+	// 第二次读触发大跨度拉取：从文件头对齐，一次覆盖 fetchSpan
+	if n := fs.Read("/big.bin", buf, readWindow, 0); n != len(buf) {
 		t.Fatalf("第二次读取返回 %d", n)
 	}
 	ts = fs.Transfers()
-	if len(ts) != 1 || ts[0].Done != 1<<20 {
-		t.Fatalf("顺序读窗口未放大: %+v", ts)
+	if len(ts) != 1 || ts[0].Done != fetchSpan {
+		t.Fatalf("大跨度进度不符: %+v", ts)
 	}
 
-	// 跳到文件末尾，窗口回落到 256KiB；读到最后一字节时进度条目应消失
+	// 跳到文件末尾的块；读到最后一字节时进度条目应消失
 	if n := fs.Read("/big.bin", buf[:1], int64(len(data))-1, 0); n != 1 {
 		t.Fatalf("末尾读取返回 %d", n)
 	}
@@ -894,5 +893,23 @@ func TestResumePendingDropsMissingTemp(t *testing.T) {
 	}
 	if len(store.uploads) != 0 {
 		t.Fatalf("不应尝试上传，实际 %d 次", len(store.uploads))
+	}
+}
+
+// TestShareName 卷名不能为空、不能带反斜杠或斜杠。
+//
+// 输入：空卷名、普通卷名、带斜杠的卷名
+// 输出：shareName 的结果
+// 预期：空名回落到 mytgfs；反斜杠和斜杠替换成短横线
+func TestShareName(t *testing.T) {
+	cases := map[string]string{
+		"":      "mytgfs",
+		"demo":  "demo",
+		`a\b/c`: "a-b-c",
+	}
+	for in, want := range cases {
+		if got := shareName(in); got != want {
+			t.Fatalf("shareName(%q) = %q，期望 %q", in, got, want)
+		}
 	}
 }
