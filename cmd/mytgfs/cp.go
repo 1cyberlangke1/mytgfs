@@ -35,6 +35,7 @@ import (
 func runCopy(args []string) {
 	fs := flag.NewFlagSet("cp", flag.ExitOnError)
 	name := fs.String("name", "mytgfs", "volume name")
+	to := fs.String("to", "", "目标卷名，留空表示同一卷")
 	force := fs.Bool("force", false, "覆盖目标路径上已有的文件")
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
@@ -47,10 +48,6 @@ func runCopy(args []string) {
 	if strings.HasSuffix(fs.Arg(1), "/") || strings.HasSuffix(fs.Arg(1), `\`) {
 		dst = path.Join(dst, path.Base(src))
 	}
-	if src == dst {
-		fatal("源和目标是同一个路径")
-	}
-
 	cfg, err := config.Load("config.toml")
 	if err != nil {
 		fatal(fmt.Sprintf("读取配置: %v", err))
@@ -58,6 +55,18 @@ func runCopy(args []string) {
 	volume, ok := volumeByName(cfg, *name)
 	if !ok {
 		fatal("卷不存在: " + *name)
+	}
+	dstName := *to
+	if dstName == "" {
+		dstName = *name
+	}
+	dstVolume, ok := volumeByName(cfg, dstName)
+	if !ok {
+		fatal("目标卷不存在: " + dstName)
+	}
+	// 同卷同路径才是无意义操作；跨卷复制到相同路径是合法的
+	if src == dst && dstName == *name {
+		fatal("源和目标是同一个路径")
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -73,6 +82,16 @@ func runCopy(args []string) {
 	}
 	defer idx.Close()
 
+	// 目标卷与源卷不同才需要另开索引；同卷复用同一句柄
+	dstIdx := idx
+	if dstName != *name {
+		dstIdx, err = index.Open(datadir.Path("index-" + dstName + ".db"))
+		if err != nil {
+			fatal(fmt.Sprintf("打开目标索引: %v", err))
+		}
+		defer dstIdx.Close()
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -83,7 +102,7 @@ func runCopy(args []string) {
 	if !found {
 		fatal("源文件不在索引里，先运行 mytgfs sync: " + src)
 	}
-	old, hadOld, err := idx.Get(ctx, dst)
+	old, hadOld, err := dstIdx.Get(ctx, dst)
 	if err != nil {
 		fatal(fmt.Sprintf("读取索引: %v", err))
 	}
@@ -95,18 +114,40 @@ func runCopy(args []string) {
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
 		tgclient.Options{})
 	err = client.Run(ctx, func(ctx context.Context) error {
-		store := telegramstore.New(client.API(), volume.ChatID)
-		part, cerr := store.Copy(ctx, &telegramstore.Part{
+		srcStore := telegramstore.New(client.API(), volume.ChatID)
+		dstStore := srcStore
+		if dstVolume.ChatID != volume.ChatID {
+			dstStore = telegramstore.New(client.API(), dstVolume.ChatID)
+		}
+		srcPart := &telegramstore.Part{
 			MessageID:     source.MessageID,
 			DocumentID:    source.DocumentID,
 			AccessHash:    source.AccessHash,
 			FileReference: source.FileReference,
 			Size:          source.Size,
-		}, path.Base(dst), "application/octet-stream", tgsync.EncodeCaptionHash(dst, source.Sha256))
+		}
+		caption := tgsync.EncodeCaptionHash(dst, source.Sha256)
+		part, refreshed, cerr := dstStore.CopyFrom(ctx, srcStore, srcPart,
+			path.Base(dst), "application/octet-stream", caption)
 		if cerr != nil {
 			return cerr
 		}
-		if err := idx.Put(ctx, index.File{
+		// 源 file_reference 被刷新时写回源索引，否则下次还要再刷一次
+		if refreshed != nil && dstIdx != idx {
+			if err := idx.Replace(ctx, index.File{
+				Path:          src,
+				MessageID:     refreshed.MessageID,
+				DocumentID:    refreshed.DocumentID,
+				AccessHash:    refreshed.AccessHash,
+				FileReference: refreshed.FileReference,
+				Size:          refreshed.Size,
+				Mtime:         source.Mtime,
+				Sha256:        source.Sha256,
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "写回源索引失败: %v\n", err)
+			}
+		}
+		if err := dstIdx.Put(ctx, index.File{
 			Path:          dst,
 			MessageID:     part.MessageID,
 			DocumentID:    part.DocumentID,
@@ -119,12 +160,12 @@ func runCopy(args []string) {
 			return err
 		}
 		if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
-			if err := store.Delete(ctx, old.MessageID); err != nil {
+			if err := dstStore.Delete(ctx, old.MessageID); err != nil {
 				fmt.Fprintf(os.Stderr, "删除目标旧消息 %d 失败: %v\n", old.MessageID, err)
 			}
 		}
-		fmt.Printf("COPY %s -> %s doc=%d msg=%d size=%d\n",
-			src, dst, part.DocumentID, part.MessageID, part.Size)
+		fmt.Printf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
+			*name, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
 		return nil
 	})
 	if err != nil {
