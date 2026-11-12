@@ -18,6 +18,16 @@ type Config struct {
 	Mount     Mount     `toml:"mount"`
 	Ratelimit Ratelimit `toml:"ratelimit"`
 	Volumes   []Volume  `toml:"volumes"`
+	Log       Log       `toml:"log"`
+}
+
+// Log 是日志配置。
+type Log struct {
+	Level      string `toml:"level"`
+	File       string `toml:"file"`
+	MaxSizeMB  int    `toml:"max_size_mb"`
+	MaxBackups int    `toml:"max_backups"`
+	MaxAgeDays int    `toml:"max_age_days"`
 }
 
 // Telegram 是账号与频道配置。

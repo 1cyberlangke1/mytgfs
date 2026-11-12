@@ -30,6 +30,7 @@ import (
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/ipc"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
@@ -39,6 +40,7 @@ import (
 )
 
 func main() {
+	initLogging()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -80,6 +82,21 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// initLogging 按配置初始化 slog 与轮转日志。
+func initLogging() {
+	cfg, err := config.Load("config.toml")
+	if err != nil {
+		cfg = config.Config{}
+	}
+	_, _ = logging.Setup(logging.Config{
+		Level:      cfg.Log.Level,
+		File:       cfg.Log.File,
+		MaxSizeMB:  cfg.Log.MaxSizeMB,
+		MaxBackups: cfg.Log.MaxBackups,
+		MaxAgeDays: cfg.Log.MaxAgeDays,
+	})
 }
 
 // runAuth 处理 bot / user 登录。

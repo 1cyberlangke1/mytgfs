@@ -35,3 +35,14 @@ point = ""
 # max_retries = 5
 # 单次最大等待（秒）
 # max_wait_s = 120
+
+[log]
+# 日志等级：debug / info / warn / error
+level = "info"
+file = "mytgfs.log"
+# 单个日志文件最大 MB
+max_size_mb = 10
+# 保留的历史文件数
+max_backups = 5
+# 保留天数
+max_age_days = 7

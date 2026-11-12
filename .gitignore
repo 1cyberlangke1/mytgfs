@@ -55,6 +55,10 @@ index-*.db-*
 daemon.json
 daemon.log
 
+# 日志
+mytgfs.log
+mytgfs.log.*
+
 # Python 虚拟环境 / 缓存
 .venv/
 __pycache__/
