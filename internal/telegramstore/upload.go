@@ -10,12 +10,15 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+const maxCaption = 900 // 留余量，Telegram caption 上限 1024
+
 // Upload 上传文件并发送到频道。
 //
 // 输入：r 数据源；size 字节数；name 文件名；mime MIME；caption 说明文字
 // 输出：Part
 // 预期：
 //   - size > MaxFileSize 立即返回 ErrTooLarge
+//   - caption 超过 900 字符时，先发一条文本消息存完整元数据，文件 caption 只存 {"ref":id}
 //   - 崩溃在 sendMedia 之前：服务端丢弃临时文件，无副作用
 //   - 崩溃在 sendMedia 之后：可能留下孤儿消息，需要外部对账
 func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*Part, error) {
@@ -25,6 +28,15 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+	if len(caption) > maxCaption {
+		refID, err := s.sendMeta(ctx, peer, caption)
+		if err != nil {
+			return nil, err
+		}
+		caption = fmt.Sprintf(`{"ref":%d}`, refID)
 	}
 
 	up := uploader.NewUploader(s.api).WithPartSize(512 * 1024)
@@ -37,7 +49,7 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		return nil, err
 	}
 	updates, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer: &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
+		Peer: peer,
 		Media: &tg.InputMediaUploadedDocument{
 			File:     inputFile,
 			MimeType: mime,
@@ -63,6 +75,44 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		FileReference: doc.FileReference,
 		Size:          doc.Size,
 	}, nil
+}
+
+// sendMeta 发送一条文本消息，返回消息 ID。
+func (s *Store) sendMeta(ctx context.Context, peer tg.InputPeerClass, text string) (int, error) {
+	if err := s.throttle(ctx); err != nil {
+		return 0, err
+	}
+	updates, err := s.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+		Peer:     peer,
+		Message:  text,
+		RandomID: rand.Int63(),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("sendMeta: %w", err)
+	}
+	return extractMessageID(updates)
+}
+
+// extractMessageID 从 Updates 里提取消息 ID。
+func extractMessageID(u tg.UpdatesClass) (int, error) {
+	switch upd := u.(type) {
+	case *tg.Updates:
+		for _, item := range upd.Updates {
+			switch x := item.(type) {
+			case *tg.UpdateNewMessage:
+				if msg, ok := x.Message.(*tg.Message); ok {
+					return msg.ID, nil
+				}
+			case *tg.UpdateNewChannelMessage:
+				if msg, ok := x.Message.(*tg.Message); ok {
+					return msg.ID, nil
+				}
+			}
+		}
+	case *tg.UpdateShortSentMessage:
+		return upd.ID, nil
+	}
+	return 0, ErrNoMessage
 }
 
 // extractDocument 从不同的 Updates 形态里提取 document。

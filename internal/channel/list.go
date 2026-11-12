@@ -1,6 +1,6 @@
 package channel
 
-// 用 user 会话列出频道。
+// 用 user 会话列出「当前 user 能管理」的频道。
 
 import (
 	"context"
@@ -19,13 +19,14 @@ type Item struct {
 	Creator    bool
 }
 
-// List 列出当前 user 的所有频道/超级群。
+// List 列出当前 user 能管理的频道/超级群。
 //
-// 输入：ctx；client 已登录的 user 客户端
+// 输入：ctx；client user 客户端；all 为 true 时额外查普通 admin
 // 输出：频道列表
-// 预期：只返回 channel/supergroup，不含普通聊天
-func List(ctx context.Context, client *telegram.Client) ([]Item, error) {
-	res, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+// 预期：默认只返回 creator（不额外发 RPC）；all 时对每个频道查 getFullChannel
+func List(ctx context.Context, client *telegram.Client, all bool) ([]Item, error) {
+	api := client.API()
+	res, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
 		OffsetPeer: &tg.InputPeerEmpty{},
 		Limit:      200,
 	})
@@ -47,6 +48,23 @@ func List(ctx context.Context, client *telegram.Client) ([]Item, error) {
 		if !ok {
 			continue
 		}
+
+		manageable := ch.Creator
+		if !manageable && all {
+			full, err := api.ChannelsGetFullChannel(ctx, &tg.InputChannel{
+				ChannelID:  ch.ID,
+				AccessHash: ch.AccessHash,
+			})
+			if err == nil {
+				if cf, ok := full.FullChat.(*tg.ChannelFull); ok {
+					manageable = cf.CanDeleteChannel
+				}
+			}
+		}
+		if !manageable {
+			continue
+		}
+
 		out = append(out, Item{
 			ID:         ch.ID,
 			AccessHash: ch.AccessHash,

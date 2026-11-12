@@ -61,7 +61,7 @@ func main() {
 		case "init":
 			runChannelInit(os.Args[3:])
 		case "list":
-			runChannelList()
+			runChannelList(os.Args[3:])
 		case "add":
 			runChannelAdd(os.Args[3:])
 		default:
@@ -171,8 +171,12 @@ func runChannelCreate(args []string) {
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
-// runChannelList 列出当前 user 的频道。
-func runChannelList() {
+// runChannelList 列出当前 user 能管理的频道。
+func runChannelList(args []string) {
+	fs := flag.NewFlagSet("channel list", flag.ExitOnError)
+	all := fs.Bool("all", false, "include channels where you are admin but not creator")
+	_ = fs.Parse(args)
+
 	apiID, apiHash := loadAPI()
 	key, err := crypto.LoadOrCreateKey("secrets/session.key")
 	if err != nil {
@@ -187,7 +191,7 @@ func runChannelList() {
 		tgclient.Options{})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
-		items, err := channel.List(ctx, client.Client)
+		items, err := channel.List(ctx, client.Client, *all)
 		if err != nil {
 			return err
 		}
