@@ -66,5 +66,11 @@
   "web.auth_lost": "凭据已失效，请在命令行重新登录：mytgfs auth bot / mytgfs auth user",
   "web.name_required": "卷名不能为空",
   "web.create_unavailable": "当前模式不支持建卷",
+  "web.stat_volumes": "卷数量",
+  "web.stat_files": "文件总数",
+  "web.stat_used": "总占用",
+  "web.footer": "mytgfs · 把 Telegram 当成一块盘",
+  "web.theme_tip": "切换深色 / 浅色",
+  "web.refresh_tip": "刷新状态",
   "tray.state.auth_lost": "凭据失效，请重新登录"
 }

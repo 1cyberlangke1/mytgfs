@@ -105,6 +105,13 @@ func handlePage(canCreate bool) http.HandlerFunc {
 			"restart":    i18n.T("web.restart_hint"),
 			"authLost":   i18n.T("web.auth_lost"),
 			"nameNeed":   i18n.T("web.name_required"),
+			"statVols":   i18n.T("web.stat_volumes"),
+			"statFiles":  i18n.T("web.stat_files"),
+			"statUsed":   i18n.T("web.stat_used"),
+			"footer":     i18n.T("web.footer"),
+			"lang":       i18n.Lang(),
+			"themeTip":   i18n.T("web.theme_tip"),
+			"refreshTip": i18n.T("web.refresh_tip"),
 		}
 		if canCreate {
 			labels["canCreate"] = "1"
@@ -245,70 +252,144 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 const pageHTML = `<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>mytgfs</title>
+<script>
+// 首屏前定主题：手动选择 > 系统偏好 > 深色。避免亮暗闪烁。
+(function(){
+  try {
+    var t = localStorage.getItem('mytgfs-theme');
+    if (t !== 'light' && t !== 'dark') {
+      t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+})();
+</script>
 <style>
 :root{
-  --bg0:#0b1220; --bg1:#101b30; --card:rgba(255,255,255,.055);
-  --line:rgba(255,255,255,.10); --text:#e8eefb; --muted:#8ea0bf;
-  --blue:#2aa7e0; --green:#39d98a; --amber:#f5b94c; --red:#ff6b7a;
+  --bg0:#0b1220; --bg1:#101b30;
+  --glow1:#17406a; --glow2:#123a57;
+  --card:rgba(255,255,255,.055);
+  --line:rgba(255,255,255,.10);
+  --line-strong:rgba(255,255,255,.20);
+  --text:#e8eefb; --muted:#8ea0bf;
+  --blue:#2aa7e0; --blue-deep:#1b86bb;
+  --green:#39d98a; --amber:#f5b94c; --red:#ff6b7a;
+  --chip:rgba(255,255,255,.05);
+  --btn-ghost:rgba(255,255,255,.06);
+  --input:rgba(0,0,0,.28);
+  --stat:rgba(255,255,255,.04);
+  --shadow:0 18px 50px rgba(0,0,0,.25);
+  --banner-bg:rgba(255,107,122,.12);
+  --banner-line:rgba(255,107,122,.42);
+  --banner-text:#ffd7db;
+}
+:root[data-theme="light"]{
+  --bg0:#f7f9fc; --bg1:#eef2f9;
+  --glow1:#cfe4f7; --glow2:#dde9fb;
+  --card:#ffffff;
+  --line:rgba(16,32,52,.10);
+  --line-strong:rgba(16,32,52,.20);
+  --text:#16202e; --muted:#5b6b80;
+  --blue:#1b86bb; --blue-deep:#146a95;
+  --green:#0f9d5b; --amber:#b7791f; --red:#d93a4b;
+  --chip:rgba(16,32,52,.045);
+  --btn-ghost:rgba(16,32,52,.05);
+  --input:#f4f7fc;
+  --stat:#f7f9fd;
+  --shadow:0 14px 36px rgba(23,43,77,.10);
+  --banner-bg:rgba(217,58,75,.08);
+  --banner-line:rgba(217,58,75,.32);
+  --banner-text:#a61f2e;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
   margin:0; color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
   background:
-    radial-gradient(1200px 700px at 8% -10%, #17406a 0%, transparent 55%),
-    radial-gradient(900px 600px at 110% 10%, #123a57 0%, transparent 50%),
+    radial-gradient(1200px 700px at 8% -10%, var(--glow1) 0%, transparent 55%),
+    radial-gradient(900px 600px at 110% 10%, var(--glow2) 0%, transparent 50%),
     linear-gradient(160deg,var(--bg0),var(--bg1));
   min-height:100vh; padding:28px 18px 48px;
+  transition:background-color .2s ease, color .2s ease;
 }
-.wrap{max-width:980px;margin:0 auto}
+.wrap{max-width:1000px;margin:0 auto}
 header{display:flex;align-items:center;gap:14px;margin-bottom:22px}
 header .logo{width:54px;height:54px;flex:none;filter:drop-shadow(0 8px 18px rgba(42,167,224,.35))}
 header h1{margin:0;font-size:21px;letter-spacing:.2px}
 header .sub{margin:2px 0 0;color:var(--muted);font-size:13px}
-.pill{margin-left:auto;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:600;
-  border:1px solid var(--line); background:rgba(255,255,255,.05); white-space:nowrap}
+.pill{padding:7px 14px;border-radius:999px;font-size:13px;font-weight:600;
+  border:1px solid var(--line); background:var(--chip); white-space:nowrap}
 .pill.ok{color:var(--green);border-color:rgba(57,217,138,.4);background:rgba(57,217,138,.10)}
 .pill.warn{color:var(--amber);border-color:rgba(245,185,76,.4);background:rgba(245,185,76,.10)}
 .pill.bad{color:var(--red);border-color:rgba(255,107,122,.4);background:rgba(255,107,122,.10)}
-main{display:grid;gap:16px;grid-template-columns:1fr}
+.pill.ok::before,.pill.warn::before,.pill.bad::before{
+  content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:currentColor;margin-right:8px;vertical-align:1px;
+  box-shadow:0 0 10px currentColor;animation:breathe 2.4s ease-in-out infinite;
+}
+@keyframes breathe{50%{opacity:.35}}
+.head-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
+main{display:grid;gap:16px;grid-template-columns:1fr;align-items:start}
 @media(min-width:860px){main{grid-template-columns:1.15fr .85fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 18px 16px;
-  backdrop-filter:blur(10px);box-shadow:0 18px 50px rgba(0,0,0,.25)}
-.card h2{margin:0 0 14px;font-size:14px;font-weight:600;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
+  box-shadow:var(--shadow);transition:border-color .18s ease, transform .18s ease, background-color .2s ease}
+.card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
+.card h2{margin:0 0 14px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px}
 .vol{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .vol:first-of-type{border-top:0;padding-top:0}
 .vol .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);flex:none}
-.vol .name{font-weight:600}
-.vol .meta{margin-left:auto;color:var(--muted);font-size:13px;text-align:right;line-height:1.5}
+.vol .name{font-weight:600;font-size:15px}
+.vol .meta{margin-left:auto;color:var(--muted);font-size:13px;text-align:right;line-height:1.5;font-variant-numeric:tabular-nums}
 .empty{color:var(--muted);font-size:14px;padding:6px 0}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.stat{background:var(--stat);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.stat .k{display:block;color:var(--muted);font-size:11px;letter-spacing:.4px;margin-bottom:4px}
+.stat strong{font-size:17px;font-weight:650;font-variant-numeric:tabular-nums}
 button{
-  appearance:none;border:1px solid rgba(42,167,224,.45);background:linear-gradient(180deg,#2aa7e0,#1b86bb);
+  appearance:none;border:1px solid rgba(42,167,224,.45);background:linear-gradient(180deg,var(--blue),var(--blue-deep));
   color:#fff;font:inherit;font-weight:600;padding:10px 16px;border-radius:11px;cursor:pointer;
-  transition:transform .06s ease, filter .15s ease;
+  transition:transform .06s ease, filter .15s ease, background-color .2s ease;
+  display:inline-flex;align-items:center;gap:8px;
 }
 button:hover{filter:brightness(1.08)}
 button:active{transform:translateY(1px)}
-button.ghost{background:rgba(255,255,255,.06);border-color:var(--line);color:var(--text)}
+button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+button.ghost{background:var(--btn-ghost);border-color:var(--line);color:var(--text)}
+button.iconbtn{padding:10px;border-radius:12px}
+button.iconbtn svg{width:18px;height:18px}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;flex:none}
+.theme-sun{display:none}
+:root[data-theme="light"] .theme-sun{display:block}
+:root[data-theme="light"] .theme-moon{display:none}
 .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .msg{color:var(--muted);font-size:13px;min-height:18px}
-textarea{
-  width:100%;min-height:240px;resize:vertical;border-radius:12px;border:1px solid var(--line);
-  background:rgba(0,0,0,.28);color:#dbe6fa;padding:14px;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;
-  outline:none;
+input,textarea{
+  width:100%;border-radius:12px;border:1px solid var(--line);
+  background:var(--input);color:var(--text);outline:none;
+  transition:border-color .15s ease, background-color .2s ease;
 }
-textarea:focus{border-color:rgba(42,167,224,.55)}
-input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
-  background:rgba(0,0,0,.28);color:var(--text);font:inherit;outline:none}
-input:focus{border-color:rgba(42,167,224,.55)}
+input{padding:10px 12px;font:inherit}
+textarea{
+  min-height:200px;resize:vertical;padding:14px;
+  font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+input:focus,textarea:focus{border-color:rgba(42,167,224,.55)}
+input::placeholder{color:var(--muted);opacity:.8}
+textarea::-webkit-scrollbar{width:10px}
+textarea::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
+textarea::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+textarea::-webkit-scrollbar-track{background:transparent}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 .banner{grid-column:1/-1;border-radius:14px;padding:12px 16px;font-size:13px;line-height:1.6;display:none;
-  color:#ffd7db;background:rgba(255,107,122,.12);border:1px solid rgba(255,107,122,.42)}
+  color:var(--banner-text);background:var(--banner-bg);border:1px solid var(--banner-line)}
 footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
 </style>
 </head>
@@ -331,67 +412,162 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
       <h1 id="l-title">mytgfs</h1>
       <p class="sub" id="l-subtitle"></p>
     </div>
-    <span id="pill" class="pill">…</span>
+    <div class="head-actions">
+      <button id="theme" class="ghost iconbtn" type="button">
+        <svg class="ic theme-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+        </svg>
+        <svg class="ic theme-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+        </svg>
+      </button>
+      <span id="pill" class="pill">…</span>
+    </div>
   </header>
 
   <main>
     <div id="authbar" class="banner"></div>
 
     <section class="card">
-      <h2 id="l-volumes"></h2>
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <line x1="22" x2="2" y1="12" y2="12"/>
+          <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/>
+          <line x1="6" x2="6.01" y1="16" y2="16"/>
+          <line x1="10" x2="10.01" y1="16" y2="16"/>
+        </svg>
+        <span id="l-volumes"></span>
+      </h2>
       <div id="volumes"><div class="empty">…</div></div>
     </section>
 
     <section class="card">
-      <h2 id="l-actions"></h2>
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <span id="l-actions"></span>
+      </h2>
+      <div class="stats">
+        <div class="stat"><span class="k" id="l-stat-vols"></span><strong id="stat-vols">0</strong></div>
+        <div class="stat"><span class="k" id="l-stat-files"></span><strong id="stat-files">0</strong></div>
+        <div class="stat"><span class="k" id="l-stat-used"></span><strong id="stat-used">—</strong></div>
+      </div>
       <div class="row">
-        <button id="sync"></button>
-        <button id="reload" class="ghost">↻</button>
+        <button id="sync">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85 1.03 6.53 2.7L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+          <span id="l-sync"></span>
+        </button>
+        <button id="reload" class="ghost iconbtn" type="button">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+            <path d="M3 3v5h5"/>
+          </svg>
+        </button>
       </div>
       <p class="msg" id="syncmsg"></p>
     </section>
 
     <section class="card" style="grid-column:1/-1">
-      <h2 id="l-newvol"></h2>
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+          <path d="M12 10v6M9 13h6"/>
+        </svg>
+        <span id="l-newvol"></span>
+      </h2>
       <div class="form">
         <input id="nv-name" autocomplete="off">
         <input id="nv-title" autocomplete="off">
         <input id="nv-point" autocomplete="off">
       </div>
       <div class="row" style="margin-top:12px">
-        <button id="nv-create"></button>
+        <button id="nv-create">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          <span id="l-create"></span>
+        </button>
         <span class="msg" id="nv-msg"></span>
       </div>
     </section>
 
     <section class="card" style="grid-column:1/-1">
-      <h2 id="l-config"></h2>
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+        <span id="l-config"></span>
+      </h2>
       <textarea id="cfg" spellcheck="false"></textarea>
       <div class="row" style="margin-top:12px">
-        <button id="save"></button>
+        <button id="save">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/>
+            <path d="M17 21v-8H7v8M7 3v5h8"/>
+          </svg>
+          <span id="l-save"></span>
+        </button>
         <span class="msg" id="savemsg"></span>
       </div>
     </section>
   </main>
-  <footer>mytgfs · Telegram as a drive</footer>
+  <footer id="l-footer"></footer>
 </div>
 <script>
 const L = __LABELS__;
 const $ = id => document.getElementById(id);
+document.documentElement.lang = L.lang;
 $('l-title').textContent = L.title;
 $('l-subtitle').textContent = L.subtitle;
 $('l-volumes').textContent = L.volumes;
 $('l-actions').textContent = L.actions;
 $('l-config').textContent = L.config;
-$('sync').textContent = L.sync;
-$('save').textContent = L.save;
 $('l-newvol').textContent = L.newVolume;
+$('l-sync').textContent = L.sync;
+$('l-save').textContent = L.save;
+$('l-create').textContent = L.create;
+$('l-stat-vols').textContent = L.statVols;
+$('l-stat-files').textContent = L.statFiles;
+$('l-stat-used').textContent = L.statUsed;
+$('l-footer').textContent = L.footer;
 $('nv-name').placeholder = L.fieldName;
 $('nv-title').placeholder = L.fieldTitle;
 $('nv-point').placeholder = L.fieldPoint;
-$('nv-create').textContent = L.create;
 $('authbar').textContent = L.authLost;
+$('reload').title = L.refreshTip;
+$('reload').setAttribute('aria-label', L.refreshTip);
 if (L.canCreate !== '1') { $('l-newvol').closest('section').style.display = 'none'; }
+
+// 深浅色：跟随系统，允许手动覆盖并记住选择
+const root = document.documentElement;
+const themeBtn = $('theme');
+function paintTheme(){
+  themeBtn.title = L.themeTip;
+  themeBtn.setAttribute('aria-label', L.themeTip);
+  themeBtn.setAttribute('aria-pressed', root.dataset.theme === 'light' ? 'true' : 'false');
+}
+themeBtn.onclick = () => {
+  root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+  try { localStorage.setItem('mytgfs-theme', root.dataset.theme); } catch (e) {}
+  paintTheme();
+};
+paintTheme();
+if (window.matchMedia) {
+  const mq = window.matchMedia('(prefers-color-scheme: light)');
+  const onChange = (e) => {
+    try { if (localStorage.getItem('mytgfs-theme')) return; } catch (err) {}
+    root.dataset.theme = e.matches ? 'light' : 'dark';
+    paintTheme();
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else if (mq.addListener) mq.addListener(onChange);
+}
 
 let lastState = '', lastKind = '';
 function setPill(state, kind){
@@ -399,9 +575,20 @@ function setPill(state, kind){
   p.textContent = state || '—';
   p.className = 'pill ' + (kind || '');
 }
+function fmtBytes(n){
+  if (n === null || n === undefined) return '—';
+  const u = ['B','KB','MB','GB','TB']; let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length-1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
+}
 function renderVolumes(data){
   const box = $('volumes');
   const vols = Array.isArray(data.volumes) ? data.volumes : [];
+  let files = 0, used = 0;
+  for (const v of vols) { files += Number(v.entries) || 0; used += Number(v.used) || 0; }
+  $('stat-vols').textContent = String(vols.length);
+  $('stat-files').textContent = String(files);
+  $('stat-used').textContent = fmtBytes(used);
   if (!vols.length) {
     box.innerHTML = '<div class="empty">' + (data.entries !== undefined
       ? L.entries + ': ' + data.entries : L.nodaemon) + '</div>';
@@ -418,12 +605,6 @@ function renderVolumes(data){
     el.append(dot, name, meta);
     box.append(el);
   }
-}
-function fmtBytes(n){
-  if (n === null || n === undefined) return '—';
-  const u = ['B','KB','MB','GB','TB']; let i = 0, v = Number(n);
-  while (v >= 1024 && i < u.length-1) { v /= 1024; i++; }
-  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
 }
 async function refresh(){
   try {

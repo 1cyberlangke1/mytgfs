@@ -66,5 +66,11 @@
   "web.auth_lost": "Credentials expired. Log in again from the command line: mytgfs auth bot / mytgfs auth user",
   "web.name_required": "name is required",
   "web.create_unavailable": "creating volumes is not available in this mode",
+  "web.stat_volumes": "Volumes",
+  "web.stat_files": "Files",
+  "web.stat_used": "Total used",
+  "web.footer": "mytgfs · Telegram as a drive",
+  "web.theme_tip": "Toggle light / dark",
+  "web.refresh_tip": "Refresh status",
   "tray.state.auth_lost": "credentials expired, please log in again"
 }
