@@ -57,7 +57,7 @@ func TestSmokeUploadReadDelete(t *testing.T) {
 		defer store.Delete(ctx, part.MessageID)
 
 		offset := int64(512 << 10)
-		got, err := store.ReadRange(ctx, part, offset, 1024)
+		got, err := store.ReadRange(ctx, part, offset, 1024, nil)
 		if err != nil {
 			return err
 		}

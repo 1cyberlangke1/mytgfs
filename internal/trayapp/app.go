@@ -358,6 +358,10 @@ func Run(opts Options) error {
 			fmt.Fprintf(os.Stderr, "打开索引 %s: %v\n", name, oerr)
 			return
 		}
+		// 索引是缓存，丢了用 user 会话按频道历史重建
+		if rerr := RebuildIndexIfEmpty(rootCtx, cfg, idx, channelID); rerr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("tray.mount.failed", name), rerr)
+		}
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", i18n.T("tray.mount.failed", name, perr))
@@ -375,6 +379,12 @@ func Run(opts Options) error {
 		volMu.Unlock()
 
 		var vwg sync.WaitGroup
+		// 崩溃/断网遗留的写入在后台补传，不阻塞挂载
+		vwg.Add(1)
+		go func() {
+			defer vwg.Done()
+			fsys.ResumePending()
+		}()
 		if interval := SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
 			vwg.Add(1)
 			go func() {

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,6 +42,8 @@ type fakeStore struct {
 	expired      map[int]bool
 	refreshErr   error
 	refreshCalls int
+	// uploadErr 让 Upload 直接失败，用于验证失败后内容不丢。
+	uploadErr error
 
 	// copyCalls 记录复用式复制次数；copySources 记录每次复用的源消息号。
 	copyCalls   int
@@ -91,6 +95,9 @@ func (s *fakeStore) Refresh(_ context.Context, messageID int) (*telegramstore.Pa
 }
 
 func (s *fakeStore) Upload(_ context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error) {
+	if s.uploadErr != nil {
+		return nil, s.uploadErr
+	}
 	if s.uploadStarted != nil {
 		close(s.uploadStarted)
 	}
@@ -110,7 +117,7 @@ func (s *fakeStore) Upload(_ context.Context, r io.Reader, size int64, name, mim
 	return &telegramstore.Part{MessageID: s.nextID, Size: size}, nil
 }
 
-func (s *fakeStore) ReadRange(_ context.Context, p *telegramstore.Part, offset int64, length int) ([]byte, error) {
+func (s *fakeStore) ReadRange(_ context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error) {
 	s.readCalls++
 	// 模拟 Telegram 的 file_reference 过期：第一次读报错，刷新后即可读
 	if s.expired[p.MessageID] {
@@ -124,6 +131,10 @@ func (s *fakeStore) ReadRange(_ context.Context, p *telegramstore.Part, offset i
 	end := offset + int64(length)
 	if end > int64(len(b)) {
 		end = int64(len(b))
+	}
+	// 模拟 downloader 的实际进度回调：报告文件内绝对偏移
+	if progress != nil {
+		progress(end)
 	}
 	return b[offset:end], nil
 }
@@ -152,6 +163,10 @@ func newTestFS(t *testing.T, store Store) (*FS, *index.Index, *[]uint32) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 	fs := New(context.Background(), idx, store, t.TempDir())
+	// 单测里重试不必真的等待
+	fs.retryBase = 0
+	// 先于 TempDir 清理执行：失败提交会故意保留临时文件句柄
+	t.Cleanup(fs.Close)
 	var events []uint32
 	fs.SetNotify(func(p string, action uint32) { events = append(events, action) })
 	return fs, idx, &events
@@ -551,6 +566,49 @@ func TestReadRefreshFailure(t *testing.T) {
 	}
 }
 
+// TestReadReportsDownloadProgress 进度来自下载器的实际写入量，而不是读取位置估算。
+//
+// 输入：9MiB 文件；先读 128KiB（首窗 256KiB），再读一个顺序位置（窗口放大到 1MiB），最后读末尾 1 字节
+// 输出：Transfers 的快照
+// 预期：进度依次是 256KiB、256KiB+1MiB；读到文件末尾后条目消失
+func TestReadReportsDownloadProgress(t *testing.T) {
+	store := newFakeStore()
+	data := make([]byte, 9<<20)
+	store.data[7] = data
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{Path: "/big.bin", MessageID: 7, Size: int64(len(data))})
+
+	buf := make([]byte, 128<<10)
+	if n := fs.Read("/big.bin", buf, 0, 0); n != len(buf) {
+		t.Fatalf("首次读取返回 %d", n)
+	}
+	ts := fs.Transfers()
+	if len(ts) != 1 {
+		t.Fatalf("应有 1 条进度，实际 %d", len(ts))
+	}
+	if ts[0].Path != "/big.bin" || ts[0].Done != int64(firstReadWindow) || ts[0].Total != int64(len(data)) {
+		t.Fatalf("首窗进度不符合实际下载量: %+v", ts[0])
+	}
+
+	// 紧接着上次窗口末尾继续读：窗口放大到 1MiB
+	second := int64(firstReadWindow)
+	if n := fs.Read("/big.bin", buf, second, 0); n != len(buf) {
+		t.Fatalf("第二次读取返回 %d", n)
+	}
+	ts = fs.Transfers()
+	if len(ts) != 1 || ts[0].Done != 1<<20 {
+		t.Fatalf("顺序读窗口未放大: %+v", ts)
+	}
+
+	// 跳到文件末尾，窗口回落到 256KiB；读到最后一字节时进度条目应消失
+	if n := fs.Read("/big.bin", buf[:1], int64(len(data))-1, 0); n != 1 {
+		t.Fatalf("末尾读取返回 %d", n)
+	}
+	if ts := fs.Transfers(); len(ts) != 0 {
+		t.Fatalf("读到末尾后进度应清空，实际 %+v", ts)
+	}
+}
+
 // shaOf 计算测试内容的 sha256（与 fileSHA256 同格式）。
 func shaOf(s string) string {
 	sum := sha256.Sum256([]byte(s))
@@ -711,5 +769,130 @@ func TestWriteDuplicateCopyFailure(t *testing.T) {
 	}
 	if _, ok, _ := idx.Get(context.Background(), "/d/b.txt"); ok {
 		t.Fatal("失败时不应写入索引")
+	}
+}
+
+// TestFailedCommitKeepsContent 上传失败后不能把用户写进去的内容弄丢。
+//
+// 输入：新建文件写入 8 字节，Upload 故意失败
+// 输出：Release 返回值；随后按路径读取的结果
+// 预期：Release 返回 EIO；读取仍拿到原文；临时文件保留下来等重试
+func TestFailedCommitKeepsContent(t *testing.T) {
+	store := newFakeStore()
+	store.uploadErr = errors.New("network down")
+	fs, _, _ := newTestFS(t, store)
+
+	rc, fh := fs.Create("/a.txt", fuse.O_WRONLY, 0o666)
+	if rc != 0 {
+		t.Fatalf("Create: %d", rc)
+	}
+	if n := fs.Write("/a.txt", []byte("precious"), 0, fh); n != 8 {
+		t.Fatalf("Write: %d", n)
+	}
+	if rc := fs.Release("/a.txt", fh); rc != -fuse.EIO {
+		t.Fatalf("Release 应返回 EIO，实际 %d", rc)
+	}
+
+	buf := make([]byte, 16)
+	n := fs.Read("/a.txt", buf, 0, 0)
+	if n != 8 || string(buf[:n]) != "precious" {
+		t.Fatalf("上传失败后内容丢失: n=%d content=%q", n, buf[:n])
+	}
+}
+
+// TestCommitRejectsStaleWrite 别的端已改过同一路径时，覆盖写必须失败而不是静默丢弃。
+//
+// 输入：索引里 /a.txt 是 msg=1；写打开后把索引换成 msg=2（模拟另一端的提交）
+// 输出：Release 返回值、上传次数、索引最终指向
+// 预期：返回 EBUSY，上传 0 次，索引仍是 msg=2
+func TestCommitRejectsStaleWrite(t *testing.T) {
+	store := newFakeStore()
+	store.data[1] = []byte("old")
+	store.data[2] = []byte("other")
+	fs, idx, _ := newTestFS(t, store)
+	putFile(t, idx, index.File{Path: "/a.txt", MessageID: 1, Size: 3, Sha256: shaOf("old")})
+
+	rc, fh := fs.Open("/a.txt", fuse.O_WRONLY)
+	if rc != 0 {
+		t.Fatalf("Open: %d", rc)
+	}
+	// 模拟另一端提交：索引指向新消息
+	putFile(t, idx, index.File{Path: "/a.txt", MessageID: 2, Size: 5, Sha256: shaOf("other")})
+	if n := fs.Write("/a.txt", []byte("mine"), 0, fh); n != 4 {
+		t.Fatalf("Write: %d", n)
+	}
+	if rc := fs.Release("/a.txt", fh); rc != -fuse.EBUSY {
+		t.Fatalf("应返回 EBUSY，实际 %d", rc)
+	}
+	if len(store.uploads) != 0 {
+		t.Fatalf("冲突时不应上传，实际上传 %d 次", len(store.uploads))
+	}
+	got, ok, err := idx.Get(context.Background(), "/a.txt")
+	if err != nil || !ok || got.MessageID != 2 {
+		t.Fatalf("索引被覆盖: ok=%v err=%v msg=%d", ok, err, got.MessageID)
+	}
+}
+
+// TestResumePendingUploadsInterruptedWrite 崩溃遗留的临时文件在下次启动时补传。
+//
+// 输入：手工造一条 pending 记录 + 一个临时文件（模拟上次提交被打断），然后调用 ResumePending
+// 输出：索引记录、pending 表、临时文件
+// 预期：索引指向新消息且大小/摘要正确；pending 表清空；临时文件被删除
+func TestResumePendingUploadsInterruptedWrite(t *testing.T) {
+	store := newFakeStore()
+	store.nextID = 20
+	fs, idx, _ := newTestFS(t, store)
+	ctx := context.Background()
+
+	tmp := filepath.Join(fs.tmpDir, ".mytgfs-upload-crash")
+	if err := os.WriteFile(tmp, []byte("recovered"), 0o600); err != nil {
+		t.Fatalf("写临时文件: %v", err)
+	}
+	if err := idx.PutPending(ctx, index.PendingUpload{
+		Path: "/r.txt", Temp: tmp, Size: 9, Mtime: 1,
+	}); err != nil {
+		t.Fatalf("PutPending: %v", err)
+	}
+
+	fs.ResumePending()
+
+	got, ok, err := idx.Get(ctx, "/r.txt")
+	if err != nil || !ok {
+		t.Fatalf("补传后索引里应有记录: ok=%v err=%v", ok, err)
+	}
+	if got.Size != 9 || got.Sha256 != shaOf("recovered") {
+		t.Fatalf("补传记录内容不符: %+v", got)
+	}
+	if rows, _ := idx.ListPending(ctx); len(rows) != 0 {
+		t.Fatalf("补传成功后 pending 应清空，实际 %+v", rows)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("补传成功后临时文件应删除，实际 err=%v", err)
+	}
+}
+
+// TestResumePendingDropsMissingTemp 临时文件已丢失时清掉记录，不反复重试。
+//
+// 输入：一条指向不存在文件的 pending 记录
+// 输出：pending 表
+// 预期：记录被删除
+func TestResumePendingDropsMissingTemp(t *testing.T) {
+	store := newFakeStore()
+	fs, idx, _ := newTestFS(t, store)
+	ctx := context.Background()
+
+	if err := idx.PutPending(ctx, index.PendingUpload{
+		Path: "/gone.txt", Temp: filepath.Join(fs.tmpDir, ".mytgfs-upload-gone"), Size: 3, Mtime: 1,
+	}); err != nil {
+		t.Fatalf("PutPending: %v", err)
+	}
+
+	fs.ResumePending()
+
+	if rows, _ := idx.ListPending(ctx); len(rows) != 0 {
+		t.Fatalf("临时文件丢失时应清掉记录，实际 %+v", rows)
+	}
+	if len(store.uploads) != 0 {
+		t.Fatalf("不应尝试上传，实际 %d 次", len(store.uploads))
 	}
 }

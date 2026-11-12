@@ -11,15 +11,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/golang-lru/v2"
 	"github.com/winfsp/cgofuse/fuse"
@@ -85,15 +88,31 @@ type FS struct {
 	// rc 是预读窗口的 LRU 缓存（hashicorp/golang-lru 自带淘汰与并发保护）
 	rc     *lru.Cache[string, *readCache]
 	rcOnce sync.Once
+
+	// ra 记录每个路径的顺序读进度，用于自适应放大预读窗口
+	ra     *lru.Cache[string, *readAhead]
+	raOnce sync.Once
+
+	// retryBase 是上传重试的首次等待时长，之后逐次翻倍；测试置 0 跳过等待
+	retryBase time.Duration
 }
 
 // 预读窗口参数。
 const (
-	// readAheadWindow 是一次预读的字节数：8MB = 8 个 1MB 块并行拉取
-	readAheadWindow = 8 << 20
+	// firstReadWindow 是第一次预读的窗口：缩略图/属性读取只需要文件头，
+	// 用 256KB 起步，避免看一眼图片就把 8MB 拉下来
+	firstReadWindow = 256 << 10
+	// maxReadWindow 是顺序读放大后的窗口上限：8MB = 8 个 1MB 块并行拉取
+	maxReadWindow = 8 << 20
 	// readAheadMaxFiles 是同时缓存的窗口数上限，避免内存无限增长
 	readAheadMaxFiles = 2
 )
+
+// readAhead 记录一个路径的顺序读进度。
+type readAhead struct {
+	next   int64 // 上次预读结束的绝对偏移
+	window int64 // 当前窗口大小
+}
 
 // readCache 是一个路径最近一次预读的窗口。
 type readCache struct {
@@ -105,7 +124,7 @@ type readCache struct {
 //
 // 输入：file 索引条目；ofst 起始偏移；length 需要的长度
 // 输出：字节切片；是否命中缓存；error
-// 预期：窗口按 readAheadWindow 对齐；读越界由调用方先裁剪；
+// 预期：窗口由 windowFor 自适应决定；读越界由调用方先裁剪；
 // 拉取失败返回 error，由调用方报 EIO
 func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, error) {
 	f.rcOnce.Do(func() {
@@ -122,15 +141,13 @@ func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, e
 		return c.data[ofst-c.off : end-c.off], true, nil
 	}
 
-	start := ofst / readAheadWindow * readAheadWindow
-	want := int64(readAheadWindow)
-	if start+want > file.Size {
-		want = file.Size - start
-	}
+	start, want, window := f.windowFor(file, ofst)
 	if want <= 0 {
 		return nil, false, nil
 	}
-	data, nfile, err := f.readRangeWithRefresh(file, start, int(want))
+	data, nfile, err := f.readRangeWithRefresh(file, start, int(want), func(done int64) {
+		f.trackRead(file.Path, done, file.Size)
+	})
 	if err != nil {
 		debugf("vfs: 预读失败 %s start=%d len=%d: %v", shortPath(file.Path), start, want, err)
 		return nil, false, err
@@ -140,8 +157,38 @@ func (f *FS) cacheRead(file index.File, ofst int64, length int) ([]byte, bool, e
 	}
 	if nfile.DocumentID == file.DocumentID {
 		f.rc.Add(file.Path, &readCache{off: start, data: data})
+		f.ra.Add(file.Path, &readAhead{next: start + int64(len(data)), window: window})
 	}
 	return data[ofst-start : end-start], true, nil
+}
+
+// windowFor 选本次预读的起点与窗口大小。
+//
+// 输入：file 索引条目；ofst 请求偏移
+// 输出：窗口起点；窗口长度；本轮窗口大小
+// 预期：顺序读从 256KB 起步，每次翻 4 倍直到 8MB；
+// 跳读或换位置回落到 256KB，避免看一张缩略图就拉 8MB
+func (f *FS) windowFor(file index.File, ofst int64) (start, want, window int64) {
+	f.raOnce.Do(func() {
+		c, err := lru.New[string, *readAhead](64)
+		if err != nil {
+			panic(err)
+		}
+		f.ra = c
+	})
+	window = firstReadWindow
+	if st, ok := f.ra.Get(file.Path); ok && ofst == st.next {
+		window = st.window * 4
+		if window > maxReadWindow {
+			window = maxReadWindow
+		}
+	}
+	start = ofst / window * window
+	want = window
+	if start+want > file.Size {
+		want = file.Size - start
+	}
+	return start, want, window
 }
 
 // dropCache 清掉某个路径的预读窗口。
@@ -155,6 +202,9 @@ func (f *FS) dropCache(p string) {
 		f.rc = c
 	})
 	f.rc.Remove(p)
+	if f.ra != nil {
+		f.ra.Remove(p)
+	}
 }
 
 // Transfer 是一个正在下载的文件的进度。
@@ -214,16 +264,33 @@ func (f *FS) trackRead(p string, done, total int64) {
 	}
 }
 
+// clearProgress 移除某个路径的下载进度条目。
+//
+// 输入：p 路径
+// 输出：无
+// 预期：关闭文件或读到末尾后调用，避免面板残留已结束的下载
+func (f *FS) clearProgress(p string) {
+	f.progMu.Lock()
+	delete(f.prog, p)
+	f.progMu.Unlock()
+}
+
+// openFile 是一个待提交的节点。
 type openFile struct {
 	path  string
 	tmp   *os.File
 	dirty bool
 	size  int64
+	// baseMsg 是写打开时索引里的消息号；提交前用它检测别的端是否已经改过同一个路径。
+	// 0 表示打开时文件还不存在。
+	baseMsg int
 	// refs 是同时打开该节点的 handle 数；归零才允许提交并清理 pending。
 	refs int
 	// committing 为真表示有 goroutine 正在上传该节点；此时节点仍留在
 	// pending 里，保证名字和内容对读操作依然可见。
 	committing bool
+	// commitDone 在提交结束时关闭；写打开撞上提交中的节点时等它结束再重试。
+	commitDone chan struct{}
 	// done 为真表示已提交完成，后续 Release 不得重复上传。
 	done bool
 }
@@ -232,18 +299,69 @@ type openFile struct {
 //
 // 输入：ctx；idx 索引；store 存储；tmpDir 写入临时目录
 // 输出：*FS
-// 预期：tmpDir 为空时使用系统临时目录
+// 预期：tmpDir 为空时使用系统临时目录；顺带清掉 7 天前的上传临时文件
 func New(ctx context.Context, idx *index.Index, store Store, tmpDir string) *FS {
 	if tmpDir == "" {
 		tmpDir = os.TempDir()
 	}
+	cleanStaleTemps(tmpDir)
 	return &FS{
-		idx:     idx,
-		store:   store,
-		ctx:     ctx,
-		tmpDir:  tmpDir,
-		handles: map[uint64]*openFile{},
-		pending: map[string]*openFile{},
+		idx:       idx,
+		store:     store,
+		ctx:       ctx,
+		tmpDir:    tmpDir,
+		handles:   map[uint64]*openFile{},
+		pending:   map[string]*openFile{},
+		retryBase: time.Second,
+	}
+}
+
+// cleanStaleTemps 删除长时间未使用的上传临时文件。
+//
+// 输入：临时目录
+// 输出：无
+// 预期：只删 7 天前的 `.mytgfs-upload-*`，正在进行的写入不会被误删
+func cleanStaleTemps(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), ".mytgfs-upload-") {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
+// Close 释放待上传节点。
+//
+// 输入：无
+// 输出：无
+// 预期：卸载时调用；未提交的内容不删除，日志给出临时文件路径供抢救
+func (f *FS) Close() {
+	f.mu.Lock()
+	pending := make([]*openFile, 0, len(f.pending))
+	for p, h := range f.pending {
+		pending = append(pending, h)
+		delete(f.pending, p)
+	}
+	f.handles = map[uint64]*openFile{}
+	f.mu.Unlock()
+	for _, h := range pending {
+		if h.tmp == nil {
+			continue
+		}
+		_ = h.tmp.Close()
+		if _, err := os.Stat(h.tmp.Name()); err == nil {
+			slog.Warn("vfs: 卸载时仍有未上传的内容",
+				"path", h.path, "temp", h.tmp.Name())
+		}
 	}
 }
 
@@ -495,12 +613,15 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	p = clean(p)
 	f.mu.Lock()
 	if h, ok := f.pending[p]; ok {
-		// 正在提交的节点不能直接挂写句柄：临时文件马上要被关闭和删除。
-		// 写打开时另起一个节点并复制当前内容，提交完成后由新节点负责上传。
+		// 提交中的节点不能挂写句柄：它马上要关闭并删除临时文件。
+		// 等提交结束再重开，避免读到已经被删掉的临时文件。
 		if h.committing && flags&(fuse.O_WRONLY|fuse.O_RDWR|fuse.O_TRUNC) != 0 {
-			src, size := h.tmp, h.size
+			done := h.commitDone
 			f.mu.Unlock()
-			return f.openWriteFrom(p, src, size, flags)
+			if done != nil {
+				<-done
+			}
+			return f.Open(p, flags)
 		}
 		hid := f.newHandle(h)
 		f.mu.Unlock()
@@ -526,7 +647,7 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 			debugf("vfs: Open %s temp error: %v", p, err)
 			return -fuse.EIO, 0
 		}
-		h := &openFile{path: p, tmp: tmp, dirty: true}
+		h := &openFile{path: p, tmp: tmp, dirty: true, baseMsg: file.MessageID}
 		// 没带 O_TRUNC 时保留原内容，避免随机写把前缀丢掉
 		if flags&fuse.O_TRUNC == 0 && file.Size > 0 {
 			if err := f.copyExisting(file, tmp); err != nil {
@@ -571,36 +692,6 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	return 0, f.newHandle(nil)
 }
 
-// openWriteFrom 用另一个临时文件的内容新建写节点。
-//
-// 输入：路径 p、来源临时文件 src、来源大小 size、打开标志 flags
-// 输出：0 与句柄，或负 errno
-// 预期：原节点正在上传时也能写打开；带 O_TRUNC 时丢弃原内容，
-//
-//	否则复制 size 字节，由新节点在 Release 时上传
-func (f *FS) openWriteFrom(p string, src *os.File, size int64, flags int) (int, uint64) {
-	tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
-	if err != nil {
-		debugf("vfs: Open %s temp error: %v", p, err)
-		return -fuse.EIO, 0
-	}
-	h := &openFile{path: p, tmp: tmp, dirty: true}
-	if flags&fuse.O_TRUNC == 0 && size > 0 {
-		if _, err := io.CopyN(tmp, io.NewSectionReader(src, 0, size), size); err != nil {
-			debugf("vfs: Open %s copy committing content failed: %v", p, err)
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-			return -fuse.EIO, 0
-		}
-		h.size = size
-	}
-	f.mu.Lock()
-	f.pending[p] = h
-	hid := f.newHandle(h)
-	f.mu.Unlock()
-	return 0, hid
-}
-
 // copyExisting 把索引里已有文件的内容复制到临时文件。
 //
 // 输入：索引记录 file、目标临时文件 tmp
@@ -614,7 +705,9 @@ func (f *FS) copyExisting(file index.File, tmp *os.File) error {
 		if off+n > file.Size {
 			n = file.Size - off
 		}
-		data, newFile, err := f.readRangeWithRefresh(file, off, int(n))
+		data, newFile, err := f.readRangeWithRefresh(file, off, int(n), func(done int64) {
+			f.trackRead(file.Path, done, file.Size)
+		})
 		if err != nil {
 			return err
 		}
@@ -656,11 +749,11 @@ func partOf(file index.File) *telegramstore.Part {
 
 // readRangeWithRefresh 读远程区间，file_reference 过期时刷新后重试一次。
 //
-// 输入：索引记录 file、偏移 ofst、长度 length
+// 输入：索引记录 file、偏移 ofst、长度 length、progress 实际下载进度回调（可为 nil）
 // 输出：数据、可能已更新的索引记录、error
 // 预期：刷新成功时把新引用写回索引；失败时返回原始错误，不修改索引
-func (f *FS) readRangeWithRefresh(file index.File, ofst int64, length int) ([]byte, index.File, error) {
-	data, err := f.store.ReadRange(f.ctx, partOf(file), ofst, length)
+func (f *FS) readRangeWithRefresh(file index.File, ofst int64, length int, progress func(done int64)) ([]byte, index.File, error) {
+	data, err := f.store.ReadRange(f.ctx, partOf(file), ofst, length, progress)
 	if err == nil || !telegramstore.IsFileReferenceError(err) {
 		return data, file, err
 	}
@@ -676,7 +769,7 @@ func (f *FS) readRangeWithRefresh(file index.File, ofst int64, length int) ([]by
 	if perr := f.idx.Replace(f.ctx, file); perr != nil {
 		debugf("vfs: 刷新引用后写索引失败 %s: %v", shortPath(file.Path), perr)
 	}
-	data, err = f.store.ReadRange(f.ctx, partOf(file), ofst, length)
+	data, err = f.store.ReadRange(f.ctx, partOf(file), ofst, length, progress)
 	return data, file, err
 }
 
@@ -744,13 +837,18 @@ func (f *FS) Read(p string, buff []byte, ofst int64, fh uint64) int {
 	}
 	if !hit {
 		var err error
-		data, _, err = f.readRangeWithRefresh(file, ofst, length)
+		data, _, err = f.readRangeWithRefresh(file, ofst, length, func(done int64) {
+			f.trackRead(file.Path, done, file.Size)
+		})
 		if err != nil {
 			debugf("vfs: Read 远端失败 %s ofst=%d len=%d msg=%d: %v", shortPath(p), ofst, length, file.MessageID, err)
 			return -fuse.EIO
 		}
 	}
-	f.trackRead(p, ofst+int64(len(data)), file.Size)
+	// 读到文件末尾时清掉进度条目；下载中的条目由 downloader 的实际进度维护
+	if ofst+int64(len(data)) >= file.Size {
+		f.clearProgress(p)
+	}
 	return copy(buff, data)
 }
 
@@ -781,6 +879,7 @@ func (f *FS) Write(p string, buff []byte, ofst int64, fh uint64) int {
 func (f *FS) Release(p string, fh uint64) int {
 	debugf("vfs: Release %s fh=%d", p, fh)
 	f.dropCache(clean(p))
+	f.clearProgress(clean(p))
 	f.mu.Lock()
 	h := f.handles[fh]
 	delete(f.handles, fh)
@@ -801,6 +900,7 @@ func (f *FS) Release(p string, fh uint64) int {
 	// 提交期间保留 pending 里的节点：名字和内容对读操作仍然可见，
 	// 避免「刚写完立刻读」拿到 ENOENT（Windows 上传耗时可达数秒）
 	h.committing = true
+	h.commitDone = make(chan struct{})
 	f.mu.Unlock()
 
 	rc := f.commit(h)
@@ -814,16 +914,31 @@ func (f *FS) Release(p string, fh uint64) int {
 //
 // 输入：已标记 committing 的节点 h
 // 输出：0 或负 errno
-// 预期：与 Rename/Unlink/Mkdir/Rmdir 串行，避免改名拿到提交前的旧消息号
+// 预期：与 Rename/Unlink/Mkdir/Rmdir 串行；只有成功才关闭并删除临时文件，
+// 失败时保留临时文件，用户仍能读取，也能再写打开重试上传
 func (f *FS) commit(h *openFile) int {
 	f.opMu.Lock()
 	defer f.opMu.Unlock()
 
-	defer h.tmp.Close()
-	defer os.Remove(h.tmp.Name())
+	rc := f.commitLocked(h)
+	if rc == 0 {
+		_ = h.tmp.Close()
+		_ = os.Remove(h.tmp.Name())
+	}
+	return rc
+}
 
+func (f *FS) commitLocked(h *openFile) int {
 	// 覆盖写：记下旧的索引记录，提交成功后删掉旧消息，避免频道里留孤儿
 	old, hadOld, _ := f.idx.Get(f.ctx, h.path)
+
+	// 并发写保护：打开时记下的消息号与当前索引不一致，说明别的端或另一个
+	// 写入已经提交了新内容；此刻覆盖会静默丢掉对方的写入，所以拒绝提交。
+	// 临时文件保留在 pending 里，用户还能把内容读出来另存。
+	if hadOld && old.MessageID > 0 && old.MessageID != h.baseMsg {
+		debugf("vfs: %s 已被其他写入更新 msg %d -> %d，拒绝覆盖", shortPath(h.path), h.baseMsg, old.MessageID)
+		return -fuse.EBUSY
+	}
 
 	if h.size == 0 {
 		// 空文件：先删旧记录再写入 0 字节记录，保证「截断为空」也生效
@@ -870,28 +985,36 @@ func (f *FS) commit(h *openFile) int {
 		return 0
 	}
 
+	// 从这里到上传成功之间可能崩溃或断网：先落一条待补传记录，
+	// 重启后 ResumePending 会把临时文件继续传完，内容不会丢
+	if err := f.idx.PutPending(f.ctx, index.PendingUpload{
+		Path:  h.path,
+		Temp:  h.tmp.Name(),
+		Size:  h.size,
+		Mtime: nowUnix(),
+	}); err != nil {
+		debugf("vfs: 记录待补传 %s 失败: %v", shortPath(h.path), err)
+		return -fuse.EIO
+	}
+
 	// 频道里已有相同内容：不传输字节，只加一条引用同一 document 的消息。
 	// 文件本体只有一份，多个路径各持一条引用；删除路径只摘自己的引用。
 	dup, found, derr := f.idx.FindContent(f.ctx, path.Dir(h.path), h.size, sha)
 	if derr != nil {
 		debugf("vfs: 查询同内容文件失败 %s: %v", shortPath(h.path), derr)
 	}
-	var part *telegramstore.Part
+	var reuse *index.File
 	if found {
-		part, err = f.store.Copy(f.ctx, partOf(dup), path.Base(h.path), "application/octet-stream", caption)
-		if err != nil {
-			debugf("vfs: Release 复用失败 %s <- %s: %v", shortPath(h.path), shortPath(dup.Path), err)
-			return -fuse.EIO
-		}
+		reuse = &dup
+	}
+	part, err := f.uploadPart(h, caption, reuse)
+	if err != nil {
+		debugf("vfs: Release 上传 %s 失败: %v", shortPath(h.path), err)
+		return -fuse.EIO
+	}
+	if reuse != nil {
 		debugf("vfs: %s 复用 %s 的 document=%d msg=%d",
-			shortPath(h.path), shortPath(dup.Path), dup.DocumentID, part.MessageID)
-	} else {
-		part, err = f.store.Upload(f.ctx, io.LimitReader(h.tmp, h.size), h.size,
-			path.Base(h.path), "application/octet-stream", caption)
-		if err != nil {
-			debugf("vfs: Release upload %s failed: %v", h.path, err)
-			return -fuse.EIO
-		}
+			shortPath(h.path), shortPath(reuse.Path), reuse.DocumentID, part.MessageID)
 	}
 	if err := f.idx.Put(f.ctx, index.File{
 		Path:          h.path,
@@ -905,6 +1028,9 @@ func (f *FS) commit(h *openFile) int {
 	}); err != nil {
 		debugf("vfs: Release index %s failed: %v", h.path, err)
 		return -fuse.EIO
+	}
+	if err := f.idx.DeletePending(f.ctx, h.path); err != nil {
+		debugf("vfs: 清除待补传记录 %s 失败: %v", shortPath(h.path), err)
 	}
 	if hadOld && old.MessageID > 0 {
 		if err := f.store.Delete(f.ctx, old.MessageID); err != nil {
@@ -927,12 +1053,108 @@ func (f *FS) finishCommit(h *openFile, ok bool) {
 	defer f.mu.Unlock()
 	if !ok {
 		h.committing = false
-		return
 	}
 	if f.pending[h.path] == h {
-		delete(f.pending, h.path)
+		if ok {
+			delete(f.pending, h.path)
+		}
+		h.done = ok
 	}
-	h.done = true
+	if h.commitDone != nil {
+		close(h.commitDone)
+		h.commitDone = nil
+	}
+}
+
+// uploadAttempts 是一次提交里最多尝试的上传次数（含首次）。
+const uploadAttempts = 3
+
+// uploadPart 上传或引用文件内容，失败时按 retryBase 退避重试。
+//
+// 输入：h 提交中的节点；caption 说明；reuse 非空表示复用已有 document
+// 输出：Part；error
+// 预期：每次尝试前把临时文件定位到开头；ErrTooLarge 不重试（重试也不会成功）
+func (f *FS) uploadPart(h *openFile, caption string, reuse *index.File) (*telegramstore.Part, error) {
+	delay := f.retryBase
+	var lastErr error
+	for attempt := 1; attempt <= uploadAttempts; attempt++ {
+		if _, err := h.tmp.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		var part *telegramstore.Part
+		var err error
+		if reuse != nil {
+			part, err = f.store.Copy(f.ctx, partOf(*reuse), path.Base(h.path), "application/octet-stream", caption)
+		} else {
+			part, err = f.store.Upload(f.ctx, io.LimitReader(h.tmp, h.size), h.size,
+				path.Base(h.path), "application/octet-stream", caption)
+		}
+		if err == nil {
+			return part, nil
+		}
+		lastErr = err
+		if errors.Is(err, telegramstore.ErrTooLarge) || attempt == uploadAttempts {
+			break
+		}
+		debugf("vfs: 上传 %s 第 %d 次失败: %v，%s 后重试", shortPath(h.path), attempt, err, delay)
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		delay *= 2
+	}
+	return nil, lastErr
+}
+
+// ResumePending 补传上次崩溃或断网遗留的写入。
+//
+// 输入：无
+// 输出：无
+// 预期：挂载启动后在后台调用；成功的记录连同临时文件一起清掉，
+// 失败的保留下来等下次启动再试
+func (f *FS) ResumePending() {
+	rows, err := f.idx.ListPending(f.ctx)
+	if err != nil {
+		slog.Warn("vfs: 读取待补传记录失败", "err", err)
+		return
+	}
+	for _, p := range rows {
+		if f.ctx.Err() != nil {
+			return
+		}
+		f.resumeOne(p)
+	}
+}
+
+// resumeOne 补传一条记录。
+//
+// 输入：p 待补传记录
+// 输出：无
+// 预期：临时文件缺失或大小不符时清掉记录；
+// 补传成功后索引指向新消息，临时文件由 commit 删除
+func (f *FS) resumeOne(p index.PendingUpload) {
+	info, err := os.Stat(p.Temp)
+	if err != nil || info.Size() != p.Size {
+		// 临时文件已不在或大小不符：没法补传，清掉记录免得每次启动重试
+		_ = f.idx.DeletePending(f.ctx, p.Path)
+		slog.Warn("vfs: 待补传的临时文件不可用", "path", shortPath(p.Path), "temp", p.Temp)
+		return
+	}
+	tmp, err := os.Open(p.Temp)
+	if err != nil {
+		slog.Warn("vfs: 打开待补传临时文件失败", "path", shortPath(p.Path), "err", err)
+		return
+	}
+	base := 0
+	if cur, ok, gerr := f.idx.Get(f.ctx, p.Path); gerr == nil && ok {
+		base = cur.MessageID
+	}
+	h := &openFile{path: p.Path, tmp: tmp, size: p.Size, baseMsg: base, dirty: true, refs: 1}
+	if rc := f.commit(h); rc != 0 {
+		_ = tmp.Close()
+		slog.Warn("vfs: 补传失败，下次启动重试", "path", shortPath(p.Path), "rc", rc)
+		return
+	}
+	slog.Info("vfs: 已补传上次未完成的写入", "path", shortPath(p.Path), "size", p.Size)
 }
 
 // Unlink 删除文件：先删消息，再删索引。
@@ -941,11 +1163,33 @@ func (f *FS) Unlink(p string) int {
 	defer f.opMu.Unlock()
 	p = clean(p)
 	f.dropCache(p)
+	f.clearProgress(p)
+	// 该路径若有崩溃遗留的补传记录，一并清掉，避免下次启动又把它传上去
+	if err := f.idx.DeletePending(f.ctx, p); err != nil {
+		debugf("vfs: Unlink 清除待补传记录 %s 失败: %v", shortPath(p), err)
+	}
+
+	// 未提交的节点直接丢弃，避免临时文件泄漏
+	f.mu.Lock()
+	ph, hadPending := f.pending[p]
+	if hadPending {
+		delete(f.pending, p)
+	}
+	f.mu.Unlock()
+	if hadPending && ph.tmp != nil {
+		_ = ph.tmp.Close()
+		_ = os.Remove(ph.tmp.Name())
+	}
+
 	file, ok, err := f.idx.Get(f.ctx, p)
 	if err != nil {
 		return -fuse.EIO
 	}
 	if !ok {
+		if hadPending {
+			f.notifyChange(p, fuse.NOTIFY_UNLINK)
+			return 0
+		}
 		return -fuse.ENOENT
 	}
 	if err := f.store.Delete(f.ctx, file.MessageID); err != nil {

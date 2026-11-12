@@ -290,7 +290,7 @@ func TestReadRangeAlignsToPart(t *testing.T) {
 	}
 	p := &Part{DocumentID: 1, AccessHash: 2, FileReference: []byte{9}, Size: int64(len(api.fileData))}
 
-	data, err := s.ReadRange(context.Background(), p, 1500, 1200)
+	data, err := s.ReadRange(context.Background(), p, 1500, 1200, nil)
 	if err != nil {
 		t.Fatalf("ReadRange: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestReadRangeOutOfBounds(t *testing.T) {
 	s := newTestStore(api)
 	p := &Part{Size: 10}
 
-	if _, err := s.ReadRange(context.Background(), p, 5, 10); !errors.Is(err, ErrBadRange) {
+	if _, err := s.ReadRange(context.Background(), p, 5, 10, nil); !errors.Is(err, ErrBadRange) {
 		t.Fatalf("应返回 ErrBadRange，实际 %v", err)
 	}
 	if len(api.getFile) != 0 {

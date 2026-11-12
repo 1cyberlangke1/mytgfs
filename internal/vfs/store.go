@@ -15,7 +15,7 @@ import (
 // Store 抽象 vfs 需要的远程存储方法。
 type Store interface {
 	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
-	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int) ([]byte, error)
+	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error)
 	Delete(ctx context.Context, ids ...int) error
 	Rename(ctx context.Context, messageID int, caption string) error
 	// Refresh 按消息 ID 重新拉取 document 元数据；file_reference 过期时用

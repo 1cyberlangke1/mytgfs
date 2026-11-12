@@ -156,3 +156,49 @@ func hasEntry(entries []Entry, name string, isDir bool) bool {
 	}
 	return false
 }
+
+// TestPendingRoundtrip 待补传表按 path 覆盖写入、可列出、可删除。
+//
+// 输入：同一路径写两次不同的临时文件，再对另一路径写一条
+// 输出：ListPending 的结果
+// 预期：同路径只保留后一条；删除后只剩另一条；删除不存在的路径不报错
+func TestPendingRoundtrip(t *testing.T) {
+	ctx := context.Background()
+	idx, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("打开索引: %v", err)
+	}
+	defer idx.Close()
+
+	if err := idx.PutPending(ctx, PendingUpload{Path: "/a.txt", Temp: "t1", Size: 1, Mtime: 1}); err != nil {
+		t.Fatalf("PutPending: %v", err)
+	}
+	if err := idx.PutPending(ctx, PendingUpload{Path: "/a.txt", Temp: "t2", Size: 2, Mtime: 2}); err != nil {
+		t.Fatalf("PutPending 覆盖: %v", err)
+	}
+	if err := idx.PutPending(ctx, PendingUpload{Path: "/b.txt", Temp: "t3", Size: 3, Mtime: 3}); err != nil {
+		t.Fatalf("PutPending b: %v", err)
+	}
+
+	rows, err := idx.ListPending(ctx)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Path != "/a.txt" || rows[0].Temp != "t2" || rows[1].Path != "/b.txt" {
+		t.Fatalf("待补传记录不符: %+v", rows)
+	}
+
+	if err := idx.DeletePending(ctx, "/a.txt"); err != nil {
+		t.Fatalf("DeletePending: %v", err)
+	}
+	if err := idx.DeletePending(ctx, "/nope.txt"); err != nil {
+		t.Fatalf("删除不存在的记录不应报错: %v", err)
+	}
+	rows, err = idx.ListPending(ctx)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Path != "/b.txt" {
+		t.Fatalf("删除后剩余记录不符: %+v", rows)
+	}
+}

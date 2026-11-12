@@ -14,6 +14,7 @@ import (
 // 输出：error
 // 预期：ctx 取消时自动 Unmount；WinFsp 未安装时返回错误
 func Mount(ctx context.Context, fs *FS, point, volname string) error {
+	defer fs.Close()
 	host := fuse.NewFileSystemHost(fs)
 	host.SetCapReaddirPlus(true)
 	// 目录变更后主动通知资源管理器刷新，否则新文件要按 F5 才出现

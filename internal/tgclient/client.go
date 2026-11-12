@@ -83,6 +83,8 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		Middlewares:       []telegram.Middleware{waiter},
 		OnConnectionState: mapConnState(opts.OnConnState),
 		OnAuthLost:        onAuthLost,
+		// AllowCDN 让大文件走 CDN 边缘节点，而不是全部挤在主 DC
+		AllowCDN: true,
 	})
 	return &Client{Client: client, waiter: waiter}
 }

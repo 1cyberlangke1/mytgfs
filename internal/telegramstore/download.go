@@ -38,13 +38,14 @@ func (w *rangeWriterAt) WriteAt(p []byte, off int64) (int, error) {
 
 // ReadRange 读取 document 的任意区间。
 //
-// 输入：p 已存储 Part；offset 起始；length 长度
+// 输入：p 已存储 Part；offset 起始；length 长度；progress 可选的已下载字节回调
 // 输出：恰好 length 字节
 // 预期：
 //   - 分块、并发、CDN 重定向、file_reference 过期重试全部交给 gotd downloader
 //   - offset 会对齐到 partSize，多取的字节在返回前裁掉
+//   - progress 收到的是文件内绝对偏移，来自 downloader 的实际写入进度，不是调用方估算
 //   - 中断无副作用，重试即可
-func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int) ([]byte, error) {
+func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int, progress func(done int64)) ([]byte, error) {
 	if offset < 0 || length < 0 || offset+int64(length) > p.Size {
 		return nil, ErrBadRange
 	}
@@ -69,11 +70,14 @@ func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int
 	}
 	// WithSize(end) 让 downloader 在 end 处停止，而不是读到文件末尾
 	w := &rangeWriterAt{buf: buf, base: start}
-	if _, err := s.dl.Download(s.api, loc).
+	b := s.dl.Download(s.api, loc).
 		WithOffset(start).
 		WithSize(end).
-		WithThreads(s.threads()).
-		Parallel(ctx, w); err != nil {
+		WithThreads(s.threads())
+	if progress != nil {
+		b = b.WithProgress(func(done, _ int64) { progress(done) })
+	}
+	if _, err := b.Parallel(ctx, w); err != nil {
 		return nil, fmt.Errorf("下载 %d..%d: %w", start, end, err)
 	}
 

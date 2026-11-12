@@ -164,3 +164,42 @@ func (f TelegramFetcher) history(ctx context.Context, minID, limit int) ([]Messa
 	}
 	return out, nil
 }
+
+// HistoryBefore 拉取比 offsetID 更早的一页，用于倒序重建索引。
+//
+// 输入：offsetID 上一页最小的消息 ID（0 表示从最新开始）；limit 原始条数
+// 输出：文件消息；下一页游标（本页最小消息 ID，0 表示已到底）
+// 预期：游标按原始消息计算，非文件消息也参与，避免整页都是文本时提前停止
+func (f TelegramFetcher) HistoryBefore(ctx context.Context, offsetID, limit int) ([]Message, int, error) {
+	req := &tg.MessagesGetHistoryRequest{
+		Peer:  &tg.InputPeerChannel{ChannelID: f.ChannelID, AccessHash: f.AccessHash},
+		Limit: limit,
+	}
+	if offsetID > 0 {
+		req.OffsetID = offsetID
+	}
+	res, err := f.API.MessagesGetHistory(ctx, req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("getHistory: %w", err)
+	}
+	raw := messagesOf(res)
+	next := 0
+	out := make([]Message, 0, len(raw))
+	for _, mc := range raw {
+		msg, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if next == 0 || msg.ID < next {
+			next = msg.ID
+		}
+		m, isFile, err := messageFromTG(ctx, f.API, f.ChannelID, f.AccessHash, msg)
+		if err != nil {
+			return nil, 0, err
+		}
+		if isFile {
+			out = append(out, m)
+		}
+	}
+	return out, next, nil
+}

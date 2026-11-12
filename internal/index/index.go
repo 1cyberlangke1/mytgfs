@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS meta (
 	key TEXT PRIMARY KEY,
 	value INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending (
+	path TEXT PRIMARY KEY,
+	temp TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	mtime INTEGER NOT NULL
+);
 `
 
 // Open 打开或创建索引文件。
@@ -90,6 +96,65 @@ func Open(path string) (*Index, error) {
 // OpenMemory 打开内存索引（测试用）。
 func OpenMemory() (*Index, error) {
 	return Open(":memory:")
+}
+
+// PendingUpload 是一条已写入临时文件、但还没成功上传的记录。
+//
+// 崩溃或断网时提交中断，重启后按这张表把内容补传上去，
+// 避免用户刚写的内容只存在于临时目录里。
+type PendingUpload struct {
+	Path  string
+	Temp  string
+	Size  int64
+	Mtime int64
+}
+
+// PutPending 记录一条待补传的写入。
+//
+// 输入：p 待上传记录（Path 为主键）
+// 输出：error
+// 预期：同一路径重复记录时覆盖为最新的临时文件
+func (i *Index) PutPending(ctx context.Context, p PendingUpload) error {
+	_, err := i.db.ExecContext(ctx, `
+INSERT INTO pending(path, temp, size, mtime) VALUES(?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET
+	temp = excluded.temp,
+	size = excluded.size,
+	mtime = excluded.mtime`,
+		p.Path, p.Temp, p.Size, p.Mtime)
+	return err
+}
+
+// DeletePending 删除一条待补传记录。
+//
+// 输入：path
+// 输出：error
+// 预期：幂等，记录不存在不报错
+func (i *Index) DeletePending(ctx context.Context, path string) error {
+	_, err := i.db.ExecContext(ctx, `DELETE FROM pending WHERE path = ?`, path)
+	return err
+}
+
+// ListPending 列出全部待补传记录。
+//
+// 输入：无
+// 输出：按 mtime 升序的记录
+// 预期：无记录时返回空切片
+func (i *Index) ListPending(ctx context.Context) ([]PendingUpload, error) {
+	rows, err := i.db.QueryContext(ctx, `SELECT path, temp, size, mtime FROM pending ORDER BY mtime`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingUpload
+	for rows.Next() {
+		var p PendingUpload
+		if err := rows.Scan(&p.Path, &p.Temp, &p.Size, &p.Mtime); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // Close 关闭索引。
@@ -270,7 +335,18 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 	return out, dirRows.Err()
 }
 
-// Used 返回索引里所有文件的字节总数。
+// CountFiles 返回索引里的文件条数。
+//
+// 输入：无
+// 输出：文件数；error
+// 预期：用于判断索引是否需要从频道重建
+func (i *Index) CountFiles(ctx context.Context) (int, error) {
+	var n int
+	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files`).Scan(&n)
+	return n, err
+}
+
+// Used 返回索引里所有文件大小合计，供 Statfs 显示已用空间。
 func (i *Index) Used(ctx context.Context) (int64, error) {
 	var n int64
 	err := i.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size), 0) FROM files`).Scan(&n)

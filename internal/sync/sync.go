@@ -71,3 +71,41 @@ func Sync(ctx context.Context, idx *index.Index, f Fetcher, limit int) error {
 	_, err = Replay(ctx, idx, msgs)
 	return err
 }
+
+// Pager 按 offset_id 向更早的方向翻页。
+type Pager interface {
+	HistoryBefore(ctx context.Context, offsetID, limit int) ([]Message, int, error)
+}
+
+// Rebuild 从最新消息开始向更早翻页，把整个频道重建进索引。
+//
+// 输入：ctx；idx；f 数据源；limit 每页原始条数；maxPages 页数上限（<=0 用默认）
+// 输出：重放的消息数；error
+// 预期：游标为本页最小消息 ID（含非文件消息），游标为 0 或不再前进时停止；
+// 同一路径由 Replay 保留消息号更大的版本
+func Rebuild(ctx context.Context, idx *index.Index, f Pager, limit, maxPages int) (int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if maxPages <= 0 {
+		maxPages = 1000
+	}
+	offset := 0
+	total := 0
+	for page := 0; page < maxPages; page++ {
+		msgs, next, err := f.HistoryBefore(ctx, offset, limit)
+		if err != nil {
+			return total, err
+		}
+		if next == 0 || (offset > 0 && next >= offset) {
+			return total, nil
+		}
+		paths, err := Replay(ctx, idx, msgs)
+		if err != nil {
+			return total, err
+		}
+		total += len(paths)
+		offset = next
+	}
+	return total, nil
+}

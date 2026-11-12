@@ -461,6 +461,10 @@ func runMount(args []string) {
 			if err != nil {
 				fatal(fmt.Sprintf("打开索引 %s: %v", name, err))
 			}
+			// 索引是缓存，丢了用 user 会话按频道历史重建，避免文件全部不可见
+			if rerr := trayapp.RebuildIndexIfEmpty(ctx, cfg, idx, channelID); rerr != nil {
+				fmt.Fprintf(os.Stderr, "重建索引 %s 失败: %v\n", name, rerr)
+			}
 			api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 			if perr != nil {
 				fatal(fmt.Sprintf("创建连接池 %s: %v", name, perr))
@@ -482,6 +486,13 @@ func runMount(args []string) {
 					trayapp.AutoSync(vctx, fsys, idx, differ, interval, nil)
 				}()
 			}
+
+			// 崩溃/断网遗留的写入在后台补传，不阻塞挂载
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				fsys.ResumePending()
+			}()
 
 			wg.Add(1)
 			go func() {
