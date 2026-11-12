@@ -314,7 +314,40 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	}
 	f.mu.Lock()
 	if ok {
-		hid := f.newHandle(&openFile{path: p, size: file.Size})
+		// 写打开已有文件：必须挂一个待上传节点，否则后续 Truncate/Write 没有临时文件
+		if flags&(fuse.O_WRONLY|fuse.O_RDWR|fuse.O_TRUNC) == 0 {
+			hid := f.newHandle(&openFile{path: p, size: file.Size})
+			f.mu.Unlock()
+			return 0, hid
+		}
+		f.mu.Unlock()
+
+		tmp, err := os.CreateTemp(f.tmpDir, ".mytgfs-upload-*")
+		if err != nil {
+			debugf("vfs: Open %s temp error: %v", p, err)
+			return -fuse.EIO, 0
+		}
+		h := &openFile{path: p, tmp: tmp, dirty: true}
+		// 没带 O_TRUNC 时保留原内容，避免随机写把前缀丢掉
+		if flags&fuse.O_TRUNC == 0 && file.Size > 0 {
+			if err := f.copyExisting(file, tmp); err != nil {
+				debugf("vfs: Open %s copy existing failed: %v", p, err)
+				_ = tmp.Close()
+				_ = os.Remove(tmp.Name())
+				return -fuse.EIO, 0
+			}
+			h.size = file.Size
+		}
+		f.mu.Lock()
+		if existing, exists := f.pending[p]; exists {
+			f.mu.Unlock()
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			hid := f.newHandle(existing)
+			return 0, hid
+		}
+		f.pending[p] = h
+		hid := f.newHandle(h)
 		f.mu.Unlock()
 		return 0, hid
 	}
@@ -336,6 +369,41 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return 0, f.newHandle(nil)
+}
+
+// copyExisting 把索引里已有文件的内容复制到临时文件。
+//
+// 输入：索引记录 file、目标临时文件 tmp
+// 输出：error
+// 预期：按 4 MiB 分块从 Telegram 拉取，写打开后未截断时保留原内容
+func (f *FS) copyExisting(file index.File, tmp *os.File) error {
+	part := &telegramstore.Part{
+		MessageID:     file.MessageID,
+		DocumentID:    file.DocumentID,
+		AccessHash:    file.AccessHash,
+		FileReference: file.FileReference,
+		Size:          file.Size,
+	}
+	const chunk = 4 << 20
+	var off int64
+	for off < file.Size {
+		n := int64(chunk)
+		if off+n > file.Size {
+			n = file.Size - off
+		}
+		data, err := f.store.ReadRange(f.ctx, part, off, int(n))
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			return fmt.Errorf("copyExisting: 读取 %s 在偏移 %d 处返回空数据", file.Path, off)
+		}
+		if _, err := tmp.WriteAt(data, off); err != nil {
+			return err
+		}
+		off += int64(len(data))
+	}
+	return nil
 }
 
 // Read 按偏移读。

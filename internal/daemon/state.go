@@ -7,10 +7,15 @@ import (
 	"os"
 
 	"mytgfs/internal/atomicfile"
+	"mytgfs/internal/datadir"
 )
 
-// StatePath 是 daemon 状态文件路径。
-const StatePath = "daemon.json"
+// StatePath 返回 daemon 状态文件路径。
+//
+// 输入：无
+// 输出：data/daemon.json
+// 预期：运行时文件集中放在 data 目录
+func StatePath() string { return datadir.Path("daemon.json") }
 
 // State 是 daemon 运行状态。
 type State struct {
@@ -22,7 +27,7 @@ type State struct {
 // ReadState 读取状态文件。
 func ReadState() (State, error) {
 	var s State
-	b, err := os.ReadFile(StatePath)
+	b, err := os.ReadFile(StatePath())
 	if err != nil {
 		return s, err
 	}
@@ -36,10 +41,10 @@ func writeState(s State) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(StatePath, b, 0o600)
+	return atomicfile.WriteFile(StatePath(), b, 0o600)
 }
 
 // removeState 删除状态文件。
 func removeState() {
-	_ = os.Remove(StatePath)
+	_ = os.Remove(StatePath())
 }

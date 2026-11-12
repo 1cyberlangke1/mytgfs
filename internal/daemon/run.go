@@ -16,6 +16,7 @@ import (
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
+	"mytgfs/internal/datadir"
 	"mytgfs/internal/index"
 	"mytgfs/internal/ipc"
 	"mytgfs/internal/sessionstore"
@@ -40,7 +41,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	idx, err := index.Open("index.db")
+	idx, err := index.Open(datadir.Path("index.db"))
 	if err != nil {
 		return err
 	}
@@ -96,7 +97,7 @@ func Run(ctx context.Context) error {
 
 // Start 后台启动 daemon（detached）。
 func Start(exe string) error {
-	logFile, err := os.OpenFile("daemon.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := os.OpenFile(datadir.Path("daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}

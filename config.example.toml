@@ -39,7 +39,7 @@ point = ""
 [log]
 # 日志等级：debug / info / warn / error
 level = "info"
-file = "mytgfs.log"
+file = "data/mytgfs.log"
 # 单个日志文件最大 MB
 max_size_mb = 10
 # 保留的历史文件数

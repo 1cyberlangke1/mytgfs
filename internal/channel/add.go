@@ -15,7 +15,7 @@ import (
 // 输出：Result
 // 预期：要求当前 user 是该频道管理员
 func Add(ctx context.Context, client *telegram.Client, channelID int64, botUsername string) (*Result, error) {
-	items, err := List(ctx, client, true)
+	items, err := List(ctx, client)
 	if err != nil {
 		return nil, err
 	}

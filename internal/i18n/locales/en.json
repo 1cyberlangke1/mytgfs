@@ -1,5 +1,5 @@
 {
-  "cli.usage": "Usage:\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs sync        rebuild local index from channel history\n  mytgfs mount       mount the virtual drive\n  mytgfs daemon start|status|stop  background daemon\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
+  "cli.usage": "Usage:\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs sync        rebuild local index from channel history\n  mytgfs mount       mount the virtual drive\n  mytgfs umount [--point Y:]  safely remove mount (all if omitted)\n  mytgfs daemon start|status|stop  background daemon\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
   "err.missing_api_hash": "missing secrets/api_hash",
   "err.session_key_prefix": "failed to load session key",
   "prompt.bot_token": "bot token: ",

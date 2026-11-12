@@ -45,6 +45,9 @@ hs_err_pid*
 # 临时 clone / 临时目录
 tmp/
 
+# 运行时数据（索引 / 日志 / 进程状态）
+data/
+
 # 本地索引（可重建）
 index.db
 index.db-*

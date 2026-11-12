@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/daemon"
+	"mytgfs/internal/datadir"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/ipc"
@@ -74,6 +76,8 @@ func main() {
 		runSync(os.Args[2:])
 	case "mount":
 		runMount(os.Args[2:])
+	case "umount":
+		runUmount(os.Args[2:])
 	case "daemon":
 		runDaemon(os.Args[2:])
 	case "web":
@@ -191,7 +195,6 @@ func runChannelCreate(args []string) {
 // runChannelList 列出当前 user 能管理的频道。
 func runChannelList(args []string) {
 	fs := flag.NewFlagSet("channel list", flag.ExitOnError)
-	all := fs.Bool("all", false, "include channels where you are admin but not creator")
 	_ = fs.Parse(args)
 
 	apiID, apiHash := loadAPI()
@@ -208,12 +211,12 @@ func runChannelList(args []string) {
 		tgclient.Options{})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
-		items, err := channel.List(ctx, client.Client, *all)
+		items, err := channel.List(ctx, client.Client)
 		if err != nil {
 			return err
 		}
 		for _, it := range items {
-			fmt.Printf("%d\t%s\t%s\tcreator=%v\n", it.ID, it.Title, it.Username, it.Creator)
+			fmt.Printf("%d\t%s\t%s\tcreator=%v\tadmin=%v\n", it.ID, it.Title, it.Username, it.Creator, it.Admin)
 		}
 		return nil
 	})
@@ -310,7 +313,7 @@ func runSync(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open("index.db")
+	idx, err := index.Open(datadir.Path("index.db"))
 	if err != nil {
 		fatal(fmt.Sprintf("打开索引: %v", err))
 	}
@@ -375,22 +378,74 @@ func runMount(args []string) {
 		var wg sync.WaitGroup
 		defer wg.Wait()
 
+		token, err := newToken()
+		if err != nil {
+			return err
+		}
+		srv, err := ipc.Listen(token)
+		if err != nil {
+			return err
+		}
+		defer srv.Close()
+
+		var ctlMu sync.Mutex
+		cancels := map[string]context.CancelFunc{}
+		srv.SetHandler(func(_ context.Context, action string, data json.RawMessage) (any, error) {
+			if action != "umount" {
+				return nil, fmt.Errorf("未知操作: %s", action)
+			}
+			var req struct {
+				Point string `json:"point"`
+			}
+			if len(data) > 0 {
+				_ = json.Unmarshal(data, &req)
+			}
+			ctlMu.Lock()
+			defer ctlMu.Unlock()
+			if req.Point == "" {
+				for _, c := range cancels {
+					c()
+				}
+				return "all", nil
+			}
+			c, ok := cancels[req.Point]
+			if !ok {
+				return nil, fmt.Errorf("未挂载: %s", req.Point)
+			}
+			delete(cancels, req.Point)
+			c()
+			return req.Point, nil
+		})
+		go func() { _ = srv.Serve(ctx) }()
+
 		mountOne := func(name string, channelID int64, mp string) {
 			if mp == "" {
 				fatal("卷 " + name + " 缺少挂载点")
 			}
-			idx, err := index.Open("index-" + name + ".db")
+			idx, err := index.Open(datadir.Path("index-" + name + ".db"))
 			if err != nil {
 				fatal(fmt.Sprintf("打开索引 %s: %v", name, err))
 			}
 			store := telegramstore.New(client.API(), channelID)
-			fsys := vfs.New(ctx, idx, store, os.TempDir())
+			vctx, vcancel := context.WithCancel(ctx)
+			fsys := vfs.New(vctx, idx, store, os.TempDir())
+			ctlMu.Lock()
+			cancels[mp] = vcancel
+			ctlMu.Unlock()
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				defer idx.Close()
-				if err := vfs.Mount(ctx, fsys, mp, name); err != nil {
+				defer vcancel()
+				if err := vfs.Mount(vctx, fsys, mp, name); err != nil {
 					fmt.Fprintf(os.Stderr, "挂载 %s 失败: %v\n", mp, err)
+				}
+				ctlMu.Lock()
+				delete(cancels, mp)
+				empty := len(cancels) == 0
+				ctlMu.Unlock()
+				if empty {
+					cancel()
 				}
 			}()
 			fmt.Printf("mounted %s at %s\n", name, mp)
@@ -410,6 +465,17 @@ func runMount(args []string) {
 				mountOne(v.Name, v.ChatID, mp)
 			}
 		}
+		ctlMu.Lock()
+		points := make([]string, 0, len(cancels))
+		for p := range cancels {
+			points = append(points, p)
+		}
+		ctlMu.Unlock()
+		if err := writeMountState(mountState{Addr: srv.Addr(), Token: token, Points: points}); err != nil {
+			return fmt.Errorf("写挂载状态: %w", err)
+		}
+		defer removeMountState()
+
 		<-ctx.Done()
 		return nil
 	})

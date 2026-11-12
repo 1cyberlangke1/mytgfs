@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/natefinch/lumberjack.v2"
+
+	"mytgfs/internal/datadir"
 )
 
 // Config 是日志配置。
@@ -27,7 +29,7 @@ type Config struct {
 // 预期：日志超过大小自动轮转，按数量/天数清理旧文件
 func Setup(cfg Config) (*slog.Logger, func() error) {
 	if cfg.File == "" {
-		cfg.File = "mytgfs.log"
+		cfg.File = datadir.Path("mytgfs.log")
 	}
 	if cfg.MaxSizeMB <= 0 {
 		cfg.MaxSizeMB = 10

@@ -1,5 +1,5 @@
 {
-  "cli.usage": "用法:\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs sync        拉频道历史重建索引\n  mytgfs mount       挂载虚拟盘\n  mytgfs daemon start|status|stop  后台守护进程\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
+  "cli.usage": "用法:\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs sync        拉频道历史重建索引\n  mytgfs mount       挂载虚拟盘\n  mytgfs umount [--point Y:]  安全移除挂载（不指定则全部）\n  mytgfs daemon start|status|stop  后台守护进程\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
   "err.missing_api_hash": "缺少 secrets/api_hash",
   "err.session_key_prefix": "读取会话密钥失败",
   "prompt.bot_token": "bot token: ",
