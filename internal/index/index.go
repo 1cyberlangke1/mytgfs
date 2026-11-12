@@ -157,6 +157,17 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 	return out, rows.Err()
 }
 
+// Used 返回索引里所有文件的字节总数。
+//
+// 输入：ctx
+// 输出：已用字节数、error
+// 预期：空表返回 0
+func (i *Index) Used(ctx context.Context) (int64, error) {
+	var n int64
+	err := i.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size), 0) FROM files`).Scan(&n)
+	return n, err
+}
+
 // Delete 删除一条记录。
 func (i *Index) Delete(ctx context.Context, path string) error {
 	_, err := i.db.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, path)

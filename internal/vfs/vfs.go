@@ -313,11 +313,29 @@ func (f *FS) Open(p string, flags int) (int, uint64) {
 		return -fuse.EIO, 0
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !ok {
-		return 0, f.newHandle(nil)
+	if ok {
+		hid := f.newHandle(&openFile{path: p, size: file.Size})
+		f.mu.Unlock()
+		return 0, hid
 	}
-	return 0, f.newHandle(&openFile{path: p, size: file.Size})
+	f.mu.Unlock()
+
+	// 以写方式打开不存在的文件：Windows 走 Open 而不是 Create，这里就地建节点
+	if flags&fuse.O_CREAT != 0 || flags&(fuse.O_WRONLY|fuse.O_RDWR) != 0 {
+		if rc := f.Mknod(p, 0o666, 0); rc != 0 {
+			return rc, 0
+		}
+		f.mu.Lock()
+		h := f.pending[p]
+		hid := f.newHandle(h)
+		f.mu.Unlock()
+		return 0, hid
+	}
+
+	// 只读打开不存在的文件：给空句柄，真正读取时按 ENOENT 处理
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return 0, f.newHandle(nil)
 }
 
 // Read 按偏移读。
@@ -392,6 +410,8 @@ func (f *FS) Release(p string, fh uint64) int {
 		f.mu.Unlock()
 		return 0
 	}
+	// 提交前先摘掉 pending，避免并发 Open 再挂到同一节点上重复提交
+	delete(f.pending, h.path)
 	f.mu.Unlock()
 
 	defer h.tmp.Close()
@@ -517,15 +537,36 @@ func (f *FS) Truncate(p string, size int64, fh uint64) int {
 //
 // 输入：路径、输出结构
 // 输出：0
-// 预期：总容量按主人要求固定为 2^63-1 字节
+// 预期：总容量 = 2^63-1 字节；已用 = 索引里文件大小合计，按 4096 字节簇向上取整
 func (f *FS) Statfs(p string, stat *fuse.Statfs_t) int {
 	const blockSize = 4096
 	total := int64(^uint64(0) >> 1) // 2^63-1
+
+	used, err := f.idx.Used(f.ctx)
+	if err != nil || used < 0 {
+		debugf("vfs: Statfs Used 失败: %v (used=%d)", err, used)
+		used = 0
+	}
+	if used > total {
+		used = total
+	}
+	// Windows 按 4096 字节簇向下取整显示，used 不足一个簇会被算成 0，
+	// 这里按簇向上取整，保证有文件时已用至少一个簇
+	usedBlocks := uint64(used+blockSize-1) / blockSize
+	blocks := uint64(total / blockSize)
+	freeBlocks := blocks
+	if usedBlocks < blocks {
+		freeBlocks = blocks - usedBlocks
+	} else {
+		freeBlocks = 0
+	}
+	debugf("vfs: Statfs used=%d usedBlocks=%d freeBlocks=%d", used, usedBlocks, freeBlocks)
+
 	stat.Bsize = blockSize
 	stat.Frsize = blockSize
-	stat.Blocks = uint64(total / blockSize)
-	stat.Bfree = stat.Blocks / 2
-	stat.Bavail = stat.Bfree
+	stat.Blocks = blocks
+	stat.Bfree = freeBlocks
+	stat.Bavail = freeBlocks
 	stat.Files = 1 << 20
 	stat.Ffree = stat.Files / 2
 	stat.Namemax = 255
