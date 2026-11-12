@@ -8,6 +8,7 @@ package vfs
 
 import (
 	"context"
+	"hash/fnv"
 	"io"
 	"log"
 	"os"
@@ -21,6 +22,32 @@ import (
 	"mytgfs/internal/telegramstore"
 	tgsync "mytgfs/internal/sync"
 )
+
+// fillStat 补齐 WinFsp 需要的 Stat_t 字段。
+func fillStat(stat *fuse.Stat_t, mode uint32, size int64, ino uint64) {
+	uid, gid, _ := fuse.Getcontext()
+	stat.Mode = mode
+	stat.Nlink = 1
+	if mode&fuse.S_IFDIR != 0 {
+		stat.Nlink = 2
+	}
+	stat.Uid = uid
+	stat.Gid = gid
+	stat.Ino = ino
+	stat.Size = size
+	now := fuse.Now()
+	stat.Atim = now
+	stat.Mtim = now
+	stat.Ctim = now
+	stat.Birthtim = now
+}
+
+// pathIno 为路径生成稳定的 inode 号。
+func pathIno(p string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(p))
+	return h.Sum64()
+}
 
 // debug 由 MYTGFS_DEBUG=1 打开，默认关闭。
 var debug = os.Getenv("MYTGFS_DEBUG") != ""
@@ -73,8 +100,7 @@ func New(ctx context.Context, idx *index.Index, store *telegramstore.Store, tmpD
 func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 	p = clean(p)
 	if p == "/" {
-		stat.Mode = fuse.S_IFDIR | 0o777
-		stat.Nlink = 2
+		fillStat(stat, fuse.S_IFDIR|0o777, 0, pathIno(p))
 		return 0
 	}
 	// 正在写入、尚未上传的文件
@@ -83,9 +109,7 @@ func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 		if h.path == p && h.tmp != nil {
 			size := h.size
 			f.mu.Unlock()
-			stat.Mode = fuse.S_IFREG | 0o666
-			stat.Size = size
-			stat.Nlink = 1
+			fillStat(stat, fuse.S_IFREG|0o666, size, pathIno(p))
 			return 0
 		}
 	}
@@ -95,18 +119,26 @@ func (f *FS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 		return -fuse.EIO
 	}
 	if ok {
-		stat.Mode = fuse.S_IFREG | 0o666
-		stat.Size = file.Size
-		stat.Nlink = 1
+		fillStat(stat, fuse.S_IFREG|0o666, file.Size, pathIno(p))
 		return 0
 	}
 	if f.isDir(p) {
-		stat.Mode = fuse.S_IFDIR | 0o777
-		stat.Nlink = 2
+		fillStat(stat, fuse.S_IFDIR|0o777, 0, pathIno(p))
 		return 0
 	}
 	return -fuse.ENOENT
 }
+
+// Opendir 打开目录（资源管理器必须先调它）。
+func (f *FS) Opendir(p string) (int, uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.next++
+	return 0, f.next
+}
+
+// Releasedir 关闭目录。
+func (f *FS) Releasedir(p string, fh uint64) int { return 0 }
 
 // Readdir 列目录。
 func (f *FS) Readdir(p string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
@@ -118,13 +150,16 @@ func (f *FS) Readdir(p string, fill func(name string, stat *fuse.Stat_t, ofst in
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 	for _, e := range entries {
-		st := &fuse.Stat_t{Mode: fuse.S_IFDIR | 0o777, Nlink: 2}
-		if !e.IsDir {
-			st.Mode = fuse.S_IFREG | 0o666
-			st.Nlink = 1
+		full := path.Join(p, e.Name)
+		st := &fuse.Stat_t{}
+		if e.IsDir {
+			fillStat(st, fuse.S_IFDIR|0o777, 0, pathIno(full))
+		} else {
+			var size int64
 			if e.File != nil {
-				st.Size = e.File.Size
+				size = e.File.Size
 			}
+			fillStat(st, fuse.S_IFREG|0o666, size, pathIno(full))
 		}
 		if !fill(e.Name, st, 0) {
 			return 0
