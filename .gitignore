@@ -48,6 +48,8 @@ tmp/
 # 本地索引（可重建）
 index.db
 index.db-*
+index-*.db
+index-*.db-*
 
 # daemon 运行时文件
 daemon.json
