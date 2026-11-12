@@ -30,14 +30,19 @@ type Store interface {
 	Rename(ctx context.Context, messageID int, caption string) error
 }
 
-// blockSize 是单次按需读取的块大小。
-const blockSize = 8 << 20
+// 自适应块大小：首块 1MB，顺序读时逐次翻倍，上限 16MB。
+// 网络慢的用户块小、等待短；网络快的用户块大、请求少。
+const (
+	firstChunk = 1 << 20
+	maxChunk   = 16 << 20
+)
 
 // FileSystem 实现 webdav.FileSystem。
 type FileSystem struct {
 	ctx   context.Context
 	idx   *index.Index
 	store Store
+	chunk int64
 }
 
 // New 创建 WebDAV 文件系统。
@@ -45,8 +50,11 @@ type FileSystem struct {
 // 输入：ctx；idx 索引；store 存储
 // 输出：*FileSystem
 // 预期：所有路径都相对于卷根 "/"
-func New(ctx context.Context, idx *index.Index, store Store) *FileSystem {
-	return &FileSystem{ctx: ctx, idx: idx, store: store}
+func New(ctx context.Context, idx *index.Index, store Store, chunk int64) *FileSystem {
+	if chunk <= 0 {
+		chunk = firstChunk
+	}
+	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk}
 }
 
 // Mkdir 创建目录。
@@ -205,7 +213,10 @@ func (f *file) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if f.buf == nil || f.off < f.base || f.off >= f.base+int64(len(f.buf)) {
-		length := int64(blockSize)
+		length := f.d.chunk
+		if length <= 0 {
+			length = firstChunk
+		}
 		if f.off+length > f.entry.Size {
 			length = f.entry.Size - f.off
 		}
@@ -238,6 +249,7 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 		return 0, errors.New("负偏移")
 	}
 	f.off = offset
+	f.buf = nil
 	return offset, nil
 }
 

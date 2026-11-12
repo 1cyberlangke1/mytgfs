@@ -75,7 +75,7 @@ func runWebDAV(args []string) {
 		store.SetParallel(cfg.Mount.DownloadConnections())
 		handler := &webdav.Handler{
 			Prefix:     "/",
-			FileSystem: dav.New(ctx, idx, store),
+			FileSystem: dav.New(ctx, idx, store, cfg.Mount.ReadChunk()),
 			LockSystem: webdav.NewMemLS(),
 		}
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

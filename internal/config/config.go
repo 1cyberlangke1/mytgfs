@@ -53,6 +53,24 @@ type Mount struct {
 	SyncSeconds int `toml:"sync_seconds"`
 	// DownloadParallel 是下载并发块数：0 用默认 8，范围 1..32。
 	DownloadParallel int `toml:"download_parallel"`
+	// ReadChunkMB 是 WebDAV 每次向上游取数的分片大小（MB）：0 用默认 1，范围 1..64。
+	ReadChunkMB int `toml:"read_chunk_mb"`
+}
+
+// ReadChunk 返回 WebDAV 读分片大小（字节）。
+//
+// 输入：无
+// 输出：字节数，默认 1MB，夹在 1..64MB
+// 预期：网络快的可以调大减少请求数，网络慢的调小降低等待
+func (c Mount) ReadChunk() int64 {
+	mb := c.ReadChunkMB
+	if mb <= 0 {
+		mb = 1
+	}
+	if mb > 64 {
+		mb = 64
+	}
+	return int64(mb) << 20
 }
 
 // DownloadConnections 返回下载连接数。
