@@ -125,6 +125,22 @@ func (f *FS) notifyChange(p string, action uint32) {
 	}
 }
 
+// NotifyPaths 把远端增量同步的结果映射成挂载点刷新事件。
+//
+// 输入：changed 新增/编辑的路径；removed 删除的路径
+// 输出：无
+// 预期：changed 用 CREATE 让资源管理器重新取属性与内容；
+//
+//	removed 用 UNLINK 让对应节点消失；无路径时不做任何事
+func (f *FS) NotifyPaths(changed, removed []string) {
+	for _, p := range removed {
+		f.notifyChange(p, fuse.NOTIFY_UNLINK)
+	}
+	for _, p := range changed {
+		f.notifyChange(p, fuse.NOTIFY_CREATE)
+	}
+}
+
 // newHandle 分配一个文件句柄并给节点加引用。
 //
 // 输入：h 节点（nil 表示无缓冲的只读句柄）

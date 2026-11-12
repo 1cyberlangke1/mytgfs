@@ -3,10 +3,12 @@ module mytgfs
 go 1.26.1
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/gotd/contrib v0.26.0
 	github.com/gotd/td v0.165.0
 	github.com/winfsp/cgofuse v1.6.0
+	golang.org/x/sys v0.49.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.62.0
 )
@@ -24,7 +26,7 @@ require (
 	github.com/go-faster/jx v1.2.0 // indirect
 	github.com/go-faster/xor v1.0.0 // indirect
 	github.com/go-faster/yaml v0.4.6 // indirect
-	github.com/google/renameio/v2 v2.0.2 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gotd/ige v0.3.0 // indirect
 	github.com/gotd/log v0.1.0 // indirect
@@ -50,7 +52,6 @@ require (
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

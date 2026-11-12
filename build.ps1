@@ -18,3 +18,12 @@ if ($LASTEXITCODE -eq 0) {
     Write-Output 'FAIL build\mytgfs.exe'
     exit 1
 }
+
+# GUI 子系统版本：双击直接进托盘，不弹控制台
+go build -ldflags '-H=windowsgui' -o 'build\mytgfs-tray.exe' ./cmd/mytray
+if ($LASTEXITCODE -eq 0) {
+    Write-Output 'OK build\mytgfs-tray.exe'
+} else {
+    Write-Output 'FAIL build\mytgfs-tray.exe'
+    exit 1
+}

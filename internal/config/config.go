@@ -49,6 +49,8 @@ type Cache struct {
 type Mount struct {
 	Point      string `toml:"point"`
 	TotalBytes int64  `toml:"total_bytes"`
+	// SyncSeconds 是挂载期自动增量同步的间隔秒数：0 用默认 15，负数关闭。
+	SyncSeconds int `toml:"sync_seconds"`
 }
 
 // Ratelimit 是可选的限速覆盖，零值表示用默认。

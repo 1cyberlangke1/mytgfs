@@ -21,10 +21,10 @@ func TestReplayLatestWins(t *testing.T) {
 		{ID: 1, Caption: `{"path":"/a.txt"}`, DocumentID: 10, Size: 100, Date: time.Unix(900, 0)},
 		{ID: 3, Caption: `not a caption`, DocumentID: 30},
 	}
-	if n, err := Replay(ctx, idx, msgs); err != nil {
+	if paths, err := Replay(ctx, idx, msgs); err != nil {
 		t.Fatal(err)
-	} else if n != 2 {
-		t.Fatalf("应写入 2 条合法 caption，实际 %d", n)
+	} else if len(paths) != 2 {
+		t.Fatalf("应写入 2 条合法 caption，实际 %d", len(paths))
 	}
 
 	got, ok, err := idx.Get(ctx, "/a.txt")

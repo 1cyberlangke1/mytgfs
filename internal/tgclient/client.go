@@ -13,12 +13,27 @@ import (
 	"github.com/gotd/td/telegram"
 )
 
+// ConnState 是主连接状态，屏蔽 gotd 的具体枚举。
+type ConnState int
+
+const (
+	// ConnConnecting 正在建立连接。
+	ConnConnecting ConnState = iota
+	// ConnReady 连接已就绪，可以收发请求。
+	ConnReady
+	// ConnDisconnected 连接已断开，客户端会自动重连。
+	ConnDisconnected
+)
+
 // Options 是可选的限速参数，零值表示使用默认值。
 type Options struct {
 	AdaptiveMin time.Duration // 自适应最小间隔，默认 500ms
 	AdaptiveMax time.Duration // 自适应最大间隔，默认 5s
 	MaxRetries  int           // 单个请求最大重试，默认 5
 	MaxWait     time.Duration // 单次最大等待，默认 2 分钟
+	// OnConnState 在主连接状态变化时回调。
+	// 输入：连接状态；输出：无；预期：回调要短，不能阻塞连接生命周期。
+	OnConnState func(ConnState)
 }
 
 // Client 包装 telegram.Client 与 floodwait 调度器。
@@ -52,10 +67,32 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		WithMaxWait(opts.MaxWait)
 
 	client := telegram.NewClient(apiID, apiHash, telegram.Options{
-		SessionStorage: sess,
-		Middlewares:    []telegram.Middleware{waiter},
+		SessionStorage:    sess,
+		Middlewares:       []telegram.Middleware{waiter},
+		OnConnectionState: mapConnState(opts.OnConnState),
 	})
 	return &Client{Client: client, waiter: waiter}
+}
+
+// mapConnState 把 gotd 的连接状态映射成本包的精简枚举。
+//
+// 输入：回调（可为 nil）
+// 输出：gotd 需要的回调；nil 时返回 nil
+// 预期：Disconnected 包含所有非就绪/非连接中的状态，避免漏掉新枚举值
+func mapConnState(fn func(ConnState)) func(telegram.ConnectionState) {
+	if fn == nil {
+		return nil
+	}
+	return func(s telegram.ConnectionState) {
+		switch s {
+		case telegram.ConnectionStateReady:
+			fn(ConnReady)
+		case telegram.ConnectionStateConnecting:
+			fn(ConnConnecting)
+		default:
+			fn(ConnDisconnected)
+		}
+	}
 }
 
 // Run 启动 client，并让 floodwait 调度器包住整个生命周期。

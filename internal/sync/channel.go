@@ -45,11 +45,13 @@ type ChannelDiffer interface {
 
 // ChannelSyncResult 汇总一次增量同步的效果。
 type ChannelSyncResult struct {
-	Pulled    int  // 实际写入索引的消息条数
-	Deleted   int  // 从索引删除的条数
-	Pts       int  // 同步后的 pts
-	Truncated bool // 是否发生差异过大（历史可能有缺口）
-	Rounds    int  // 差异调用轮数
+	Pulled    int      // 实际写入索引的消息条数
+	Deleted   int      // 从索引删除的条数
+	Pts       int      // 同步后的 pts
+	Truncated bool     // 是否发生差异过大（历史可能有缺口）
+	Rounds    int      // 差异调用轮数
+	Changed   []string // 新增/编辑的路径，供挂载点刷新
+	Removed   []string // 删除的路径，供挂载点刷新
 }
 
 // IsPtsInvalid 判断错误是否为本地 pts 失效。
@@ -110,12 +112,19 @@ func SyncChannel(ctx context.Context, idx *index.Index, d ChannelDiffer, limit i
 		}
 		res.Rounds++
 
-		applied, err := Replay(ctx, idx, diff.Messages)
+		paths, err := Replay(ctx, idx, diff.Messages)
 		if err != nil {
 			return res, err
 		}
-		res.Pulled += applied
+		res.Pulled += len(paths)
+		res.Changed = append(res.Changed, paths...)
 		for _, id := range diff.Deleted {
+			// 先取路径再删，才能通知挂载点移除对应节点
+			if p, ok, perr := idx.PathByMessageID(ctx, id); perr != nil {
+				return res, perr
+			} else if ok {
+				res.Removed = append(res.Removed, p)
+			}
 			if err := idx.DeleteByMessageID(ctx, id); err != nil {
 				return res, err
 			}

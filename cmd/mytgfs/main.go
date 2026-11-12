@@ -15,9 +15,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +35,7 @@ import (
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
+	"mytgfs/internal/trayapp"
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/web"
 )
@@ -82,6 +81,8 @@ func main() {
 		runDaemon(os.Args[2:])
 	case "web":
 		runWeb(os.Args[2:])
+	case "tray":
+		runTray(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -460,6 +461,17 @@ func runMount(args []string) {
 			ctlMu.Lock()
 			cancels[mp] = vcancel
 			ctlMu.Unlock()
+
+			// 挂载期自动增量同步：别的端写入/删除后，本地挂载点自动跟上
+			if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
+					trayapp.AutoSync(vctx, fsys, idx, differ, interval, nil)
+				}()
+			}
+
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -585,7 +597,7 @@ func runWeb(args []string) {
 	url := "http://" + addr
 	fmt.Println("web:", url)
 	if !*noOpen {
-		openBrowser(url)
+		trayapp.OpenBrowser(url)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -593,20 +605,6 @@ func runWeb(args []string) {
 	if err := web.Serve(ctx, addr, "config.toml"); err != nil {
 		fatal(err.Error())
 	}
-}
-
-// openBrowser 尝试用系统默认浏览器打开 URL。
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	_ = cmd.Start()
 }
 
 // chatID 把 channel ID 转成 Bot API 风格的 -100... 形式。

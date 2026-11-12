@@ -24,6 +24,8 @@ max_bytes = 1073741824
 [mount]
 # Windows 示例："T:"；Linux 示例："/mnt/mytgfs"
 point = ""
+# 挂载期自动增量同步间隔（秒）：0 = 默认 15，负数 = 关闭
+sync_seconds = 15
 
 [ratelimit]
 # 全部留空即使用默认值（推荐，不需要配置）

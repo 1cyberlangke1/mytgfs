@@ -328,6 +328,26 @@ func (i *Index) DeleteByMessageID(ctx context.Context, messageID int) error {
 	return err
 }
 
+// PathByMessageID 按 Telegram 消息号查路径。
+//
+// 输入：messageID 频道消息 ID
+// 输出：路径、是否存在、error
+// 预期：供增量同步在删除消息前取出路径，好通知挂载点刷新；不存在时 ok=false
+func (i *Index) PathByMessageID(ctx context.Context, messageID int) (string, bool, error) {
+	if messageID <= 0 {
+		return "", false, nil
+	}
+	var p string
+	err := i.db.QueryRowContext(ctx, `SELECT path FROM files WHERE message_id = ? LIMIT 1`, messageID).Scan(&p)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return p, true, nil
+}
+
 // GetMeta 读取一条持久化的整数状态。
 //
 // 输入：key 状态名（如 channel_pts）
