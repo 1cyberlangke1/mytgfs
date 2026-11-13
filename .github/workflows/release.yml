@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux-amd64
             ext: ''
             gui: ''
@@ -31,8 +31,8 @@ jobs:
             archive: tar.gz
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -73,29 +73,29 @@ jobs:
           Copy-Item packaging/install.ps1, packaging/uninstall.ps1, packaging/setup-webdav.ps1 $pkg -Force
           Compress-Archive -Path "$pkg/*" -DestinationPath "$pkg.zip"
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mytgfs-${{ matrix.platform }}
           path: pkg/*.zip
           if-no-files-found: ignore
       - name: 上传构建产物（tar.gz）
         if: matrix.archive == 'tar.gz'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mytgfs-${{ matrix.platform }}-tar
           path: pkg/*.tar.gz
 
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: 下载所有产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: 发布 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
