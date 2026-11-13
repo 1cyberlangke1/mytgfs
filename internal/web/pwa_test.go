@@ -81,7 +81,7 @@ func TestHandleServiceWorker(t *testing.T) {
 
 // TestMuxPWARoutes 验证开关真正控制 PWA 路由，而不只是页面文案。
 func TestMuxPWARoutes(t *testing.T) {
-	paths := []string{"/manifest.webmanifest", "/sw.js", "/static/icon-192.png"}
+	paths := []string{"/manifest.webmanifest", "/sw.js", "/static/icon-192.png", "/favicon.ico"}
 	off := false
 
 	onMux := newMux("", Options{PWA: config.PWA{}})

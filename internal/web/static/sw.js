@@ -121,7 +121,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname.startsWith("/static/")) {
+  // 静态资源与 manifest 都缓存优先：断网时浏览器重新取 manifest 也不会报错
+  if (url.pathname.startsWith("/static/") || url.pathname === "/manifest.webmanifest") {
     event.respondWith(cacheFirst(req, SHELL_CACHE));
     return;
   }

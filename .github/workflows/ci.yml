@@ -6,65 +6,38 @@ on:
   pull_request:
 
 jobs:
-  linux:
+  # 纯 Go 构建：WebDAV 时代已无 FUSE/cgofuse，不需要任何系统 SDK 或 CGO flags。
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # macOS 上 systray 需要 cgo，runner 自带 Xcode clang；Windows/Linux 纯 Go 无需 cgo。
+      - name: 构建
+        run: go build ./...
+      - name: 静态检查
+        run: go vet ./...
+      - name: 测试
+        run: go test ./... -cover
+
+  # 前端：TypeScript 类型检查（产物 app.js 已内嵌，不需要在 CI 里重新打包）
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-      - name: 安装 FUSE
-        run: sudo apt-get update && sudo apt-get install -y libfuse-dev
-      - name: 构建
-        run: go build ./...
-      - name: 静态检查
-        run: go vet ./...
-      - name: 测试
-        run: go test ./... -cover
-
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: 安装 WinFsp 与 gcc
-        run: choco install winfsp mingw -y --no-progress
-      - name: 构建
-        env:
-          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
-          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
-        run: go build ./...
-      - name: 静态检查
-        env:
-          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
-          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
-        run: go vet ./...
-      - name: 测试
-        env:
-          CGO_CFLAGS: -IC:/PROGRA~2/WinFsp/inc/fuse
-          CGO_LDFLAGS: -LC:/PROGRA~2/WinFsp/lib
-        run: go test ./... -cover
-
-  macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: 安装 macFUSE
-        run: brew install --cask macfuse
-      - name: 构建
-        env:
-          CGO_CFLAGS: -I/usr/local/include/fuse
-        run: go build ./...
-      - name: 静态检查
-        env:
-          CGO_CFLAGS: -I/usr/local/include/fuse
-        run: go vet ./...
-      - name: 测试
-        env:
-          CGO_CFLAGS: -I/usr/local/include/fuse
-        run: go test ./... -cover
+          node-version: '20'
+      - name: 安装前端依赖
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+      - name: 类型检查
+        working-directory: web
+        run: npx tsc --noEmit

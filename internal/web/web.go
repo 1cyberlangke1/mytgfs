@@ -129,13 +129,16 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.HandleFunc("/static/app.js", handleAsset("application/javascript; charset=utf-8", appJS))
 	// PWA：启用时挂真实 handler；关闭时挂 404，避免被 "/" 兜底成整页 HTML
 	pwaPaths := []string{"/manifest.webmanifest", "/sw.js",
-		"/static/icon-192.png", "/static/icon-512.png", "/static/apple-touch-icon.png"}
+		"/static/icon-192.png", "/static/icon-512.png", "/static/apple-touch-icon.png",
+		"/favicon.ico"}
 	if pwa.Enabled {
 		mux.HandleFunc("/manifest.webmanifest", handleManifest(opts.PWA))
 		mux.HandleFunc("/sw.js", handleServiceWorker())
 		mux.HandleFunc("/static/icon-192.png", handleAsset("image/png", icon192))
 		mux.HandleFunc("/static/icon-512.png", handleAsset("image/png", icon512))
 		mux.HandleFunc("/static/apple-touch-icon.png", handleAsset("image/png", appleTouchIcon))
+		// 浏览器会无条件请求 /favicon.ico，复用 192 图标避免 404 噪音
+		mux.HandleFunc("/favicon.ico", handleAsset("image/png", icon192))
 	} else {
 		for _, p := range pwaPaths {
 			mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
@@ -799,6 +802,7 @@ const pageHTML = `<!doctype html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="{{.PWA.Name}}">
 <meta name="application-name" content="{{.PWA.Name}}">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
 {{end}}
 <script>
 // 首屏前定主题：手动选择 > 系统偏好 > 深色。避免亮暗闪烁。
