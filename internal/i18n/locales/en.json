@@ -1,5 +1,5 @@
 {
-  "cli.usage": "Usage:\n  mytgfs version    print version and runtime (supports --json)\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs volume create --name <name>  create a volume, invite bot, mute notifications\n  mytgfs volume delete --name <name>  delete the volume's channel and local index\n  mytgfs volume check  verify every volume channel is still usable\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name volume]  start the WebDAV server\n  mytgfs unmap --addr 127.0.0.1:8080  remove network mappings pointing at this server\n  mytgfs cp [--name volume] [--to target] [--force] <src> <dst>  reference-copy a file\n  mytgfs put [--name volume] [--remote /dir] <local files or dirs...>  batch upload\n  mytgfs sync        rebuild local index from channel history\n  mytgfs umount [--point Y:]  safely remove mount (all if omitted)\n  mytgfs daemon start|status|stop  background daemon\n  mytgfs web [--port N]  local web dashboard\n  mytgfs tray [--port N]  system tray: mount, auto sync, dashboard\n  mytgfs startup enable|disable|status  start at login (off by default)\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
+  "cli.usage": "Usage:\n  mytgfs version    print version and runtime (supports --json)\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs volume create --name <name>  create a volume, invite bot, mute notifications\n  mytgfs volume delete --name <name>  delete the volume's channel and local index\n  mytgfs volume check  verify every volume channel is still usable\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name volume]  start the WebDAV server\n  mytgfs unmap --addr 127.0.0.1:8080  remove network mappings pointing at this server\n  mytgfs cp [--name volume] [--to target] [--force] <src> <dst>  reference-copy a file\n  mytgfs put [--name volume] [--remote /dir] <local files or dirs...>  batch upload\n  mytgfs sync        rebuild local index from channel history\n  mytgfs umount [--point Y:]  safely remove mount (all if omitted)\n  mytgfs web [--port N]  local web dashboard\n  mytgfs tray [--port N]  system tray: mount, auto sync, dashboard\n  mytgfs startup enable|disable|status  start at login (off by default)\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
   "err.missing_api_hash": "missing secrets/api_hash",
   "err.session_key_prefix": "failed to load session key",
   "prompt.bot_token": "bot token: ",
@@ -67,7 +67,6 @@
   "web.saved": "Saved",
   "web.entries": "Files",
   "web.used": "Used",
-  "web.no_daemon": "No running instance",
   "web.load_error": "Cannot reach service",
   "web.sync_unavailable": "Sync is not available in this mode",
   "web.new_volume": "New volume",
@@ -184,5 +183,6 @@
   "web.state_local": "Local mode",
   "web.files_prev": "Previous",
   "web.files_next": "Next",
-  "err.mount_removed": "Drive-letter mounting was removed: run mytgfs web and enable WebDAV in the panel"
+  "err.mount_removed": "Drive-letter mounting was removed: run mytgfs web and enable WebDAV in the panel",
+  "web.no_instance": "No running instance"
 }

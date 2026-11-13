@@ -21,11 +21,9 @@ import (
 
 	"github.com/natefinch/atomic"
 	"mytgfs/internal/config"
-	"mytgfs/internal/daemon"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/ipc"
 	"mytgfs/internal/version"
 )
 
@@ -61,7 +59,7 @@ func formatBytes(n int64) string {
 	return fmt.Sprintf("%.1f %s", f, units[i])
 }
 
-// StatusFunc 返回面板要展示的状态；nil 时回落到 daemon IPC。
+// StatusFunc 返回面板要展示的状态；nil 时只有空状态。
 type StatusFunc func(ctx context.Context) (any, error)
 
 // SyncFunc 立即触发一次增量同步并返回结果。
@@ -92,16 +90,11 @@ type Options struct {
 	ThumbDir string
 }
 
-// Serve 启动只读面板，状态回落到 daemon IPC。
-func Serve(ctx context.Context, addr, configPath string) error {
-	return ServeWith(ctx, addr, configPath, Options{})
-}
-
 // ServeWith 启动面板，阻塞到 ctx 取消。
 //
 // 输入：ctx；addr 监听地址；configPath 配置文件；opts 状态/同步钩子
 // 输出：error
-// 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时尝试连 daemon
+// 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时状态为空列表
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.ThumbDir)
@@ -150,7 +143,7 @@ type pageLabels struct {
 	Title, Subtitle, Volumes, Actions                      string
 	Sync, Syncing, SyncDone                                string
 	Config, Save, Saved                                    string
-	Entries, Used, NoDaemon, LoadError                     string
+	Entries, Used, NoInstance, LoadError                   string
 	NewVolume, FieldName, FieldTitle, FieldPoint           string
 	Create, Creating, Created, Restart, AuthLost, NameNeed string
 	StatVols, StatFiles, StatUsed, Xfer, UploadQueue       string
@@ -188,7 +181,7 @@ func loadLabels(canCreate bool) pageLabels {
 		Saved:       i18n.T("web.saved"),
 		Entries:     i18n.T("web.entries"),
 		Used:        i18n.T("web.used"),
-		NoDaemon:    i18n.T("web.no_daemon"),
+		NoInstance:  i18n.T("web.no_instance"),
 		LoadError:   i18n.T("web.load_error"),
 		NewVolume:   i18n.T("web.new_volume"),
 		FieldName:   i18n.T("web.field_name"),
@@ -295,11 +288,11 @@ func handleAsset(contentType string, data []byte) http.HandlerFunc {
 	}
 }
 
-// loadStatus 取当前状态：优先调用方注入，否则回落到 daemon IPC。
+// loadStatus 取当前状态：优先调用方注入，否则只有空状态。
 //
 // 输入：ctx；status 可选的注入实现
-// 输出：任意可 JSON 序列化的状态对象；取不到时返回 noDaemon
-// 预期：daemon 状态文件残留但进程已退出时也返回 noDaemon，不报 502
+// 输出：任意可 JSON 序列化的状态对象；没有注入时返回空状态
+// 预期：不读任何外部进程状态，取不到注入值也返回空列表而不是报错
 func loadStatus(ctx context.Context, status StatusFunc) any {
 	if status != nil {
 		v, err := status(ctx)
@@ -308,25 +301,13 @@ func loadStatus(ctx context.Context, status StatusFunc) any {
 		}
 		return v
 	}
-	st, err := daemon.ReadState()
-	if err != nil {
-		return noDaemon()
-	}
-	data, err := ipc.Call(ctx, st.Addr, st.Token, "status", nil)
-	if err != nil {
-		return noDaemon()
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return noDaemon()
-	}
-	return v
+	return emptyStatus()
 }
 
-// noDaemon 是「没有 daemon 在跑」时的状态。
-func noDaemon() map[string]any {
+// emptyStatus 是没有任何状态来源时的空负载。
+func emptyStatus() map[string]any {
 	return map[string]any{
-		"state":   i18n.T("web.no_daemon"),
+		"state":   i18n.T("web.no_instance"),
 		"volumes": []any{},
 	}
 }
@@ -493,11 +474,10 @@ type msgData struct {
 
 // rawStatus 对应 /api/status 的 JSON 形状。
 //
-// 托盘给 volumes/transfers，daemon 只给 entries，两种都兼容。
+// 卷统计、下载进度、上传队列都由状态提供方填充；缺字段按零值处理。
 type rawStatus struct {
 	State   string `json:"state"`
 	Auth    string `json:"auth"`
-	Entries *int64 `json:"entries"`
 	Volumes []struct {
 		Name    string `json:"name"`
 		Entries int64  `json:"entries"`
@@ -520,9 +500,9 @@ type rawStatus struct {
 //
 // 输入：v loadStatus 的返回值；l 当前文案
 // 输出：statusView
-// 预期：形状不符时退化成空列表并显示「无 daemon」，不 panic、不显示半截数据
+// 预期：形状不符时退化成空列表并显示空状态文案，不 panic、不显示半截数据
 func viewOf(v any, l pageLabels) statusView {
-	view := statusView{Empty: l.NoDaemon}
+	view := statusView{Empty: l.NoInstance}
 	b, err := json.Marshal(v)
 	if err != nil {
 		return view
@@ -548,9 +528,6 @@ func viewOf(v any, l pageLabels) statusView {
 			}
 		}
 		view.Transfers = append(view.Transfers, tv)
-	}
-	if len(view.Volumes) == 0 && rs.Entries != nil {
-		view.Empty = fmt.Sprintf("%s: %d", l.Entries, *rs.Entries)
 	}
 	for _, q := range rs.Queue {
 		view.Queue = append(view.Queue, queueView{Name: q.Name, State: q.State, Attempt: q.Attempt, Err: q.Err})

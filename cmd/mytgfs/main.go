@@ -19,20 +19,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"mytgfs/internal/auth"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
-	"mytgfs/internal/daemon"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/dav"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	"mytgfs/internal/ipc"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
@@ -98,8 +95,6 @@ func main() {
 		runUnmap(os.Args[2:])
 	case "umount":
 		runUmount(os.Args[2:])
-	case "daemon":
-		runDaemon(os.Args[2:])
 	case "web":
 		runWeb(os.Args[2:])
 	case "startup":
@@ -409,61 +404,6 @@ func runMount(_ []string) {
 	fatal(i18n.T("err.mount_removed"))
 }
 
-// runDaemon 管理后台守护进程。
-func runDaemon(args []string) {
-	if len(args) == 0 {
-		usage()
-		os.Exit(2)
-	}
-	switch args[0] {
-	case "run":
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
-		if err := daemon.Run(ctx); err != nil {
-			fatal(err.Error())
-		}
-	case "start":
-		exe, err := os.Executable()
-		if err != nil {
-			fatal(err.Error())
-		}
-		if err := daemon.Start(exe); err != nil {
-			fatal(err.Error())
-		}
-		for i := 0; i < 30; i++ {
-			if st, err := daemon.ReadState(); err == nil {
-				fmt.Printf("OK daemon started pid=%d addr=%s\n", st.PID, st.Addr)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		fatal("daemon 启动超时，检查 daemon.log")
-	case "status":
-		st, err := daemon.ReadState()
-		if err != nil {
-			fatal("daemon 未运行")
-		}
-		data, err := ipc.Call(context.Background(), st.Addr, st.Token, "status", nil)
-		if err != nil {
-			fatal(err.Error())
-		}
-		fmt.Println(string(data))
-	case "stop":
-		st, err := daemon.ReadState()
-		if err != nil {
-			fatal("daemon 未运行")
-		}
-		if _, err := ipc.Call(context.Background(), st.Addr, st.Token, "stop", nil); err != nil {
-			fatal(err.Error())
-		}
-		fmt.Println("OK stopped")
-	default:
-		usage()
-		os.Exit(2)
-	}
-}
-
-// runWeb 启动临时本地 Web 面板。
 // runWeb 启动本地面板。
 //
 // 输入：--port 端口（0 = 随机）、--no-open 不自动开浏览器

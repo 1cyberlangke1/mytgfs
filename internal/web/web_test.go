@@ -190,9 +190,9 @@ func TestPillKind(t *testing.T) {
 	}
 }
 
-// TestViewOfNormalizes 兼容托盘（volumes/transfers）与 daemon（entries）两种形状。
+// TestViewOfNormalizes 把状态负载归一化成渲染视图。
 func TestViewOfNormalizes(t *testing.T) {
-	l := pageLabels{NoDaemon: "无 daemon", Entries: "条目", Xfer: "下载中"}
+	l := pageLabels{NoInstance: "无实例", Entries: "条目", Xfer: "下载中"}
 
 	tray := map[string]any{
 		"state": "已连接",
@@ -213,14 +213,8 @@ func TestViewOfNormalizes(t *testing.T) {
 		t.Fatalf("进度换算失败: %+v", v.Transfers)
 	}
 
-	daemon := map[string]any{"entries": float64(7)}
-	v = viewOf(daemon, l)
-	if v.Empty != "条目: 7" {
-		t.Fatalf("daemon 形状应退回条目数，实际 %q", v.Empty)
-	}
-
-	if v := viewOf("不是对象", l); v.Empty != "无 daemon" {
-		t.Fatalf("非法形状应显示无 daemon，实际 %q", v.Empty)
+	if v := viewOf("不是对象", l); v.Empty != "无实例" {
+		t.Fatalf("非法形状应显示空状态，实际 %q", v.Empty)
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "cli.usage": "用法:\n  mytgfs version    打印版本与运行环境（支持 --json）\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs volume create --name <name>  建卷：建频道、拉 bot、关通知\n  mytgfs volume delete --name <name>  删卷：删频道、移除配置、删本地索引\n  mytgfs volume check  检查每个卷的频道是否仍可用\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]  启动 WebDAV 服务\n  mytgfs unmap --addr 127.0.0.1:8080  清理指向本服务的网络映射\n  mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>  引用复制文件\n  mytgfs put [--name 卷] [--remote /目录] <本地文件或目录...>  批量上传\n  mytgfs sync        拉频道历史重建索引\n  mytgfs umount [--point Y:]  安全移除挂载（不指定则全部）\n  mytgfs daemon start|status|stop  后台守护进程\n  mytgfs web [--port N]  本地 Web 面板\n  mytgfs tray [--port N]  系统托盘：挂载、自动同步、面板\n  mytgfs startup enable|disable|status  开机自启（默认关闭）\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
+  "cli.usage": "用法:\n  mytgfs version    打印版本与运行环境（支持 --json）\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs volume create --name <name>  建卷：建频道、拉 bot、关通知\n  mytgfs volume delete --name <name>  删卷：删频道、移除配置、删本地索引\n  mytgfs volume check  检查每个卷的频道是否仍可用\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]  启动 WebDAV 服务\n  mytgfs unmap --addr 127.0.0.1:8080  清理指向本服务的网络映射\n  mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>  引用复制文件\n  mytgfs put [--name 卷] [--remote /目录] <本地文件或目录...>  批量上传\n  mytgfs sync        拉频道历史重建索引\n  mytgfs umount [--point Y:]  安全移除挂载（不指定则全部）\n  mytgfs web [--port N]  本地 Web 面板\n  mytgfs tray [--port N]  系统托盘：挂载、自动同步、面板\n  mytgfs startup enable|disable|status  开机自启（默认关闭）\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
   "err.missing_api_hash": "缺少 secrets/api_hash",
   "err.session_key_prefix": "读取会话密钥失败",
   "prompt.bot_token": "bot token: ",
@@ -67,7 +67,6 @@
   "web.saved": "已保存",
   "web.entries": "文件数",
   "web.used": "已用",
-  "web.no_daemon": "没有正在运行的实例",
   "web.load_error": "无法连接服务",
   "web.sync_unavailable": "当前模式不支持手动同步",
   "web.new_volume": "新建卷",
@@ -184,5 +183,6 @@
   "web.state_local": "本地模式",
   "web.files_prev": "上一页",
   "web.files_next": "下一页",
-  "err.mount_removed": "盘符挂载已下线：请运行 mytgfs web，在面板开启 WebDAV 后映射盘符"
+  "err.mount_removed": "盘符挂载已下线：请运行 mytgfs web，在面板开启 WebDAV 后映射盘符",
+  "web.no_instance": "没有正在运行的实例"
 }
