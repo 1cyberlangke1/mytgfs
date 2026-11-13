@@ -62,13 +62,14 @@ func SyncInterval(seconds int) time.Duration {
 
 // AutoSync 周期性把频道差异应用进索引并通知挂载点刷新。
 //
-// 输入：ctx；fsys 挂载文件系统；idx 索引；d 差异源；interval 间隔；
+// 输入：ctx；notify 路径变更回调（可为 nil，纯面板模式没有挂载点要通知）；
 //
+//	idx 索引；d 差异源；interval 间隔；
 //	mu 与手动同步共用的互斥锁（可为 nil）
 //
 // 输出：无（ctx 取消时返回）
-// 预期：启动即同步一次；单轮失败只记日志不退出；有变化才发刷新通知
-func AutoSync(ctx context.Context, fsys *vfs.FS, idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex) {
+// 预期：启动即同步一次；单轮失败只记日志不退出；有变化才回调
+func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
@@ -86,8 +87,8 @@ func AutoSync(ctx context.Context, fsys *vfs.FS, idx *index.Index, d tgsync.Chan
 		switch {
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "自动同步失败: %v\n", err)
-		case res.Pulled > 0 || res.Deleted > 0:
-			fsys.NotifyPaths(res.Changed, res.Removed)
+		case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
+			notify(res.Changed, res.Removed)
 		}
 		select {
 		case <-ctx.Done():
@@ -554,7 +555,7 @@ func Run(opts Options) error {
 			vwg.Add(1)
 			go func() {
 				defer vwg.Done()
-				AutoSync(vctx, fsys, idx, differ, interval, &tv.mu)
+				AutoSync(vctx, fsys.NotifyPaths, idx, differ, interval, &tv.mu)
 			}()
 		}
 

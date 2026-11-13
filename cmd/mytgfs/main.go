@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mytgfs/internal/auth"
@@ -523,6 +524,33 @@ func runWeb(args []string) {
 		defer closeWebVolumes(vols)
 		davSvc, mount := newMountControl(cfgPath, vols)
 		defer davSvc.Stop()
+
+		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
+		vsync, vstop := context.WithCancel(ctx)
+		var vwg sync.WaitGroup
+		if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
+			for _, vol := range cfg.Volumes {
+				if !vol.Enabled {
+					continue
+				}
+				wv, ok := vols[vol.Name]
+				if !ok {
+					continue
+				}
+				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
+				vwg.Add(1)
+				go func() {
+					defer vwg.Done()
+					trayapp.AutoSync(vsync, nil, wv.idx, differ, interval, nil)
+				}()
+			}
+		}
+		// 先停自动同步再关索引：顺序反了会写已关闭的库
+		defer func() {
+			vstop()
+			vwg.Wait()
+		}()
+
 		return serve(web.Options{
 			Files: func(name string) (fm.Files, bool) {
 				v, ok := vols[name]
