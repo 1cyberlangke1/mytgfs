@@ -254,7 +254,10 @@
     "invalidAddr": "{field} must be host:port, for example 127.0.0.1:8080",
     "invalidTooLong": "{field} must be at most 64 characters",
     "saveCard": "Save",
-    "savedCard": "Saved"
+    "savedCard": "Saved",
+    "autostartTitle": "Startup",
+    "autostartLabel": "Start on login",
+    "autostartHint": "Runs in the tray right after you log in; turn it off to start it manually"
   },
   "offline": {
     "title": "Offline Access",

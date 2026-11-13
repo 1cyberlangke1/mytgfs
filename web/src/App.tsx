@@ -226,12 +226,14 @@ export default function App() {
     attachVolume: boolean;
     listChannels: boolean;
     login: boolean;
+    autostart: boolean;
   }>({
     createVolume: false,
     deleteVolume: false,
     attachVolume: false,
     listChannels: false,
     login: false,
+    autostart: false,
   });
   // 封面图地址带版本号，改完封面立刻刷新，不依赖浏览器缓存过期
   const [coverVersion, setCoverVersion] = useState(0);
@@ -326,6 +328,7 @@ export default function App() {
       attachVolume: Boolean(st.caps?.attachVolume),
       listChannels: Boolean(st.caps?.listChannels),
       login: Boolean(st.caps?.login),
+      autostart: Boolean(st.caps?.autostart),
     });
     if (st.mount) {
       setSettings((prev) => ({
@@ -1266,6 +1269,7 @@ export default function App() {
                   t={t}
                   locale={locale}
                   settings={settings}
+                  canAutostart={caps.autostart}
                   onSaveSettings={handleSaveSettings}
                   onNotifyError={(msg) => pushToast(msg, 'error')}
                 />

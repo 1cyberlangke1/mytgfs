@@ -23,6 +23,7 @@ import (
 	"mytgfs/internal/app"
 	"mytgfs/internal/auth"
 	"mytgfs/internal/authsvc"
+	"mytgfs/internal/autostart"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
@@ -498,7 +499,7 @@ func runWeb(args []string) {
 	bus := eventbus.New()
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑
-		if err := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath})}); err != nil {
+		if err := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); err != nil {
 			fatal(err.Error())
 		}
 		return
@@ -547,6 +548,8 @@ func runWeb(args []string) {
 
 		return serve(web.Options{
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
+			// 开机自启与命令行共用同一套系统注册项
+			Autostart: autostart.Control{},
 			Files: func(name string) (fm.Files, bool) {
 				v, ok := vols[name]
 				if !ok {
@@ -687,7 +690,7 @@ func runWeb(args []string) {
 	}
 	if tgclient.IsAuthLost(err) {
 		fmt.Fprintln(os.Stderr, i18n.T("err.auth_lost_hint"))
-		if serr := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath})}); serr != nil {
+		if serr := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); serr != nil {
 			fatal(serr.Error())
 		}
 		return

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Loader2, Save } from 'lucide-react';
+import { getAutostart, setAutostart } from '../api';
 import { AppSettingDef, AppSettings, Locale } from '../types';
 import { Translations, formatNumber } from '../utils/i18n';
 import { Button, Input, IOS_SOFT_SPRING, Switch } from './ui';
@@ -9,6 +10,7 @@ interface SettingsViewProps {
   t: Translations;
   locale: Locale;
   settings: AppSettings;
+  canAutostart: boolean;
   onSaveSettings: (values: Record<string, string>) => Promise<void>;
   onNotifyError: (msg: string) => void;
 }
@@ -87,6 +89,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   t,
   locale,
   settings,
+  canAutostart,
   onSaveSettings,
   onNotifyError,
 }) => {
@@ -100,6 +103,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [savingSection, setSavingSection] = useState('');
   const [savedSection, setSavedSection] = useState('');
+  const [autoOn, setAutoOn] = useState<boolean | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
+
+  // 自启状态读的是系统注册项，进页面时取一次
+  useEffect(() => {
+    if (!canAutostart) return;
+    let cancelled = false;
+    getAutostart()
+      .then((res) => {
+        if (!cancelled) setAutoOn(res.enabled);
+      })
+      .catch((err) => {
+        if (!cancelled) onNotifyError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canAutostart]);
+
+  // 开关是离散动作，切换即提交；失败时回退显示
+  const toggleAutostart = (on: boolean) => {
+    setAutoBusy(true);
+    setAutostart(on)
+      .then((res) => setAutoOn(res.enabled))
+      .catch((err) => onNotifyError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setAutoBusy(false));
+  };
 
   const savedRef = useRef(saved);
   savedRef.current = saved;
@@ -252,6 +282,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
         {t.settings.title}
       </h1>
+
+      {canAutostart && (
+        <section className="surface-card rounded-2xl p-6 space-y-4">
+          <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
+            {t.settings.autostartTitle}
+          </h2>
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                {t.settings.autostartLabel}
+              </p>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.settings.autostartHint}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={autoOn === true}
+                disabled={autoOn === null || autoBusy}
+                onCheckedChange={toggleAutostart}
+                aria-label={t.settings.autostartLabel}
+              />
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                {autoOn === true ? t.settings.boolOn : t.settings.boolOff}
+              </span>
+            </div>
+          </div>
+        </section>
+      )}
 
       {groups.map(([section, defs]) => {
         const dirty = sectionDirty(defs);

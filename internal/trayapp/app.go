@@ -444,6 +444,8 @@ func Run(opts Options) error {
 	buildPanel := func() http.Handler {
 		webOpts := web.Options{
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
+			// 桌面壳里的自启开关与托盘菜单写同一处注册项
+			Autostart: autostart.Control{},
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
 				st := connText

@@ -74,6 +74,8 @@ type Options struct {
 	Bus *eventbus.Bus
 	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
 	ThumbDir string
+	// Autostart 控制开机自启；nil 时接口返回 501、面板不显示开关
+	Autostart AutostartControl
 }
 
 // NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
@@ -132,6 +134,7 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/login/user/code", handleAPIUserFinish(opts))
 	mux.Handle("/api/identity", handleAPIIdentity(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
+	mux.Handle("/api/autostart", handleAPIAutostart(opts))
 	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))
 	mux.Handle("/api/events", handleAPIEvents(opts.Bus))

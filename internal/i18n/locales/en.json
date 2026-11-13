@@ -343,5 +343,7 @@
   "err.bot_token_required": "bot token is required",
   "err.code_send_failed": "the login code was not sent, try again later",
   "err.session_missing": "no login session yet, sign in first",
-  "err.login_unavailable": "signing in from the panel is unavailable here"
+  "err.login_unavailable": "signing in from the panel is unavailable here",
+  "err.autostart_read": "failed to read autostart state",
+  "err.autostart_write": "failed to change autostart"
 }

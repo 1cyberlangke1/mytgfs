@@ -343,5 +343,7 @@
   "err.bot_token_required": "请填 bot token",
   "err.code_send_failed": "验证码没有发出去，稍后再试",
   "err.session_missing": "还没有登录会话，请先登录",
-  "err.login_unavailable": "当前入口不支持在面板里登录"
+  "err.login_unavailable": "当前入口不支持在面板里登录",
+  "err.autostart_read": "读取开机自启状态失败",
+  "err.autostart_write": "修改开机自启失败"
 }

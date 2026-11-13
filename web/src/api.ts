@@ -38,6 +38,10 @@ export interface ApiMount {
   volume: string;
 }
 
+export interface ApiAutostart {
+  enabled: boolean;
+}
+
 export interface ApiQueueItem {
   id: number;
   name: string;
@@ -54,6 +58,7 @@ export interface ApiState {
     attachVolume?: boolean;
     listChannels?: boolean;
     login?: boolean;
+    autostart?: boolean;
   };
   status?: {
     state?: string;
@@ -221,6 +226,19 @@ export function saveSettings(values: Record<string, string>): Promise<{ saved: b
 // getMount 读取 WebDAV 挂盘状态。
 export function getMount(): Promise<ApiMount> {
   return request<ApiMount>('/api/mount');
+}
+// getAutostart 读取开机自启状态（系统注册项）。
+export function getAutostart(): Promise<ApiAutostart> {
+  return request<ApiAutostart>('/api/autostart');
+}
+
+// setAutostart 开启或关闭开机自启。
+export function setAutostart(enabled: boolean): Promise<ApiAutostart> {
+  return request('/api/autostart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 // setMount 开关 WebDAV 挂盘。

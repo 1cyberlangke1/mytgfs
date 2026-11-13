@@ -36,12 +36,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # Linux 托盘（fyne.io/systray）需要 GTK 与 AppIndicator 头文件
-      - name: 安装 Linux 托盘依赖
+      # Wails v3 桌面壳在 Linux 走 cgo + GTK4/WebKitGTK 6.0，缺开发包会导致 pkg-config 失败
+      - name: 安装 Linux 桌面依赖
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
       - name: 构建
         shell: bash
         run: |
