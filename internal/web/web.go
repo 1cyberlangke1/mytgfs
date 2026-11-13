@@ -160,6 +160,7 @@ type pageLabels struct {
 	FilesDownload, FilesMove, FilesDelete, FilesConfirm         string
 	FilesDone, NetError                                         string
 	FilesDetails, FilesPath                                     string
+	FilesPrev, FilesNext                                        string
 	// CanCreate 决定建卷卡片是否渲染
 	CanCreate bool
 	// 挂载为网络驱动器
@@ -224,6 +225,8 @@ func loadLabels(canCreate bool) pageLabels {
 		FilesConfirm:   i18n.T("web.files_confirm"),
 		FilesDone:      i18n.T("web.files_done"),
 		FilesDetails:   i18n.T("web.files_details"),
+		FilesPrev:      i18n.T("web.files_prev"),
+		FilesNext:      i18n.T("web.files_next"),
 		FilesPath:      i18n.T("web.files_path"),
 		NetError:       i18n.T("web.net_error"),
 
@@ -1020,6 +1023,9 @@ input:hover,textarea:hover{border-color:var(--line-strong)}
   padding:28px 12px;text-align:center;color:var(--muted);
   border:1px dashed var(--line-strong);border-radius:12px;background:transparent;
 }
+.pager{display:flex;align-items:center;gap:12px;justify-content:center;padding:14px 0 2px}
+.pager .pinfo{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
+.pager button{min-height:32px;padding:5px 14px;font-size:12.5px}
 .fname .ic{color:var(--muted);transition:color .15s ease}
 .ftable tbody tr:hover .fname .ic{color:var(--blue)}
 .fname a{font-weight:500}

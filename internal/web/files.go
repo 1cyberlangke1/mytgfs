@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,12 +65,23 @@ type browserData struct {
 	Dir     string
 	Crumbs  []crumb
 	Rows    []fileRow
+	// 分页：Page 从 1 起；Pages<=1 时不渲染翻页条
+	Page     int
+	Pages    int
+	Total    int
+	PrevPage int
+	NextPage int
 	// Message/MsgKind 是上一次操作的反馈，空串表示不显示
 	Message string
 	MsgKind string
 	// Available 为 false 时只显示提示，不渲染工具栏
 	Available bool
 }
+
+// filesPageSize 是单页最多渲染的条目数。
+//
+// 目录可能有上千个文件，一次全渲染会让页面与索引查询都很重。
+const filesPageSize = 200
 
 // handleFragFiles 列出目录（GET /frag/files?vol=&dir=）。
 func handleFragFiles(api *filesAPI) http.HandlerFunc {
@@ -302,7 +314,36 @@ func (api *filesAPI) browser(r *http.Request, vol, dir, msg, kind string) browse
 	}
 	data.Available = true
 	data.Crumbs = crumbsOf(data.Dir)
-	for _, e := range entries {
+
+	// 分页：页码来自查询串（GET）或表单（POST），非法值一律回落到第 1 页
+	page := 1
+	if n, perr := strconv.Atoi(r.FormValue("page")); perr == nil && n > 0 {
+		page = n
+	}
+	data.Total = len(entries)
+	data.Pages = (data.Total + filesPageSize - 1) / filesPageSize
+	if data.Pages < 1 {
+		data.Pages = 1
+	}
+	if page > data.Pages {
+		page = data.Pages
+	}
+	data.Page = page
+	start := (page - 1) * filesPageSize
+	end := start + filesPageSize
+	if end > data.Total {
+		end = data.Total
+	}
+	if start > data.Total {
+		start = data.Total
+	}
+	if data.Page > 1 {
+		data.PrevPage = data.Page - 1
+	}
+	if data.Page < data.Pages {
+		data.NextPage = data.Page + 1
+	}
+	for _, e := range entries[start:end] {
 		p := path.Join(data.Dir, e.Name)
 		data.Rows = append(data.Rows, fileRow{Entry: e, Path: p, Download: downloadURL(data.Volume, p)})
 	}

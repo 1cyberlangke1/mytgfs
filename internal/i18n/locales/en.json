@@ -181,5 +181,7 @@
   "web.files_details": "Details",
   "web.files_path": "Path",
   "web.upload_queue": "Upload queue",
-  "web.state_local": "Local mode"
+  "web.state_local": "Local mode",
+  "web.files_prev": "Previous",
+  "web.files_next": "Next"
 }

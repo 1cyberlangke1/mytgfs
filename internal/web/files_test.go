@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/webdav"
 
 	"mytgfs/internal/fm"
+	"mytgfs/internal/i18n"
 )
 
 // fakeFiles 是 fm.Files 的假实现。
@@ -313,8 +314,9 @@ func TestFragFilesUpload(t *testing.T) {
 	if f.uploads["/a.txt"] != "alpha" || f.uploads["/b.txt"] != "bravo" {
 		t.Fatalf("uploads = %v", f.uploads)
 	}
-	if !strings.Contains(rec.Body.String(), "已上传 2 个文件") {
-		t.Errorf("body = %s", rec.Body.String())
+	// 文案随语言变化，断言走 i18n 而不是硬编码中文
+	if want := i18n.T("web.files_uploaded", 2); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("body 缺少 %q: %s", want, rec.Body.String())
 	}
 }
 

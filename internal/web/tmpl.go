@@ -100,6 +100,13 @@ const browserHTML = `
   </tbody>
 </table>
 </div>
+{{if gt .Pages 1}}
+<div class="pager">
+  <button type="button" class="ghost"{{if .PrevPage}} hx-get="/frag/files?vol={{urlq .Volume}}&dir={{urlq .Dir}}&page={{.PrevPage}}" hx-target="#browser" hx-swap="innerHTML"{{else}} disabled{{end}}>{{.Labels.FilesPrev}}</button>
+  <span class="pinfo">{{.Page}} / {{.Pages}} · {{.Total}}</span>
+  <button type="button" class="ghost"{{if .NextPage}} hx-get="/frag/files?vol={{urlq .Volume}}&dir={{urlq .Dir}}&page={{.NextPage}}" hx-target="#browser" hx-swap="innerHTML"{{else}} disabled{{end}}>{{.Labels.FilesNext}}</button>
+</div>
+{{end}}
 <div id="detail" class="detailwrap"></div>
 {{end}}`
 
