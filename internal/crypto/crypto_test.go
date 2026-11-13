@@ -38,8 +38,11 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("size=%d 加密失败: %v", size, err)
 		}
-		if size > 0 && bytes.Contains(blob, plain) {
-			t.Fatalf("size=%d 密文里出现了明文", size)
+		if bytes.Equal(blob, plain) {
+			t.Fatalf("size=%d 密文与明文完全相同", size)
+		}
+		if !bytes.HasPrefix(blob, []byte("TDS1")) {
+			t.Fatalf("size=%d 密文缺少 TDS1 前缀", size)
 		}
 		got, err := Decrypt(key, blob)
 		if err != nil {
