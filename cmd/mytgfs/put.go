@@ -47,7 +47,7 @@ type putItem struct {
 // runPut 处理批量上传。
 func runPut(args []string) {
 	fs := flag.NewFlagSet("put", flag.ExitOnError)
-	name := fs.String("name", "mytgfs", "volume name")
+	name := fs.String("name", "", "volume name（空则用第一个卷）")
 	remote := fs.String("remote", "/", "remote base directory")
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -67,9 +67,10 @@ func runPut(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volume, ok := volumeByName(cfg, *name)
+	volName := resolveVolumeName(cfg, *name)
+	volume, ok := volumeByName(cfg, volName)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", *name))
+		fatal(i18n.T("err.volume_not_found", volName))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -79,7 +80,7 @@ func runPut(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
+	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
 	if err != nil {
 		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}

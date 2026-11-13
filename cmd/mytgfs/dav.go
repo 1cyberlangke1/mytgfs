@@ -16,8 +16,6 @@ import (
 	"os/signal"
 	"time"
 
-	"golang.org/x/net/webdav"
-
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
@@ -36,16 +34,17 @@ import (
 func runWebDAV(args []string) {
 	fs := flag.NewFlagSet("webdav", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "监听地址")
-	name := fs.String("name", "mytgfs", "卷名")
+	name := fs.String("name", "", "卷名（空则用第一个卷）")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volume, ok := volumeByName(cfg, *name)
+	volName := resolveVolumeName(cfg, *name)
+	volume, ok := volumeByName(cfg, volName)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", *name))
+		fatal(i18n.T("err.volume_not_found", volName))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -55,7 +54,7 @@ func runWebDAV(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
+	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
 	if err != nil {
 		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}
@@ -91,11 +90,7 @@ func runWebDAV(args []string) {
 		if rerr := fsys.ResumePending(); rerr != nil {
 			fmt.Fprintf(os.Stderr, "pending resume: %v\n", rerr)
 		}
-		handler := &webdav.Handler{
-			Prefix:     "/",
-			FileSystem: fsys,
-			LockSystem: webdav.NewMemLS(),
-		}
+		handler := dav.NewHandler(fsys, nil)
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
 		go func() {
@@ -105,7 +100,7 @@ func runWebDAV(args []string) {
 			_ = srv.Shutdown(shutdown)
 		}()
 
-		fmt.Printf("webdav listening on http://%s/ (volume %s)\n", *addr, *name)
+		fmt.Printf("webdav listening on http://%s/ (volume %s)\n", *addr, volName)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}

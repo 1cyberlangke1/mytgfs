@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"mytgfs/internal/dav"
 	"mytgfs/internal/netmap"
 )
 
@@ -59,11 +60,7 @@ func (s *Service) Start(addr, volume string, fs webdav.FileSystem) (State, error
 			return State{}, fmt.Errorf("listen %s: %w", addr, err)
 		}
 	}
-	handler := &webdav.Handler{
-		Prefix:     "/",
-		FileSystem: fs,
-		LockSystem: webdav.NewMemLS(),
-	}
+	handler := dav.NewHandler(fs, nil)
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	s.srv, s.ln, s.addr, s.volume = srv, ln, ln.Addr().String(), volume
 	go func() {

@@ -14,6 +14,8 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -430,6 +432,178 @@ func (d *FileSystem) renameDir(oldName, newName string) error {
 	}
 	// 派生目录（没有显式记录）也要保证新路径成立
 	return d.idx.PutDir(d.ctx, newName)
+}
+
+// CopyPrefix 用引用复制实现 WebDAV COPY：源文件只发一条引用消息，不传输字节。
+//
+// 输入：src 源路径；dst 目标路径；overwrite 目标已存在时是否替换；
+// depth <0 表示整棵树，0 表示目录只建壳
+// 输出：error
+// 预期：
+//   - 源不存在返回 os.ErrNotExist；目标存在且不允许覆盖返回 os.ErrExist
+//   - 目标父目录必须已存在，否则同样按不存在处理
+//   - 文件走 store.Copy 发引用消息；目录递归复制子文件与目录记录
+func (d *FileSystem) CopyPrefix(ctx context.Context, src, dst string, overwrite bool, depth int) error {
+	src, dst = clean(src), clean(dst)
+	if src == "/" || dst == "/" {
+		return errors.New(i18n.T("err.dav_root_copy"))
+	}
+	if src == dst {
+		return errors.New(i18n.T("err.dav_copy_same"))
+	}
+	if strings.HasPrefix(dst+"/", src+"/") {
+		return errors.New(i18n.T("err.dav_copy_into_self"))
+	}
+	if parent := path.Dir(dst); parent != "/" && !d.isDir(parent) {
+		return os.ErrNotExist
+	}
+	if d.exists(dst) {
+		if !overwrite {
+			return os.ErrExist
+		}
+		if err := d.RemoveAll(ctx, dst); err != nil {
+			return err
+		}
+	}
+	f, ok, err := d.idx.Get(d.ctx, src)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return d.copyFile(ctx, f, dst)
+	}
+	if d.isDir(src) {
+		return d.copyTree(ctx, src, dst, depth)
+	}
+	return os.ErrNotExist
+}
+
+// exists 判断路径是否已是文件或目录。
+func (d *FileSystem) exists(p string) bool {
+	if f, ok, err := d.idx.Get(d.ctx, p); err == nil && ok && f.MessageID > 0 {
+		return true
+	}
+	return d.isDir(p)
+}
+
+// copyFile 复制单个文件：发引用消息并登记索引。
+func (d *FileSystem) copyFile(ctx context.Context, f index.File, dst string) error {
+	part, err := d.store.Copy(ctx, partOf(f), path.Base(dst), "application/octet-stream",
+		tgsync.EncodeCaptionHash(dst, f.Sha256))
+	if err != nil {
+		return err
+	}
+	return d.idx.Replace(ctx, index.File{
+		Path:          dst,
+		MessageID:     part.MessageID,
+		DocumentID:    part.DocumentID,
+		AccessHash:    part.AccessHash,
+		FileReference: part.FileReference,
+		Size:          part.Size,
+		Mtime:         time.Now().Unix(),
+		Sha256:        f.Sha256,
+	})
+}
+
+// copyTree 复制整棵目录：先建目录记录，再逐文件引用复制。
+func (d *FileSystem) copyTree(ctx context.Context, src, dst string, depth int) error {
+	if err := d.idx.PutDir(ctx, dst); err != nil {
+		return err
+	}
+	if depth == 0 {
+		return nil
+	}
+	dirs, err := d.idx.Dirs(ctx, src)
+	if err != nil {
+		return err
+	}
+	for _, p := range dirs {
+		if p == src {
+			continue
+		}
+		if err := d.idx.PutDir(ctx, dst+strings.TrimPrefix(p, src)); err != nil {
+			return err
+		}
+	}
+	files, err := d.idx.ListPrefix(ctx, src)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := d.copyFile(ctx, f, dst+strings.TrimPrefix(f.Path, src)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyFileSystem 是 COPY 优化要求的能力。
+type copyFileSystem interface {
+	webdav.FileSystem
+	CopyPrefix(ctx context.Context, src, dst string, overwrite bool, depth int) error
+}
+
+// copyHandler 把 COPY 换成引用复制，其余请求交给标准 handler。
+type copyHandler struct {
+	base *webdav.Handler
+	fs   copyFileSystem
+}
+
+// NewHandler 包装 webdav.Handler，让 COPY 走引用复用。
+//
+// 输入：fs 文件系统；ls 锁系统（nil 时新建内存锁）
+// 输出：http.Handler
+// 预期：
+//   - COPY 在本地索引可解析时零字节完成，返回 201（新建）或 204（覆盖）
+//   - 其它方法、缺少 Destination、跨主机目标原样交给标准 handler
+func NewHandler(fs webdav.FileSystem, ls webdav.LockSystem) http.Handler {
+	if ls == nil {
+		ls = webdav.NewMemLS()
+	}
+	base := &webdav.Handler{Prefix: "/", FileSystem: fs, LockSystem: ls}
+	cfs, ok := fs.(copyFileSystem)
+	if !ok {
+		return base
+	}
+	return &copyHandler{base: base, fs: cfs}
+}
+
+func (h *copyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "COPY" {
+		h.base.ServeHTTP(w, r)
+		return
+	}
+	u, err := url.Parse(r.Header.Get("Destination"))
+	if err != nil || u.Path == "" || (u.Host != "" && u.Host != r.Host) {
+		h.base.ServeHTTP(w, r)
+		return
+	}
+	src, dst := clean(r.URL.Path), clean(u.Path)
+	overwrite := r.Header.Get("Overwrite") != "F"
+	depth := -1
+	if r.Header.Get("Depth") == "0" {
+		depth = 0
+	}
+	existed := false
+	if _, serr := h.base.FileSystem.Stat(r.Context(), dst); serr == nil {
+		existed = true
+	}
+	if cerr := h.fs.CopyPrefix(r.Context(), src, dst, overwrite, depth); cerr != nil {
+		switch {
+		case errors.Is(cerr, os.ErrNotExist):
+			w.WriteHeader(http.StatusNotFound)
+		case errors.Is(cerr, os.ErrExist):
+			w.WriteHeader(http.StatusPreconditionFailed)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+		return
+	}
+	if existed {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 // Stat 返回文件或目录信息。

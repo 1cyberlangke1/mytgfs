@@ -34,7 +34,7 @@ import (
 // runCopy 处理频道内复制。
 func runCopy(args []string) {
 	fs := flag.NewFlagSet("cp", flag.ExitOnError)
-	name := fs.String("name", "mytgfs", "volume name")
+	name := fs.String("name", "", "volume name（空则用第一个卷）")
 	to := fs.String("to", "", "目标卷名，留空表示同一卷")
 	force := fs.Bool("force", false, "覆盖目标路径上已有的文件")
 	_ = fs.Parse(args)
@@ -52,20 +52,21 @@ func runCopy(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volume, ok := volumeByName(cfg, *name)
+	volName := resolveVolumeName(cfg, *name)
+	volume, ok := volumeByName(cfg, volName)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", *name))
+		fatal(i18n.T("err.volume_not_found", volName))
 	}
 	dstName := *to
 	if dstName == "" {
-		dstName = *name
+		dstName = volName
 	}
 	dstVolume, ok := volumeByName(cfg, dstName)
 	if !ok {
 		fatal(i18n.T("err.volume_target_not_found", dstName))
 	}
 	// 同卷同路径才是无意义操作；跨卷复制到相同路径是合法的
-	if src == dst && dstName == *name {
+	if src == dst && dstName == volName {
 		fatal(i18n.T("err.cp_same_path"))
 	}
 	apiHash := cfg.APIHash()
@@ -76,7 +77,7 @@ func runCopy(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
+	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
 	if err != nil {
 		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}
@@ -84,7 +85,7 @@ func runCopy(args []string) {
 
 	// 目标卷与源卷不同才需要另开索引；同卷复用同一句柄
 	dstIdx := idx
-	if dstName != *name {
+	if dstName != volName {
 		dstIdx, err = index.Open(datadir.Path("index-" + dstName + ".db"))
 		if err != nil {
 			fatal(fmt.Sprintf(i18n.T("err.index_open_target"), err))
@@ -165,7 +166,7 @@ func runCopy(args []string) {
 			}
 		}
 		fmt.Printf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
-			*name, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
+			volName, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
 		return nil
 	})
 	if err != nil {

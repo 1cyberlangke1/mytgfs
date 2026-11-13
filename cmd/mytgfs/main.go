@@ -317,12 +317,12 @@ func runChannelInit(args []string) {
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
-// syncVolumeName 决定同步哪个卷。
+// resolveVolumeName 决定命令作用于哪个卷。
 //
 // 输入：cfg 配置；name 命令行 --name（可为空）
 // 输出：卷名
 // 预期：显式 --name 原样返回；留空时取第一个卷，没有卷配置时用默认名 mytgfs
-func syncVolumeName(cfg config.Config, name string) string {
+func resolveVolumeName(cfg config.Config, name string) string {
 	if name != "" {
 		return name
 	}
@@ -351,7 +351,7 @@ func runSync(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("读取配置: %v", err))
 	}
-	volName := syncVolumeName(cfg, *name)
+	volName := resolveVolumeName(cfg, *name)
 	// 同步目标是卷对应的频道；只有完全没有卷配置时才回落到 [telegram].channel_id
 	vol, ok := volumeByName(cfg, volName)
 	if !ok {
