@@ -36,6 +36,18 @@
 go build -o mytgfs ./cmd/mytgfs
 ```
 
+## 安装（Windows，日常不需要命令行）
+
+1. 解压发行包，在 PowerShell 里执行一次 `.\install.ps1`
+   （默认装到 `%LOCALAPPDATA%\mytgfs`，并创建开始菜单快捷方式）。
+2. 把 `config.toml`、`secrets/` 配好；登录 bot / user 需要各跑一次 `mytgfs auth`，这两步要用命令行。
+3. 之后从开始菜单点 **mytgfs**：启动的是 `mytgfs-tray.exe`（GUI 子系统），
+   **不会出现命令行窗口**。右键托盘图标可以打开面板、开关 WebDAV、勾选开机自启。
+4. 需要盘符时，用管理员 PowerShell 跑一次 `setup-webdav.ps1`——这是整套流程里唯一会开控制台的步骤。
+
+`mytgfs.exe` 是命令行版（控制台子系统），适合脚本和首次登录；双击它只会停在控制台里等命令。
+日常使用请走 `mytgfs-tray.exe` 或开始菜单快捷方式，托盘、面板、WebDAV 开关全程无控制台窗口。
+
 ## 快速开始
 
 1. 复制配置模板并填写：

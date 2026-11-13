@@ -35,4 +35,5 @@ $sc.IconLocation = Join-Path $Dir 'mytgfs-tray.exe'
 $sc.Save()
 
 Write-Host "Installed to $Dir"
-Write-Host "Next: run 'mytgfs webdav' in $Dir, then run setup-webdav.ps1 as Administrator to map a drive."
+Write-Host "Next: open the mytgfs shortcut in the Start Menu, enable WebDAV in the panel,"
+Write-Host "then run setup-webdav.ps1 as Administrator to map a drive."

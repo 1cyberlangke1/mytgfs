@@ -7,7 +7,6 @@ package netmap
 // 非 Windows 平台没有这个概念，直接跳过。
 
 import (
-	"os/exec"
 	"runtime"
 	"strings"
 )
@@ -24,7 +23,7 @@ func Cleanup(addr string) {
 	if runtime.GOOS != "windows" || addr == "" {
 		return
 	}
-	out, err := exec.Command("net", "use").Output()
+	out, err := command("use").Output()
 	if err != nil {
 		return
 	}
@@ -43,7 +42,7 @@ func Cleanup(addr string) {
 		// 盘符是形如 "Y:" 的两字符字段
 		for f := range strings.FieldsSeq(line) {
 			if len(f) == 2 && strings.HasSuffix(f, ":") {
-				_ = exec.Command("net", "use", f, "/delete", "/y").Run()
+				_ = command("use", f, "/delete", "/y").Run()
 			}
 		}
 	}
