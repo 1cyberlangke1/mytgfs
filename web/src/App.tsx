@@ -65,6 +65,7 @@ import { OverviewView } from './components/OverviewView';
 import { FilesView } from './components/FilesView';
 import { MountView } from './components/MountView';
 import { SettingsView } from './components/SettingsView';
+import { AccountCard } from './components/AccountCard';
 import { OfflineView } from './components/OfflineView';
 import { FilePreviewModal } from './components/FilePreviewModal';
 import { BrandEmblemSvg } from './components/VisualAssets';
@@ -224,7 +225,14 @@ export default function App() {
     deleteVolume: boolean;
     attachVolume: boolean;
     listChannels: boolean;
-  }>({ createVolume: false, deleteVolume: false, attachVolume: false, listChannels: false });
+    login: boolean;
+  }>({
+    createVolume: false,
+    deleteVolume: false,
+    attachVolume: false,
+    listChannels: false,
+    login: false,
+  });
   // 封面图地址带版本号，改完封面立刻刷新，不依赖浏览器缓存过期
   const [coverVersion, setCoverVersion] = useState(0);
 
@@ -317,6 +325,7 @@ export default function App() {
       deleteVolume: Boolean(st.caps?.deleteVolume),
       attachVolume: Boolean(st.caps?.attachVolume),
       listChannels: Boolean(st.caps?.listChannels),
+      login: Boolean(st.caps?.login),
     });
     if (st.mount) {
       setSettings((prev) => ({
@@ -1020,9 +1029,8 @@ export default function App() {
                     {formatBytes(summary.totalBytes, 1, locale)}
                   </span>
                 </div>
-                {summary.perVolume.map(({ volume, totalBytes }) => {
+                {summary.perVolume.map(({ volume, totalBytes, sharePct }) => {
                   const isCurrentVol = activeVolumeId === volume.id && activeTab === 'files';
-                  const sharePct = (totalBytes / Math.max(1, summary.totalBytes)) * 100;
                   const visualWidth = Math.min(100, Math.max(6, sharePct));
                   return (
                     <motion.button
@@ -1053,7 +1061,7 @@ export default function App() {
                           dir="ltr"
                           className="text-[11px] font-mono tabular-nums text-zinc-500 dark:text-zinc-400 shrink-0"
                         >
-                          {formatBytes(totalBytes, 1, locale)} {formatPercent(sharePct, locale, 2)}
+                          {formatBytes(totalBytes, 1, locale)} {formatPercent(sharePct, locale)}
                         </span>
                       </div>
                       <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
@@ -1250,13 +1258,16 @@ export default function App() {
             )}
 
             {activeTab === 'settings' && (
-              <SettingsView
-                t={t}
-                locale={locale}
-                settings={settings}
-                onSaveSettings={handleSaveSettings}
-                onNotifyError={(msg) => pushToast(msg, 'error')}
-              />
+              <div className="space-y-8">
+                <SettingsView
+                  t={t}
+                  locale={locale}
+                  settings={settings}
+                  onSaveSettings={handleSaveSettings}
+                  onNotifyError={(msg) => pushToast(msg, 'error')}
+                />
+                {caps.login && <AccountCard t={t} onNotify={pushToast} />}
+              </div>
             )}
 
             {activeTab === 'offline' && (

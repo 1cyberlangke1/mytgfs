@@ -22,6 +22,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"mytgfs/internal/app"
+	"mytgfs/internal/authsvc"
 	"mytgfs/internal/autostart"
 	"mytgfs/internal/brand"
 	"mytgfs/internal/channel"
@@ -442,6 +443,7 @@ func Run(opts Options) error {
 	// 面板路由：桌面壳直接挂在 webview 上，不监听端口
 	buildPanel := func() http.Handler {
 		webOpts := web.Options{
+			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
 				st := connText

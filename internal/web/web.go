@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 
+	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
@@ -57,6 +58,8 @@ type Options struct {
 	AttachVolume AttachVolumeFunc
 	// Channels 为 nil 时频道下拉为空，只能手填 chat_id
 	Channels ChannelsFunc
+	// Auth 提供凭证填写与登录；nil 时面板不显示账号卡
+	Auth *authsvc.Service
 	// Files 返回指定卷的文件管理后端；nil 表示不提供文件管理
 	Files func(volume string) (fm.Files, bool)
 	// Volumes 返回可管理卷名，按配置顺序
@@ -123,6 +126,11 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/volumes", handleAPIVolumes(opts))
 	mux.Handle("/api/volumes/attach", handleAPIAttachVolume(opts))
 	mux.Handle("/api/channels", handleAPIChannels(opts))
+	mux.Handle("/api/credentials", handleAPICredentials(opts))
+	mux.Handle("/api/login/bot", handleAPILoginBot(opts))
+	mux.Handle("/api/login/user/start", handleAPIUserStart(opts))
+	mux.Handle("/api/login/user/code", handleAPIUserFinish(opts))
+	mux.Handle("/api/identity", handleAPIIdentity(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
 	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))

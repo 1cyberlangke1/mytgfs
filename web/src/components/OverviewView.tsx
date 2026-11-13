@@ -242,10 +242,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes }) => {
+            {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes, sharePct }) => {
               const isSelected = volume.id === activeVolumeId;
 
-              const sharePct = (totalBytes / Math.max(1, summary.totalBytes)) * 100;
+              // 卷间占比来自 summary（最大余数法），文件类型占比留在卷内
 
               // Compute file-type composition segments inside this volume
               const volFiles = files.filter((f) => f.volumeId === volume.id && !f.isDir);
@@ -294,7 +294,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           </h3>
                         </div>
                         <span dir="ltr" className="text-xs font-mono font-semibold tabular-nums text-white/90 shrink-0">
-                          {formatPercent(sharePct, locale, 2)}
+                          {formatPercent(sharePct, locale)}
                         </span>
                       </div>
                     </div>

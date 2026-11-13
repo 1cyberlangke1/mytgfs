@@ -314,6 +314,32 @@ export function getItemFullPath(allFiles: FileItem[], item: FileItem): string {
 }
 
 /**
+ * Splits 100 integer percent points across parts so the visible total is exactly 100.
+ *
+ * Input: byte counts (non-negative); all-zero input is allowed.
+ * Output: integer percentages with the same length, summing to 100 (all zeros when empty).
+ * Expected: largest remainder method — floor every exact share, then give the
+ * leftover points to the biggest fractional parts. 99.6% therefore shows as 99%,
+ * and the points are taken from the smallest shares instead of rounding up to 100%.
+ */
+export function apportionPercents(parts: number[]): number[] {
+  const total = parts.reduce((acc, p) => acc + Math.max(0, p), 0);
+  if (total <= 0) return parts.map(() => 0);
+  const exact = parts.map((p) => (Math.max(0, p) / total) * 100);
+  const base = exact.map((v) => Math.floor(v));
+  let left = 100 - base.reduce((acc, v) => acc + v, 0);
+  const order = exact
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  const out = base.slice();
+  for (let k = 0; k < order.length && left > 0; k += 1) {
+    out[order[k].i] += 1;
+    left -= 1;
+  }
+  return out;
+}
+
+/**
  * Aggregates per-volume totals for the overview cards.
  */
 export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[]) {
@@ -330,11 +356,13 @@ export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[])
   const totalVolumes = volumes.length;
   const totalFiles = perVolume.reduce((acc, v) => acc + v.fileCount, 0);
   const totalBytes = perVolume.reduce((acc, v) => acc + v.totalBytes, 0);
+  // 百分比用最大余数法分配，保证所有卷加起来正好 100
+  const pcts = apportionPercents(perVolume.map((v) => v.totalBytes));
 
   return {
     totalVolumes,
     totalFiles,
     totalBytes,
-    perVolume,
+    perVolume: perVolume.map((v, i) => ({ ...v, sharePct: pcts[i] })),
   };
 }

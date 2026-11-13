@@ -284,6 +284,7 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			"deleteVolume": opts.DeleteVolume != nil,
 			"attachVolume": opts.AttachVolume != nil,
 			"listChannels": opts.Channels != nil,
+			"login":        opts.Auth != nil,
 		}
 		if opts.Status != nil {
 			if st, err := opts.Status(r.Context()); err == nil {

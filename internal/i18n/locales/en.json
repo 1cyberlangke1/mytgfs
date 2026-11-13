@@ -338,5 +338,11 @@
   "err.volume_attach_unavailable": "attaching an existing channel is unavailable here",
   "cli.flag.chat_id": "channel id: -100... or bare id",
   "err.user_session_missing": "no user session yet: run mytgfs auth login once",
-  "err.channels_unavailable": "listing channels is unavailable here, enter the chat id manually"
+  "err.channels_unavailable": "listing channels is unavailable here, enter the chat id manually",
+  "err.phone_required": "phone number with country code is required",
+  "err.code_required": "login code is required",
+  "err.bot_token_required": "bot token is required",
+  "err.code_send_failed": "the login code was not sent, try again later",
+  "err.session_missing": "no login session yet, sign in first",
+  "err.login_unavailable": "signing in from the panel is unavailable here"
 }

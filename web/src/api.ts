@@ -53,6 +53,7 @@ export interface ApiState {
     deleteVolume?: boolean;
     attachVolume?: boolean;
     listChannels?: boolean;
+    login?: boolean;
   };
   status?: {
     state?: string;
@@ -327,4 +328,78 @@ export async function isCached(url: string): Promise<boolean> {
   if (typeof caches === 'undefined') return false;
   const cache = await caches.open(OFFLINE_CACHE);
   return (await cache.match(new Request(url))) !== undefined;
+}
+
+// ApiCredentials 是凭证与登录态：只有「有没有」，没有密钥内容。
+export interface ApiCredentials {
+  api_id: number;
+  api_hash_set: boolean;
+  bot_token_set: boolean;
+  bot_session: boolean;
+  user_session: boolean;
+}
+
+// ApiIdentity 是登录后的账号身份。
+export interface ApiIdentity {
+  id: number;
+  username: string;
+  name: string;
+  bot: boolean;
+}
+
+// getCredentials 读取 api_id 与「密钥已保存」标记。
+export function getCredentials(): Promise<ApiCredentials> {
+  return request<ApiCredentials>('/api/credentials');
+}
+
+// saveCredentials 保存 api_id / api_hash / bot token；空字段表示不修改。
+export function saveCredentials(body: {
+  api_id?: number;
+  api_hash?: string;
+  bot_token?: string;
+}): Promise<{ status: ApiCredentials; restart_required: boolean }> {
+  return request('/api/credentials', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// loginBot 用 bot token 登录；token 为空时用已保存的 token。
+export function loginBot(token: string): Promise<{ user: ApiIdentity; restart_required: boolean }> {
+  return request('/api/login/bot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+}
+
+// startUserLogin 给手机号发验证码，返回后续要带回来的 phone_code_hash。
+export function startUserLogin(
+  phone: string
+): Promise<{ phone_code_hash: string; timeout: number }> {
+  return request('/api/login/user/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+}
+
+// finishUserLogin 提交验证码；need_password 为 true 时带 password 再调一次。
+export function finishUserLogin(body: {
+  phone: string;
+  code: string;
+  phone_code_hash: string;
+  password?: string;
+}): Promise<{ need_password: boolean; user: ApiIdentity }> {
+  return request('/api/login/user/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// getIdentity 读取已保存会话的账号身份。
+export function getIdentity(kind: 'bot' | 'user'): Promise<{ user: ApiIdentity }> {
+  return request(`/api/identity?kind=${kind}`);
 }

@@ -22,6 +22,7 @@ import (
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/auth"
+	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
@@ -502,7 +503,7 @@ func runWeb(args []string) {
 	bus := eventbus.New()
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑
-		if err := serve(web.Options{Bus: bus}); err != nil {
+		if err := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath})}); err != nil {
 			fatal(err.Error())
 		}
 		return
@@ -550,6 +551,7 @@ func runWeb(args []string) {
 		}()
 
 		return serve(web.Options{
+			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
 			Files: func(name string) (fm.Files, bool) {
 				v, ok := vols[name]
 				if !ok {
@@ -690,7 +692,7 @@ func runWeb(args []string) {
 	}
 	if tgclient.IsAuthLost(err) {
 		fmt.Fprintln(os.Stderr, i18n.T("err.auth_lost_hint"))
-		if serr := serve(web.Options{Bus: bus}); serr != nil {
+		if serr := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath})}); serr != nil {
 			fatal(serr.Error())
 		}
 		return
