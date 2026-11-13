@@ -643,12 +643,28 @@ func chatID(channelID int64) int64 {
 	return -1000000000000 - channelID
 }
 
+// loadAPI 读取 Telegram App 凭据。
+//
+// 输入：无（读 MYTGFS_API_ID 环境变量与 config.toml）
+// 输出：api_id、api_hash
+// 预期：api_id 先看环境变量，再看 config.toml 的 [telegram].api_id；
+// 两者都没有时直接报错退出，不内置任何默认值（api_id 是应用所有者的身份）。
 func loadAPI() (int, string) {
 	apiID := 0
-	if v := os.Getenv("MYTGFS_API_ID"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			apiID = n
+	if v := strings.TrimSpace(os.Getenv("MYTGFS_API_ID")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			fatal(fmt.Sprintf("%s: %q", i18n.T("err.bad_api_id"), v))
 		}
+		apiID = n
+	}
+	if apiID == 0 {
+		if cfg, err := config.Load("config.toml"); err == nil {
+			apiID = cfg.Telegram.APIID
+		}
+	}
+	if apiID == 0 {
+		fatal(i18n.T("err.missing_api_id"))
 	}
 	apiHash := readTrim("secrets/api_hash")
 	if apiHash == "" {

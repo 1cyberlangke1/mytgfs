@@ -227,5 +227,7 @@
   "web.files_offline_remove": "Remove offline copy",
   "web.files_offline_removed": "Offline copy removed",
   "web.files_offline_fail": "Could not save the offline copy",
-  "web.files_offline_too_large": "File exceeds the offline size limit"
+  "web.files_offline_too_large": "File exceeds the offline size limit",
+  "err.missing_api_id": "Missing api_id: set it in config.toml [telegram] or MYTGFS_API_ID",
+  "err.bad_api_id": "Invalid api_id"
 }

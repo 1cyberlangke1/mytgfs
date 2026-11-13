@@ -30,6 +30,11 @@ func TestSmokeUploadReadDelete(t *testing.T) {
 	if apiHash == "" {
 		t.Skip("missing ../../secrets/api_hash")
 	}
+	// api_id 属于应用所有者私有信息，不进源码；测试时用环境变量传入
+	apiID, _ := strconv.Atoi(os.Getenv("MYTGFS_API_ID"))
+	if apiID == 0 {
+		t.Skip("set MYTGFS_API_ID to run integration smoke test")
+	}
 	key, err := crypto.LoadOrCreateKey("../../secrets/session.key")
 	if err != nil {
 		t.Skipf("load session key: %v", err)
@@ -38,7 +43,7 @@ func TestSmokeUploadReadDelete(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	client := tgclient.New(0, apiHash,
+	client := tgclient.New(apiID, apiHash,
 		&sessionstore.Encrypted{Path: "../../secrets/bot.session", Key: key},
 		tgclient.Options{})
 
