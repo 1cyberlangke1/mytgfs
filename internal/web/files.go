@@ -25,18 +25,19 @@ import (
 type filesAPI struct {
 	manager func(volume string) (fm.Files, bool)
 	volumes func() []string
+	thumbs  *thumbCache
 }
 
 // newFilesAPI 组装文件管理能力；缺任一项都退化成「不提供」。
 //
-// 输入：manager 按卷取后端；volumes 卷名列表
-// 输出：*filesAPI；两者任一为 nil 时返回 nil
+// 输入：manager 按卷取后端；volumes 卷名列表；thumbDir 缩略图缓存目录
+// 输出：*filesAPI；前两项任一为 nil 时返回 nil
 // 预期：nil 时所有文件接口返回 501，页面不渲染文件卡片
-func newFilesAPI(manager func(volume string) (fm.Files, bool), volumes func() []string) *filesAPI {
+func newFilesAPI(manager func(volume string) (fm.Files, bool), volumes func() []string, thumbDir string) *filesAPI {
 	if manager == nil || volumes == nil {
 		return nil
 	}
-	return &filesAPI{manager: manager, volumes: volumes}
+	return &filesAPI{manager: manager, volumes: volumes, thumbs: newThumbCache(thumbDir)}
 }
 
 // fileRow 是表格里的一行。

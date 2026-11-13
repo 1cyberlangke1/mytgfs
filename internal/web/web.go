@@ -87,6 +87,8 @@ type Options struct {
 	Mount *MountControl
 	// Bus 用于把配置/挂载变更推给所有页面；nil 时 /events 返回 501
 	Bus *eventbus.Bus
+	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
+	ThumbDir string
 }
 
 // Serve 启动只读面板，状态回落到 daemon IPC。
@@ -101,8 +103,8 @@ func Serve(ctx context.Context, addr, configPath string) error {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时尝试连 daemon
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
-	api := newFilesAPI(opts.Files, opts.Volumes)
-	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, configPath, api, opts.Mount))
+	api := newFilesAPI(opts.Files, opts.Volumes, opts.ThumbDir)
+	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, opts.Sync != nil, configPath, api, opts.Mount))
 	// htmx 与面板脚本随二进制分发：不依赖任何外网 CDN
 	mux.HandleFunc("/static/htmx.min.js", handleAsset("application/javascript; charset=utf-8", htmxJS))
 	mux.HandleFunc("/static/app.js", handleAsset("application/javascript; charset=utf-8", appJS))
@@ -121,6 +123,8 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	mux.HandleFunc("/frag/files/remove", handleFragFilesRemove(api))
 	mux.HandleFunc("/frag/files/move", handleFragFilesMove(api))
 	mux.HandleFunc("/files/download", handleFileDownload(api))
+	mux.HandleFunc("/files/thumb", handleFileThumb(api))
+	mux.HandleFunc("/frag/details", handleFragDetails(api))
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
@@ -148,13 +152,14 @@ type pageLabels struct {
 	Entries, Used, NoDaemon, LoadError                     string
 	NewVolume, FieldName, FieldTitle, FieldPoint           string
 	Create, Creating, Created, Restart, AuthLost, NameNeed string
-	StatVols, StatFiles, StatUsed, Xfer                    string
+	StatVols, StatFiles, StatUsed, Xfer, UploadQueue       string
 	Footer, Lang, ThemeTip, RefreshTip                     string
 	// 文件管理
 	Files, FilesUpload, FilesUploading, FilesMkdir, FilesNewDir string
 	FilesName, FilesSize, FilesMtime, FilesEmpty                string
 	FilesDownload, FilesMove, FilesDelete, FilesConfirm         string
 	FilesDone, NetError                                         string
+	FilesDetails, FilesPath                                     string
 	// CanCreate 决定建卷卡片是否渲染
 	CanCreate bool
 	// 挂载为网络驱动器
@@ -169,39 +174,40 @@ type pageLabels struct {
 // 预期：语言由 i18n.Lang() 决定，与托盘/CLI 保持一致
 func loadLabels(canCreate bool) pageLabels {
 	return pageLabels{
-		Title:      i18n.T("web.title"),
-		Subtitle:   i18n.T("web.subtitle"),
-		Volumes:    i18n.T("web.volumes"),
-		Actions:    i18n.T("web.actions"),
-		Sync:       i18n.T("web.sync"),
-		Syncing:    i18n.T("web.syncing"),
-		SyncDone:   i18n.T("web.sync_done"),
-		Config:     i18n.T("web.config"),
-		Save:       i18n.T("web.save"),
-		Saved:      i18n.T("web.saved"),
-		Entries:    i18n.T("web.entries"),
-		Used:       i18n.T("web.used"),
-		NoDaemon:   i18n.T("web.no_daemon"),
-		LoadError:  i18n.T("web.load_error"),
-		NewVolume:  i18n.T("web.new_volume"),
-		FieldName:  i18n.T("web.field_name"),
-		FieldTitle: i18n.T("web.field_title"),
-		FieldPoint: i18n.T("web.field_point"),
-		Create:     i18n.T("web.create"),
-		Creating:   i18n.T("web.creating"),
-		Created:    i18n.T("web.created"),
-		Restart:    i18n.T("web.restart_hint"),
-		AuthLost:   i18n.T("web.auth_lost"),
-		NameNeed:   i18n.T("web.name_required"),
-		StatVols:   i18n.T("web.stat_volumes"),
-		StatFiles:  i18n.T("web.stat_files"),
-		StatUsed:   i18n.T("web.stat_used"),
-		Xfer:       i18n.T("web.xfer"),
-		Footer:     i18n.T("web.footer"),
-		Lang:       i18n.Lang(),
-		ThemeTip:   i18n.T("web.theme_tip"),
-		RefreshTip: i18n.T("web.refresh_tip"),
-		CanCreate:  canCreate,
+		Title:       i18n.T("web.title"),
+		Subtitle:    i18n.T("web.subtitle"),
+		Volumes:     i18n.T("web.volumes"),
+		Actions:     i18n.T("web.actions"),
+		Sync:        i18n.T("web.sync"),
+		Syncing:     i18n.T("web.syncing"),
+		SyncDone:    i18n.T("web.sync_done"),
+		Config:      i18n.T("web.config"),
+		Save:        i18n.T("web.save"),
+		Saved:       i18n.T("web.saved"),
+		Entries:     i18n.T("web.entries"),
+		Used:        i18n.T("web.used"),
+		NoDaemon:    i18n.T("web.no_daemon"),
+		LoadError:   i18n.T("web.load_error"),
+		NewVolume:   i18n.T("web.new_volume"),
+		FieldName:   i18n.T("web.field_name"),
+		FieldTitle:  i18n.T("web.field_title"),
+		FieldPoint:  i18n.T("web.field_point"),
+		Create:      i18n.T("web.create"),
+		Creating:    i18n.T("web.creating"),
+		Created:     i18n.T("web.created"),
+		Restart:     i18n.T("web.restart_hint"),
+		AuthLost:    i18n.T("web.auth_lost"),
+		NameNeed:    i18n.T("web.name_required"),
+		StatVols:    i18n.T("web.stat_volumes"),
+		StatFiles:   i18n.T("web.stat_files"),
+		StatUsed:    i18n.T("web.stat_used"),
+		Xfer:        i18n.T("web.xfer"),
+		UploadQueue: i18n.T("web.upload_queue"),
+		Footer:      i18n.T("web.footer"),
+		Lang:        i18n.Lang(),
+		ThemeTip:    i18n.T("web.theme_tip"),
+		RefreshTip:  i18n.T("web.refresh_tip"),
+		CanCreate:   canCreate,
 
 		Files:          i18n.T("web.files"),
 		FilesUpload:    i18n.T("web.files_upload"),
@@ -217,6 +223,8 @@ func loadLabels(canCreate bool) pageLabels {
 		FilesDelete:    i18n.T("web.files_delete"),
 		FilesConfirm:   i18n.T("web.files_confirm"),
 		FilesDone:      i18n.T("web.files_done"),
+		FilesDetails:   i18n.T("web.files_details"),
+		FilesPath:      i18n.T("web.files_path"),
 		NetError:       i18n.T("web.net_error"),
 
 		Mount:            i18n.T("web.mount"),
@@ -232,6 +240,8 @@ func loadLabels(canCreate bool) pageLabels {
 type pageData struct {
 	Labels pageLabels
 	Config string
+	// CanSync 决定「立即同步」按钮是否渲染（本地 web 模式没有同步器）
+	CanSync bool
 	// Browser 非空时渲染文件管理卡片及其首屏内容
 	Browser *browserData
 	// Mount 非空时渲染挂盘开关卡片
@@ -244,10 +254,10 @@ type pageData struct {
 // api 文件管理能力；mount 挂盘开关能力
 // 输出：HTML
 // 预期：文案、配置正文、文件列表都在服务端渲染，前端只负责主题与进度
-func handlePage(canCreate bool, configPath string, api *filesAPI, mount *MountControl) http.HandlerFunc {
+func handlePage(canCreate, canSync bool, configPath string, api *filesAPI, mount *MountControl) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		data := pageData{Labels: loadLabels(canCreate)}
+		data := pageData{Labels: loadLabels(canCreate), CanSync: canSync}
 		if configPath != "" {
 			if b, err := os.ReadFile(configPath); err == nil {
 				data.Config = string(b)
@@ -431,6 +441,7 @@ type statusView struct {
 	AuthLost   bool
 	Volumes    []volumeView
 	Transfers  []transferView
+	Queue      []queueView
 	TotalFiles int64
 	TotalUsed  int64
 	Empty      string
@@ -449,6 +460,14 @@ type transferView struct {
 	Done  int64
 	Total int64
 	Pct   int
+}
+
+// queueView 是一个排队中的上传任务。
+type queueView struct {
+	Name    string
+	State   string
+	Attempt int
+	Err     string
 }
 
 // statusFragData 是状态片段的模板数据。
@@ -483,6 +502,12 @@ type rawStatus struct {
 		Done  int64  `json:"done"`
 		Total int64  `json:"total"`
 	} `json:"transfers"`
+	Queue []struct {
+		Name    string `json:"name"`
+		State   string `json:"state"`
+		Attempt int    `json:"attempt"`
+		Err     string `json:"error"`
+	} `json:"queue"`
 }
 
 // viewOf 把任意状态负载转成渲染视图。
@@ -521,6 +546,9 @@ func viewOf(v any, l pageLabels) statusView {
 	if len(view.Volumes) == 0 && rs.Entries != nil {
 		view.Empty = fmt.Sprintf("%s: %d", l.Entries, *rs.Entries)
 	}
+	for _, q := range rs.Queue {
+		view.Queue = append(view.Queue, queueView{Name: q.Name, State: q.State, Attempt: q.Attempt, Err: q.Err})
+	}
 	return view
 }
 
@@ -556,7 +584,8 @@ const statusFragHTML = `<span id="pill" class="pill{{with .Kind}} {{.}}{{end}}" 
 <div id="volumes" hx-swap-oob="true">{{if .Volumes}}{{range .Volumes}}
 <div class="vol"><span class="dot"></span><span class="name">{{.Name}}</span><span class="meta">{{$.Labels.Entries}}: {{.Entries}} · {{$.Labels.Used}}: {{bytes .Used}}</span></div>{{end}}{{else}}
 <div class="empty">{{.Empty}}</div>{{end}}{{range .Transfers}}
-<div class="vol"><span class="dot busy"></span><span class="name">{{.Path}}</span><span class="meta">{{$.Labels.Xfer}} {{.Pct}}% · {{bytes .Done}} / {{bytes .Total}}</span></div>{{end}}
+<div class="vol"><span class="dot busy"></span><span class="name">{{.Path}}</span><span class="meta">{{$.Labels.Xfer}} {{.Pct}}% · {{bytes .Done}} / {{bytes .Total}}</span></div>{{end}}{{range .Queue}}
+<div class="vol"><span class="dot busy"></span><span class="name">{{.Name}}</span><span class="meta">{{$.Labels.UploadQueue}}: {{.State}}{{if .Attempt}} #{{.Attempt}}{{end}}{{with .Err}} · {{.}}{{end}}</span></div>{{end}}
 </div>`
 
 // msgFragHTML 是操作反馈片段。
@@ -870,6 +899,15 @@ textarea::-webkit-scrollbar-track{background:transparent}
 .fname{display:flex;align-items:center;gap:8px;word-break:break-all}
 .fname a{cursor:pointer;color:var(--text);text-decoration:none}
 .fname a:hover{color:var(--blue)}
+.detailwrap:empty{display:none}
+.detail{display:flex;gap:16px;align-items:flex-start;margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--btn-ghost)}
+.dthumb{width:160px;height:160px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:var(--card)}
+.dmeta{margin:0;display:grid;gap:8px;font-size:13px;min-width:0}
+.dmeta div{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:baseline}
+.dmeta dt{color:var(--muted);font-size:12px;letter-spacing:.3px;text-transform:uppercase}
+.dmeta dd{margin:0;word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted)}
+@media(max-width:640px){.detail{flex-direction:column}.dthumb{width:100%;height:auto;max-height:240px}}
 .acts{text-align:right;white-space:nowrap}
 .acts .btn{display:inline-flex;align-items:center;padding:6px 10px;border-radius:9px;border:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px;background:var(--btn-ghost);margin-left:6px}
 .acts .btn:hover{filter:brightness(1.1)}
@@ -887,6 +925,164 @@ details.menu form input{width:240px}
 .ok{color:var(--green)}
 .err{color:var(--red)}
 footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
+
+/* ---- 视觉精修层：统一间距、层次与交互反馈 ---- */
+:root{
+  --radius:18px; --radius-sm:11px;
+  --glass:rgba(11,18,32,.72);
+  --head-bg:rgba(16,27,48,.94);
+  --row-hover:rgba(255,255,255,.045);
+  --ring:rgba(42,167,224,.45);
+}
+:root[data-theme="light"]{
+  --glass:rgba(247,249,252,.82);
+  --head-bg:#ffffff;
+  --row-hover:rgba(16,32,52,.04);
+}
+body{font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px}
+header{
+  margin:0 0 20px;padding:0;
+}
+header h1{font-size:22px;font-weight:700;letter-spacing:-.2px}
+header .sub{font-size:12.5px;letter-spacing:.2px}
+.pill{backdrop-filter:blur(8px)}
+.pill:not(.ok):not(.warn):not(.bad)::before{
+  content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--muted);margin-right:8px;vertical-align:1px;
+}
+
+main{gap:18px}
+.card{
+  position:relative;border-radius:var(--radius);padding:20px 20px 18px;
+  overflow:hidden;
+}
+.card::before{
+  content:"";position:absolute;inset:0 0 auto;height:1px;
+  background:linear-gradient(90deg,transparent,var(--line-strong),transparent);
+  opacity:.9;pointer-events:none;
+}
+.card:hover{transform:none;box-shadow:var(--shadow),0 0 0 1px var(--line-strong)}
+.card h2{
+  font-size:11.5px;letter-spacing:.9px;margin-bottom:16px;color:var(--muted);
+}
+.card h2 .ic{width:15px;height:15px;color:var(--blue);opacity:.9}
+
+.vol{
+  padding:13px 10px;margin:0 -10px;border-radius:12px;
+  transition:background-color .15s ease;
+}
+.vol:hover{background:var(--row-hover)}
+.vol .name{font-size:14.5px;letter-spacing:-.1px}
+.vol .meta{font-size:12.5px}
+
+.stats{gap:12px;margin-bottom:18px}
+.stat{
+  border-radius:var(--radius-sm);padding:12px 14px;
+  transition:border-color .15s ease,background-color .15s ease;
+}
+.stat:hover{border-color:var(--line-strong);background:var(--card)}
+.stat .k{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase}
+.stat strong{font-size:19px;font-weight:700;letter-spacing:-.3px}
+
+button{
+  min-height:38px;padding:9px 16px;border-radius:var(--radius-sm);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 6px 16px rgba(42,167,224,.20);
+  transition:transform .07s ease,filter .15s ease,box-shadow .15s ease,border-color .15s ease;
+}
+button.ghost,button.iconbtn{box-shadow:none}
+button:hover{filter:brightness(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 8px 22px rgba(42,167,224,.26)}
+button.ghost:hover{box-shadow:none;border-color:var(--line-strong);background:var(--row-hover)}
+button:disabled,button[hx-disabled-elt]{opacity:.55;cursor:progress;filter:saturate(.6)}
+a.btn,a.ghost{transition:background-color .15s ease,border-color .15s ease}
+input,textarea{border-radius:var(--radius-sm)}
+input{padding:10px 13px;min-height:38px}
+input:focus,textarea:focus{border-color:var(--ring);box-shadow:0 0 0 3px rgba(42,167,224,.14)}
+input:hover,textarea:hover{border-color:var(--line-strong)}
+
+.vtabs{gap:6px;margin-bottom:14px}
+.vtabs button{min-height:32px;padding:5px 14px;font-size:12.5px;letter-spacing:.2px}
+.vtabs button.on{color:#fff;background:linear-gradient(180deg,var(--blue),var(--blue-deep));border-color:transparent;box-shadow:0 4px 14px rgba(42,167,224,.28)}
+
+.ftable thead th{
+  position:sticky;top:0;z-index:1;padding:8px 10px;
+  background:var(--head-bg);backdrop-filter:blur(6px);
+}
+.ftable th:nth-child(1){width:auto}
+.ftable th:nth-child(2){width:110px}
+.ftable th:nth-child(3){width:168px}
+.ftable th:nth-child(4){width:1%;white-space:nowrap}
+.ftable td{padding:10px;border-bottom:1px solid var(--line)}
+.ftable tbody tr{transition:background-color .12s ease}
+.ftable tbody tr:hover{background:var(--row-hover)}
+.ftable tbody tr:last-child td{border-bottom:0}
+.ftable .empty{
+  padding:28px 12px;text-align:center;color:var(--muted);
+  border:1px dashed var(--line-strong);border-radius:12px;background:transparent;
+}
+.fname .ic{color:var(--muted);transition:color .15s ease}
+.ftable tbody tr:hover .fname .ic{color:var(--blue)}
+.fname a{font-weight:500}
+.fwrap{margin:0 -4px;padding:0 4px}
+
+.acts .btn,.acts button{min-height:30px;padding:5px 10px;font-size:12.5px}
+.acts .btn{box-shadow:none}
+.acts .btn:hover{background:var(--row-hover);border-color:var(--line-strong)}
+details.menu summary{min-height:30px;display:inline-flex;align-items:center;transition:background-color .15s ease,border-color .15s ease}
+details.menu summary:hover{background:var(--row-hover);border-color:var(--line-strong)}
+details.menu form{padding:12px;gap:8px;border-radius:14px}
+
+.crumbs{font-size:12.5px;letter-spacing:.2px}
+.empty{color:var(--muted)}
+
+/* 工具栏：上传与新建目录同一行，空间不足时才换行 */
+.fbar{gap:12px;margin-bottom:12px}
+.fup,.fmk{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;min-width:0}
+.fup{flex:1 1 340px}
+.fmk{flex:0 1 auto}
+.fup input[type=file]{flex:1 1 200px;min-width:0;padding:6px 8px;font-size:12.5px}
+.fup button,.fmk button{flex:none}
+.fmk input{width:180px;min-width:120px}
+/* 原生文件选择框跟随主题，避免白底控件刺眼 */
+input[type=file]{
+  background:var(--btn-ghost);border-style:dashed;border-color:var(--line-strong);
+  color:var(--muted);cursor:pointer;
+}
+input[type=file]::file-selector-button{
+  margin-right:10px;padding:6px 10px;border:1px solid var(--line);
+  border-radius:8px;background:var(--chip);color:var(--text);
+  font:inherit;font-size:12.5px;cursor:pointer;
+  transition:background-color .15s ease,border-color .15s ease;
+}
+input[type=file]::file-selector-button:hover{background:var(--row-hover);border-color:var(--line-strong)}
+
+/* 上传进度条：宽度由 app.js 写 data-progress-bar 的 style.width */
+.upwrap{display:inline-flex;align-items:center;width:120px;height:6px;border-radius:999px;background:var(--line);overflow:hidden;flex:none}
+.upwrap[hidden]{display:none}
+.upwrap i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .18s ease}
+
+/* 统一滚动条（Firefox / WebKit） */
+*{scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--muted);background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}
+
+@media(max-width:640px){
+  .card{padding:16px;border-radius:16px}
+  .stat strong{font-size:17px}
+  .ftable td:nth-child(3),.ftable th:nth-child(3){display:none}
+  .acts .btn,.acts button{min-height:34px}
+  .fup,.fmk{flex-wrap:wrap;flex-basis:100%}
+  .fmk input,.fup input[type=file]{flex:1 1 100%;width:100%}
+  .vol .meta{width:100%;margin-left:0;text-align:left}
+}
+@media(max-width:400px){
+  .head-actions{justify-content:flex-end;gap:8px}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
 </style>
 </head>
 <body>
@@ -952,13 +1148,13 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
         <div class="stat"><span class="k">{{.Labels.StatUsed}}</span><strong>—</strong></div>
       </div>
       <div class="row">
-        <button hx-post="/frag/sync" hx-target="#syncmsg" hx-swap="innerHTML" hx-disabled-elt="this">
+        {{if .CanSync}}<button hx-post="/frag/sync" hx-target="#syncmsg" hx-swap="innerHTML" hx-disabled-elt="this">
           <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85 1.03 6.53 2.7L21 8"/>
             <path d="M21 3v5h-5"/>
           </svg>
           <span>{{.Labels.Sync}}</span>
-        </button>
+        </button>{{end}}
         <button class="ghost iconbtn" type="button" hx-get="/frag/status" hx-swap="none" title="{{.Labels.RefreshTip}}" aria-label="{{.Labels.RefreshTip}}">
           <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>

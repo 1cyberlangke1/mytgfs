@@ -23,6 +23,7 @@ import (
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
+	"mytgfs/internal/ui"
 	"mytgfs/internal/volume"
 )
 
@@ -82,22 +83,32 @@ func runVolumeCheck(args []string) {
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
 		tgclient.Options{})
 	bad := 0
+	type volResult struct {
+		Name   string `json:"name"`
+		ChatID int64  `json:"chat_id"`
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+	}
+	results := make([]volResult, 0, len(cfg.Volumes))
 	err = client.Run(ctx, func(ctx context.Context) error {
 		for _, v := range cfg.Volumes {
-			fmt.Println(i18n.T("volume.check_title", v.Name, v.ChatID))
+			ui.Printf("%s\n", i18n.T("volume.check_title", v.Name, v.ChatID))
 			if _, cerr := channel.Check(ctx, client.API(), v.ChatID); cerr != nil {
 				bad++
-				fmt.Println(i18n.T("volume.check_fail", cerr))
+				results = append(results, volResult{Name: v.Name, ChatID: v.ChatID, Error: cerr.Error()})
+				ui.Printf("%s\n", i18n.T("volume.check_fail", cerr))
 				continue
 			}
-			fmt.Println(i18n.T("volume.check_ok"))
+			results = append(results, volResult{Name: v.Name, ChatID: v.ChatID, OK: true})
+			ui.Printf("%s\n", i18n.T("volume.check_ok"))
 		}
 		return nil
 	})
 	if err != nil {
 		failErr(i18n.T("err.channel_check_prefix"), err)
 	}
-	fmt.Println(i18n.T("volume.check_summary", len(cfg.Volumes), bad))
+	ui.Printf("%s\n", i18n.T("volume.check_summary", len(cfg.Volumes), bad))
+	ui.Print(map[string]any{"volumes": results, "bad": bad})
 	if bad > 0 {
 		os.Exit(1)
 	}

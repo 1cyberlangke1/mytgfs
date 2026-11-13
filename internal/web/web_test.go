@@ -102,7 +102,7 @@ func TestHandleVolumesConflict(t *testing.T) {
 
 func TestPageInjectsLabels(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handlePage(true, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(true, true, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
 	// 建卷卡片只在支持建卷时渲染
 	if !strings.Contains(body, `name="name"`) {
@@ -121,10 +121,13 @@ func TestPageInjectsLabels(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	handlePage(false, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, false, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	out := rec.Body.String()
 	if strings.Contains(out, `name="name"`) {
 		t.Error("create form should be absent when volume creation is disabled")
+	}
+	if strings.Contains(out, "/frag/sync") {
+		t.Error("sync button should be absent without a synchronizer")
 	}
 	if strings.Contains(out, "{{") {
 		t.Error("template placeholder leaked into page")
@@ -139,7 +142,7 @@ func TestPageRendersConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	handlePage(false, path, nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, false, path, nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec.Body.String(), `point = &#34;Y:&#34;`) {
 		t.Errorf("config not rendered into textarea")
 	}

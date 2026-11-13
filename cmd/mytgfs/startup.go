@@ -11,6 +11,7 @@ import (
 
 	"mytgfs/internal/autostart"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/ui"
 )
 
 // runStartup 处理 enable / disable / status。
@@ -32,22 +33,25 @@ func runStartup(args []string) {
 		if err := autostart.Enable(exe); err != nil {
 			fatal(fmt.Sprintf("%s: %v", i18n.T("startup.failed"), err))
 		}
-		fmt.Println(i18n.T("startup.enabled"))
+		ui.Printf("%s\n", i18n.T("startup.enabled"))
+		ui.Print(map[string]any{"enabled": true, "path": exe})
 	case "disable":
 		if err := autostart.Disable(); err != nil {
 			fatal(fmt.Sprintf("%s: %v", i18n.T("startup.failed"), err))
 		}
-		fmt.Println(i18n.T("startup.disabled"))
+		ui.Printf("%s\n", i18n.T("startup.disabled"))
+		ui.Print(map[string]any{"enabled": false})
 	case "status":
 		on, err := autostart.Enabled()
 		if err != nil {
 			fatal(fmt.Sprintf("%s: %v", i18n.T("startup.failed"), err))
 		}
 		if on {
-			fmt.Println(i18n.T("startup.on"))
+			ui.Printf("%s\n", i18n.T("startup.on"))
 		} else {
-			fmt.Println(i18n.T("startup.off"))
+			ui.Printf("%s\n", i18n.T("startup.off"))
 		}
+		ui.Print(map[string]any{"enabled": on})
 	default:
 		usage()
 		os.Exit(2)

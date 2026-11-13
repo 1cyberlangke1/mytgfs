@@ -14,6 +14,7 @@ func buildTemplates() *template.Template {
 	// 片段模板单独命名，执行时用 ExecuteTemplate(w, "browser", data)
 	template.Must(t.New("browser").Funcs(tmplFuncs).Parse(browserHTML))
 	template.Must(t.New("mountbox").Funcs(tmplFuncs).Parse(mountboxHTML))
+	template.Must(t.New("details").Funcs(tmplFuncs).Parse(detailsHTML))
 	return t
 }
 
@@ -42,6 +43,7 @@ const browserHTML = `
     <input type="hidden" name="dir" value="{{.Dir}}">
     <input type="file" name="file" multiple required>
     <button type="submit">{{.Labels.FilesUpload}}</button>
+    <span class="upwrap" data-progress-wrap hidden><i data-progress-bar></i></span>
     <span class="msg" data-progress data-progress-label="{{.Labels.FilesUploading}}"></span>
   </form>
   <form class="fmk" hx-post="/frag/files/mkdir" hx-target="#browser" hx-swap="innerHTML">
@@ -71,6 +73,7 @@ const browserHTML = `
       <td class="num">{{if not .Dir}}{{bytes .Size}}{{end}}</td>
       <td class="num">{{fmtTime .Mod}}</td>
       <td class="acts">
+        {{if not .Dir}}<button type="button" class="ghost" hx-get="/frag/details?vol={{urlq $.Volume}}&path={{urlq .Path}}" hx-target="#detail" hx-swap="innerHTML">{{$.Labels.FilesDetails}}</button>{{end}}
         {{if not .Dir}}<a class="btn" href="{{.Download}}" download>{{$.Labels.FilesDownload}}</a>{{end}}
         <details class="menu">
           <summary>{{$.Labels.FilesMove}}</summary>
@@ -97,6 +100,7 @@ const browserHTML = `
   </tbody>
 </table>
 </div>
+<div id="detail" class="detailwrap"></div>
 {{end}}`
 
 // mountboxHTML 是「挂载为网络驱动器」开关片段（#mountbox 的 innerHTML）。
@@ -124,4 +128,24 @@ const mountboxHTML = `
   </div>
 </form>
 {{if .Message}}<p class="msg"><span class="{{.MsgKind}}">{{.Message}}</span></p>{{end}}
+{{end}}`
+
+// detailsHTML 是文件详情片段（#detail 的 innerHTML）。
+//
+// 输入：detailsData
+// 输出：图片缩略图（仅图片）+ 名称/路径/大小/修改时间
+// 预期：缩略图只在用户点「详情」后由浏览器请求一次，列表页不预取
+const detailsHTML = `
+{{if .Message}}
+<p class="msg"><span class="err">{{.Message}}</span></p>
+{{else}}
+<div class="detail">
+  {{if .IsImage}}<img class="dthumb" src="{{.Thumb}}" alt="{{.Name}}" loading="lazy" decoding="async">{{end}}
+  <dl class="dmeta">
+    <div><dt>{{.Labels.FilesName}}</dt><dd>{{.Name}}</dd></div>
+    <div><dt>{{.Labels.FilesPath}}</dt><dd class="mono">{{.Path}}</dd></div>
+    <div><dt>{{.Labels.FilesSize}}</dt><dd>{{.Size}}</dd></div>
+    <div><dt>{{.Labels.FilesMtime}}</dt><dd>{{.Mod}}</dd></div>
+  </dl>
+</div>
 {{end}}`

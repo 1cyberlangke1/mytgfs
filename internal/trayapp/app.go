@@ -262,8 +262,6 @@ func Run(opts Options) error {
 		if tv == nil || tv.davfs == nil {
 			return fmt.Errorf("%s: %s", i18n.T("err.webdav_no_volume"), vol.Name)
 		}
-		// 写请求串行化，批量拷贝不抢 Telegram 配额
-		tv.davfs.SetQueue(queue.New(1, 3))
 		if _, err := davSvc.Start(cur.WebDAV.ListenAddr(), vol.Name, tv.davfs); err != nil {
 			return fmt.Errorf("%s: %w", i18n.T("err.webdav_start"), err)
 		}
@@ -370,7 +368,25 @@ func Run(opts Options) error {
 						xfers = append(xfers, t)
 					}
 				}
-				return map[string]any{"state": st, "auth": auth, "volumes": list, "transfers": xfers}, nil
+				// 上传队列：面板显示排队/重试中的上传，避免用户以为没反应
+				var queued []queue.Item
+				for _, v := range vs {
+					if v.davfs == nil {
+						continue
+					}
+					q := v.davfs.Queue()
+					if q == nil {
+						continue
+					}
+					for _, it := range q.Snapshot() {
+						it.Name = v.name + ":" + it.Name
+						queued = append(queued, it)
+					}
+				}
+				return map[string]any{
+					"state": st, "auth": auth, "volumes": list,
+					"transfers": xfers, "queue": queued,
+				}, nil
 			},
 			Sync: func(ctx context.Context) (any, error) {
 				volMu.Lock()
@@ -523,6 +539,8 @@ func Run(opts Options) error {
 		fsys := vfs.New(vctx, idx, store, os.TempDir())
 		// 面板文件管理与可选 WebDAV 共用同一份 WebDAV 语义后端
 		davfs := dav.New(vctx, idx, store, cfg.Mount.ReadChunk())
+		// 面板上传与 WebDAV 共用同一队列，批量操作串行提交
+		davfs.SetQueue(queue.New(1, 3))
 		fmgr := fm.New(davfs)
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
 		tv := &trayVolume{name: name, idx: idx, fsys: fsys, davfs: davfs, fmgr: fmgr, store: store, differ: differ}

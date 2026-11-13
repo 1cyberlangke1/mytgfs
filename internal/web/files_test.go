@@ -149,14 +149,15 @@ func newTestAPI(f *fakeFiles) *filesAPI {
 	return newFilesAPI(
 		func(string) (fm.Files, bool) { return f, true },
 		func() []string { return []string{"demo"} },
+		"",
 	)
 }
 
 func TestNewFilesAPINilWhenIncomplete(t *testing.T) {
-	if newFilesAPI(nil, func() []string { return nil }) != nil {
+	if newFilesAPI(nil, func() []string { return nil }, "") != nil {
 		t.Error("缺 manager 时应退化成 nil")
 	}
-	if newFilesAPI(func(string) (fm.Files, bool) { return nil, false }, nil) != nil {
+	if newFilesAPI(func(string) (fm.Files, bool) { return nil, false }, nil, "") != nil {
 		t.Error("缺 volumes 时应退化成 nil")
 	}
 }

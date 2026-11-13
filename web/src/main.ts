@@ -98,7 +98,10 @@ function progressText(el: HTMLElement, pct: number): string {
  *
  * 输入：无
  * 输出：无
- * 预期：只有带 data-upload 的表单受影响；拿不到总长度时不动文案
+ * 预期：
+ *   - 只有带 data-upload 的表单受影响
+ *   - 拿不到总长度时不动文案
+ *   - 进度条按百分比伸展；请求结束或失败后收起
  */
 function initUploadProgress(): void {
   document.body.addEventListener("htmx:xhr:progress", (ev) => {
@@ -113,13 +116,37 @@ function initUploadProgress(): void {
     }
     const pct = Math.min(100, Math.round((detail.loaded * 100) / detail.total));
     out.textContent = progressText(out, pct);
+
+    const wrap = form?.querySelector<HTMLElement>("[data-progress-wrap]");
+    const bar = form?.querySelector<HTMLElement>("[data-progress-bar]");
+    if (wrap && bar) {
+      wrap.hidden = false;
+      bar.style.width = pct + "%";
+    }
   });
 
   // 新一次提交前清空上一次的百分比（片段会被整体替换时其实用不上）
   document.body.addEventListener("htmx:beforeRequest", (ev) => {
     const form = (ev.target as Element | null)?.closest?.("[data-upload]");
     form?.querySelector<HTMLElement>("[data-progress]")?.replaceChildren();
+    const wrap = form?.querySelector<HTMLElement>("[data-progress-wrap]");
+    const bar = form?.querySelector<HTMLElement>("[data-progress-bar]");
+    if (wrap && bar) {
+      wrap.hidden = false;
+      bar.style.width = "0%";
+    }
   });
+
+  // 结束或失败：收起进度条，文案由片段替换
+  for (const name of ["htmx:afterRequest", "htmx:sendError"]) {
+    document.body.addEventListener(name, (ev) => {
+      const form = (ev.target as Element | null)?.closest?.("[data-upload]");
+      const wrap = form?.querySelector<HTMLElement>("[data-progress-wrap]");
+      if (wrap) {
+        wrap.hidden = true;
+      }
+    });
+  }
 }
 
 /**

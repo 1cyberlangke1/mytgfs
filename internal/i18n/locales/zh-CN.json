@@ -177,5 +177,9 @@
   "err.webdav_start": "启动挂载服务失败",
   "err.webdav_stop": "停止挂载服务失败",
   "err.webdav_no_volume": "没有可挂载的卷",
-  "err.webdav_config": "写入配置失败"
+  "err.webdav_config": "写入配置失败",
+  "web.files_details": "详情",
+  "web.files_path": "路径",
+  "web.upload_queue": "上传队列",
+  "web.state_local": "本地模式"
 }

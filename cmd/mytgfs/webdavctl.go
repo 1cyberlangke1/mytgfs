@@ -11,7 +11,6 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/davsvc"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/queue"
 	"mytgfs/internal/web"
 )
 
@@ -49,7 +48,6 @@ func newMountControl(cfgPath string, vols map[string]*webVolume) (*davsvc.Servic
 					return fmt.Errorf("%s: %s", i18n.T("err.webdav_no_volume"), vol.Name)
 				}
 				// 写请求串行化，避免抢 Telegram 发消息配额
-				v.davfs.SetQueue(queue.New(1, 3))
 				if _, err := svc.Start(cur.WebDAV.ListenAddr(), vol.Name, v.davfs); err != nil {
 					return fmt.Errorf("%s: %w", i18n.T("err.webdav_start"), err)
 				}

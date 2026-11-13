@@ -177,5 +177,9 @@
   "err.webdav_start": "Failed to start mount service",
   "err.webdav_stop": "Failed to stop mount service",
   "err.webdav_no_volume": "No volume available to mount",
-  "err.webdav_config": "Failed to write config"
+  "err.webdav_config": "Failed to write config",
+  "web.files_details": "Details",
+  "web.files_path": "Path",
+  "web.upload_queue": "Upload queue",
+  "web.state_local": "Local mode"
 }

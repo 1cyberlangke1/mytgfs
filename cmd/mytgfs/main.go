@@ -34,11 +34,13 @@ import (
 	"mytgfs/internal/index"
 	"mytgfs/internal/ipc"
 	"mytgfs/internal/logging"
+	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
+	"mytgfs/internal/ui"
 	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/web"
@@ -46,6 +48,7 @@ import (
 
 func main() {
 	initLogging()
+	os.Args = append([]string{os.Args[0]}, stripJSONFlag(os.Args[1:])...)
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -227,19 +230,22 @@ func runChannelList(args []string) {
 		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
 		tgclient.Options{})
 
+	var out []channel.Item
 	err = client.Run(ctx, func(ctx context.Context) error {
 		items, err := channel.List(ctx, client.API())
 		if err != nil {
 			return err
 		}
+		out = items
 		for _, it := range items {
-			fmt.Printf("%d\t%s\t%s\tcreator=%v\tadmin=%v\n", it.ID, it.Title, it.Username, it.Creator, it.Admin)
+			ui.Printf("%d\t%s\t%s\tcreator=%v\tadmin=%v\n", it.ID, it.Title, it.Username, it.Creator, it.Admin)
 		}
 		return nil
 	})
 	if err != nil {
 		failErr("列出频道失败", err)
 	}
+	ui.Print(map[string]any{"channels": out})
 }
 
 // runChannelAdd 把 bot 加到已有频道。
@@ -692,6 +698,10 @@ func runWeb(args []string) {
 			},
 			Mount: mount,
 			Bus:   bus,
+			// 面板自报状态：卷统计与上传队列都来自已打开的索引
+			Status: func(ctx context.Context) (any, error) {
+				return webStatus(ctx, cfg, vols), nil
+			},
 		})
 	})
 	if err == nil {
@@ -735,6 +745,8 @@ func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.AP
 		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
 		davfs := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
+		// 面板上传同样走串行队列：批量拖拽不会互相抢 Telegram 配额
+		davfs.SetQueue(queue.New(1, 3))
 		out[v.Name] = &webVolume{
 			mgr:   fm.New(davfs),
 			davfs: davfs,
@@ -790,7 +802,28 @@ func readLine() string {
 	return strings.TrimSpace(s)
 }
 
+// stripJSONFlag 取出全局 --json 开关并返回其余参数。
+//
+// 输入：os.Args[1:]
+// 输出：去掉所有 --json 的参数
+// 预期：开关位置无关；出现在参数值里不会被误删（只匹配独立的 --json）
+func stripJSONFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--json" {
+			ui.EnableJSON()
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func fatal(msg string) {
+	if ui.JSONMode() {
+		ui.Error("fatal", fmt.Errorf("%s", msg))
+		os.Exit(1)
+	}
 	fmt.Fprintln(os.Stderr, "FAIL:", msg)
 	os.Exit(1)
 }
