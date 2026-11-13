@@ -450,17 +450,15 @@ func runMount(_ []string) {
 
 // runWeb 启动本地面板。
 //
-// 输入：--port 端口（不传则用 config.toml [web].port，传 0 用随机端口）、
-// --no-open 不自动开浏览器
+// 输入：--port 端口（不传则用 config.toml [web].port，传 0 用随机端口）
 // 输出：无（阻塞到 Ctrl+C）
 // 预期：
 //   - 有可用 bot 凭证时，每个启用的卷都能在面板里浏览/上传/移动/删除
 //   - 凭证失效也不影响面板启动，只是没有文件管理
-//   - [web].auto_open=false 时不自动开浏览器，只启动服务
+//   - 只打印地址，不改动用户环境里的浏览器
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	port := fs.Int("port", 0, i18n.T("cli.flag.port_random"))
-	noOpen := fs.Bool("no-open", false, i18n.T("cli.flag.no_open"))
 	_ = fs.Parse(args)
 	portSet := false
 	fs.Visit(func(f *flag.Flag) {
@@ -488,9 +486,6 @@ func runWeb(args []string) {
 	}
 	url := "http://" + addr
 	fmt.Println(i18n.T("cli.web_url", url))
-	if !*noOpen && cfg.Web.OpensBrowser() {
-		trayapp.OpenBrowser(url)
-	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

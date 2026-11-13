@@ -295,7 +295,6 @@
   "cli.flag.bot_no_at": "bot username without @",
   "cli.flag.bot_default": "bot username (default: read from the bot session)",
   "cli.flag.port_random": "port (0 = random)",
-  "cli.flag.no_open": "do not open the browser",
   "cli.flag.remote_base": "remote base directory",
   "cli.flag.web_port": "web panel port",
   "cli.flag.mount_point": "mount point, for reference only",

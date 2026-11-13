@@ -1,6 +1,6 @@
 package config
 
-// 面板端口、自动开浏览器与 config set/get 的单元测试。
+// 面板端口与 config set/get 的单元测试。
 
 import (
 	"os"
@@ -29,32 +29,14 @@ func TestListenPort(t *testing.T) {
 	}
 }
 
-// TestOpensBrowser 未写 auto_open 时默认开浏览器。
-//
-// 输入：nil / true / false
-// 输出：是否自动打开
-// 预期：nil 与 true 都返回 true，显式 false 才关闭
-func TestOpensBrowser(t *testing.T) {
-	yes, no := true, false
-	if !(Web{}).OpensBrowser() {
-		t.Error("未配置时应默认打开浏览器")
-	}
-	if !(Web{AutoOpen: &yes}).OpensBrowser() {
-		t.Error("auto_open=true 应打开浏览器")
-	}
-	if (Web{AutoOpen: &no}).OpensBrowser() {
-		t.Error("auto_open=false 不应打开浏览器")
-	}
-}
-
 // TestLoadWebSection 解析 [web] 段。
 //
-// 输入：含 [web] port/auto_open 的配置
+// 输入：含 [web] port 的配置
 // 输出：Config.Web
-// 预期：端口与布尔值都能读到
+// 预期：端口能读到，未写的键保持零值
 func TestLoadWebSection(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	body := "[web]\nport = 18090\nauto_open = false\n"
+	body := "[web]\nport = 18090\n"
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +46,6 @@ func TestLoadWebSection(t *testing.T) {
 	}
 	if cfg.Web.Port != 18090 {
 		t.Errorf("Port = %d", cfg.Web.Port)
-	}
-	if cfg.Web.OpensBrowser() {
-		t.Error("auto_open=false 不应自动打开浏览器")
 	}
 }
 

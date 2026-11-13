@@ -53,7 +53,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
     getCredentials()
       .then((st) => {
         setCreds(st);
-        setApiId(st.api_id > 0 ? String(st.api_id) : '');
+        setApiId(st.api_id > 0 ? MASK : '');
         setApiHash(st.api_hash_set ? MASK : '');
         setBotToken(st.bot_token_set ? MASK : '');
       })
@@ -68,12 +68,13 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
   const saveCreds = () => {
     setBusy('save');
     saveCredentials({
-      api_id: Number(apiId) || 0,
+      api_id: apiId === MASK ? 0 : Number(apiId) || 0,
       api_hash: apiHash === MASK ? '' : apiHash.trim(),
       bot_token: botToken === MASK ? '' : botToken.trim(),
     })
       .then((res) => {
         setCreds(res.status);
+        setApiId(res.status.api_id > 0 ? MASK : '');
         setApiHash(res.status.api_hash_set ? MASK : '');
         setBotToken(res.status.bot_token_set ? MASK : '');
         onNotify(a.saved, 'success');

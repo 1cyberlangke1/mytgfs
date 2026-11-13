@@ -35,7 +35,6 @@ type setting struct {
 // settings 是允许通过命令行修改的键（"section.key" => 描述）。
 var settings = map[string]setting{
 	"web.port":                {"web", "port", kindInt},
-	"web.auto_open":           {"web", "auto_open", kindBool},
 	"webdav.enabled":          {"webdav", "enabled", kindBool},
 	"webdav.addr":             {"webdav", "addr", kindString},
 	"webdav.volume":           {"webdav", "volume", kindString},

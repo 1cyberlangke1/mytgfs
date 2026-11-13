@@ -295,7 +295,6 @@
   "cli.flag.bot_no_at": "bot 用户名（不含 @）",
   "cli.flag.bot_default": "bot 用户名（默认读 bot 会话）",
   "cli.flag.port_random": "端口（0 = 随机）",
-  "cli.flag.no_open": "不自动打开浏览器",
   "cli.flag.remote_base": "远端起始目录",
   "cli.flag.web_port": "面板端口",
   "cli.flag.mount_point": "挂载点（仅记录）",

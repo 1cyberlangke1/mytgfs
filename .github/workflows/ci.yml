@@ -21,7 +21,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # macOS 上 systray 需要 cgo，runner 自带 Xcode clang；Windows/Linux 纯 Go 无需 cgo。
+      # Wails v3 的 Linux 桌面壳走 cgo + GTK4/WebKitGTK 6.0，缺开发包会导致 pkg-config 失败。
+      - name: 安装 Linux 桌面依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+      # macOS 上 systray 需要 cgo，runner 自带 Xcode clang；Windows 纯 Go 无需 cgo。
       - name: 构建
         run: go build ./...
       - name: 静态检查

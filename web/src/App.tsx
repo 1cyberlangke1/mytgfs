@@ -736,11 +736,14 @@ export default function App() {
     pushToast(t.mount.copiedToast, 'success');
   };
 
+  // handleSaveSettings 只提交卡片里的键，成功后本地合并，不再整页重拉
   const handleSaveSettings = (values: Record<string, string>) => {
-    saveSettings(values)
-      .then(() => reloadSettings())
-      .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+    return saveSettings(values).then(() => {
+      setSettings((prev) => ({
+        ...prev,
+        values: { ...prev.values, ...values },
+      }));
+    });
   };
 
 

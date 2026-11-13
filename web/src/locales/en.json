@@ -252,7 +252,9 @@
     "invalidRange": "{field} must be between {min} and {max}",
     "invalidOption": "{field} must be one of {options}",
     "invalidAddr": "{field} must be host:port, for example 127.0.0.1:8080",
-    "invalidTooLong": "{field} must be at most 64 characters"
+    "invalidTooLong": "{field} must be at most 64 characters",
+    "saveCard": "Save",
+    "savedCard": "Saved"
   },
   "offline": {
     "title": "Offline Access",

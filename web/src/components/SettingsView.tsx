@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2, Save } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Loader2, Save } from 'lucide-react';
 import { AppSettingDef, AppSettings, Locale } from '../types';
 import { Translations, formatNumber } from '../utils/i18n';
 import { Button, Input, IOS_SOFT_SPRING, Switch } from './ui';
@@ -9,12 +9,15 @@ interface SettingsViewProps {
   t: Translations;
   locale: Locale;
   settings: AppSettings;
-  onSaveSettings: (values: Record<string, string>) => void;
+  onSaveSettings: (values: Record<string, string>) => Promise<void>;
   onNotifyError: (msg: string) => void;
 }
 
 // SECTION_ORDER 控制分组顺序：与 config.toml 的段落顺序一致。
-const SECTION_ORDER = ['web', 'webdav', 'mount', 'pwa', 'log'];
+const SECTION_ORDER = ['webdav', 'mount', 'pwa', 'log'];
+
+// PANEL_HIDDEN 是不在面板里出现的键：端口只能在启动参数或 config.toml 里改。
+const PANEL_HIDDEN = new Set(['web.port']);
 
 // sectionOf 取 "webdav.addr" 的 "webdav"。
 function sectionOf(key: string): string {
@@ -87,19 +90,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaveSettings,
   onNotifyError,
 }) => {
-  const [draft, setDraft] = useState<Record<string, string>>(settings.values);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [isSaving, setIsSaving] = useState(false);
+  const visibleSchema = useMemo(
+    () => settings.schema.filter((def) => !PANEL_HIDDEN.has(def.key)),
+    [settings.schema]
+  );
 
+  const [draft, setDraft] = useState<Record<string, string>>(settings.values);
+  const [saved, setSaved] = useState<Record<string, string>>(settings.values);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [savingSection, setSavingSection] = useState('');
+  const [savedSection, setSavedSection] = useState('');
+
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
+
+  // 外部改了配置（SSE）时才同步；正在编辑的字段保留用户输入
   useEffect(() => {
-    setDraft(settings.values);
-    setErrors({});
+    const incoming = settings.values;
+    setDraft((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(incoming)) {
+        if (prev[k] === savedRef.current[k]) next[k] = incoming[k];
+      }
+      return next;
+    });
+    setSaved(incoming);
   }, [settings.values]);
 
   // 按段分组，空段不显示
   const groups = useMemo(() => {
     const map = new Map<string, AppSettingDef[]>();
-    for (const def of settings.schema) {
+    for (const def of visibleSchema) {
       const sec = sectionOf(def.key);
       const list = map.get(sec) ?? [];
       list.push(def);
@@ -108,38 +129,56 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return [...map.entries()].sort(
       (a, b) => SECTION_ORDER.indexOf(a[0]) - SECTION_ORDER.indexOf(b[0])
     );
-  }, [settings.schema]);
+  }, [visibleSchema]);
+
+  const isDirty = (key: string) => (draft[key] ?? '') !== (saved[key] ?? '');
+
+  const sectionDirty = (defs: AppSettingDef[]) => defs.some((d) => isDirty(d.key));
+
+  // saveSection 只提交这一张卡片里的键；校验不过就停在原地标红
+  const saveSection = (section: string, defs: AppSettingDef[]) => {
+    const nextErrors: Record<string, string> = {};
+    const payload: Record<string, string> = {};
+    for (const def of defs) {
+      if (!isDirty(def.key)) continue;
+      const raw = draft[def.key] ?? '';
+      const err = validateOne(def, raw, t);
+      if (err) nextErrors[def.key] = err;
+      else payload[def.key] = raw.trim();
+    }
+    setErrors((prev) => ({ ...prev, ...nextErrors }));
+    const firstError = Object.values(nextErrors).find(Boolean);
+    if (firstError) {
+      onNotifyError(firstError);
+      return;
+    }
+    if (Object.keys(payload).length === 0) {
+      setSavedSection(section);
+      window.setTimeout(() => setSavedSection(''), 1600);
+      return;
+    }
+    setSavingSection(section);
+    onSaveSettings(payload)
+      .then(() => {
+        setSaved((prev) => ({ ...prev, ...payload }));
+        setSavedSection(section);
+        window.setTimeout(() => setSavedSection(''), 1600);
+      })
+      .catch((err) => onNotifyError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setSavingSection(''));
+  };
 
   const setValue = (key: string, value: string) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
     setErrors((prev) => (prev[key] ? { ...prev, [key]: '' } : prev));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const nextErrors: Record<string, string> = {};
-    const payload: Record<string, string> = {};
-    for (const def of settings.schema) {
-      const raw = draft[def.key] ?? '';
-      const err = validateOne(def, raw, t);
-      if (err) nextErrors[def.key] = err;
-      else payload[def.key] = raw.trim();
-    }
-    setErrors(nextErrors);
-    const firstError = Object.values(nextErrors).find(Boolean);
-    if (firstError) {
-      onNotifyError(firstError);
-      return;
-    }
-    setIsSaving(true);
-    onSaveSettings(payload);
-    window.setTimeout(() => setIsSaving(false), 320);
-  };
-
   const field = (def: AppSettingDef) => {
     const id = `setting-${def.key}`;
     const label = labelOf(t, def.key);
     const err = errors[def.key];
+    const dirty = isDirty(def.key);
+    const marked = Boolean(err) || dirty;
     const hint =
       def.kind === 'int' && def.min !== undefined && def.max !== undefined
         ? `${formatNumber(def.min, locale)} – ${formatNumber(def.max, locale)}`
@@ -147,9 +186,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           ? def.options.join(' / ')
           : hintOf(t, def.key);
 
+    const labelClass = marked
+      ? 'text-red-600 dark:text-red-400'
+      : 'text-zinc-700 dark:text-zinc-300';
+    const controlClass = marked
+      ? 'border-red-500/80 focus-visible:ring-red-500/30 dark:border-red-500/70'
+      : '';
+
     return (
       <div className="space-y-1.5" key={def.key}>
-        <label htmlFor={id} className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+        <label htmlFor={id} className={`block text-xs font-medium ${labelClass}`}>
           {label}
         </label>
         {def.kind === 'bool' ? (
@@ -159,7 +205,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onCheckedChange={(on) => setValue(def.key, on ? 'true' : 'false')}
               aria-label={label}
             />
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            <span
+              className={`text-xs ${marked ? 'text-red-600 dark:text-red-400' : 'text-zinc-500 dark:text-zinc-400'}`}
+            >
               {draft[def.key] === 'true' ? t.settings.boolOn : t.settings.boolOff}
             </span>
           </div>
@@ -168,7 +216,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             id={id}
             value={draft[def.key] ?? ''}
             onChange={(e) => setValue(def.key, e.target.value)}
-            className="flex h-9 w-full rounded-xl border border-zinc-200/90 bg-white px-3 text-sm text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/35 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100"
+            className={`flex h-9 w-full rounded-xl border border-zinc-200/90 bg-white px-3 text-sm text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/35 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 ${controlClass}`}
           >
             {def.options.map((o) => (
               <option key={o} value={o}>
@@ -187,7 +235,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             value={draft[def.key] ?? ''}
             onChange={(e) => setValue(def.key, e.target.value)}
             aria-invalid={Boolean(err)}
-            className="font-mono tabular-nums text-start"
+            className={`font-mono tabular-nums text-start ${controlClass}`}
           />
         )}
         <p
@@ -200,38 +248,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <motion.form
-      layout
-      transition={IOS_SOFT_SPRING}
-      onSubmit={handleSubmit}
-      noValidate
-      className="space-y-6"
-    >
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
-          {t.settings.title}
-        </h1>
+    <motion.div layout transition={IOS_SOFT_SPRING} className="space-y-6">
+      <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
+        {t.settings.title}
+      </h1>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <Button type="submit" variant="accent" disabled={isSaving}>
-            {isSaving ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Save className="w-3.5 h-3.5" />
-            )}
-            <span>{isSaving ? t.settings.savingBtn : t.settings.saveSettingsBtn}</span>
-          </Button>
-        </div>
-      </div>
-
-      {groups.map(([section, defs]) => (
-        <section key={section} className="surface-card rounded-2xl p-6 space-y-4">
-          <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
-            {sectionTitle(t, section)}
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">{defs.map(field)}</div>
-        </section>
-      ))}
-    </motion.form>
+      {groups.map(([section, defs]) => {
+        const dirty = sectionDirty(defs);
+        const saving = savingSection === section;
+        const done = savedSection === section;
+        const blocked = defs.some((d) => Boolean(errors[d.key]));
+        return (
+          <section key={section} className="surface-card rounded-2xl p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
+              {sectionTitle(t, section)}
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">{defs.map(field)}</div>
+            <div className="flex items-center justify-end gap-3">
+              {done && (
+                <span className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+                  <Check className="w-3.5 h-3.5" />
+                  {t.settings.savedCard}
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="accent"
+                disabled={!dirty || saving || blocked}
+                onClick={() => saveSection(section, defs)}
+              >
+                {saving ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{saving ? t.settings.savingBtn : t.settings.saveCard}</span>
+              </Button>
+            </div>
+          </section>
+        );
+      })}
+    </motion.div>
   );
 };
