@@ -28,17 +28,12 @@ import (
 	"slices"
 	"strings"
 
-	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
-	"mytgfs/internal/datadir"
+	"mytgfs/internal/app"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
-	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
-	"mytgfs/internal/tgclient"
-	"mytgfs/internal/uploadcache"
 )
 
 // putItem 是一个待上传的本地文件。
@@ -66,51 +61,25 @@ func runPut(args []string) {
 		fatal(i18n.T("err.put_no_files"))
 	}
 
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volName := resolveVolumeName(cfg, *name)
-	volume, ok := volumeByName(cfg, volName)
+	_, volName, ok := a.Volume(*name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
 	okCount, failCount := 0, 0
-	err = client.Run(ctx, func(ctx context.Context) error {
-		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-		if perr != nil {
-			return perr
-		}
-		defer closePool()
-		store := telegramstore.New(api, volume.ChatID)
-		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
-		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
+	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		q := queue.New(1, 3)
 
 		for _, it := range items {
 			if err := q.Do(ctx, it.remote, func(ctx context.Context) error {
-				return putOne(ctx, idx, store, it)
+				return putOne(ctx, s.Index, s.Store(), it)
 			}); err != nil {
 				failCount++
 				fmt.Println(i18n.T("put.fail", it.remote, err))

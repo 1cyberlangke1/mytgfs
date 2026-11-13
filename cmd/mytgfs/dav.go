@@ -16,18 +16,12 @@ import (
 	"os/signal"
 	"time"
 
-	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
+	"mytgfs/internal/app"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/index"
 	"mytgfs/internal/netmap"
 	"mytgfs/internal/queue"
-	"mytgfs/internal/sessionstore"
-	"mytgfs/internal/telegramstore"
-	"mytgfs/internal/tgclient"
-	"mytgfs/internal/uploadcache"
 )
 
 // runWebDAV 启动 WebDAV 服务。
@@ -37,51 +31,22 @@ func runWebDAV(args []string) {
 	name := fs.String("name", "", i18n.T("cli.flag.volume"))
 	_ = fs.Parse(args)
 
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volName := resolveVolumeName(cfg, *name)
-	volume, ok := volumeByName(cfg, volName)
+	_, volName, ok := a.Volume(*name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	// 退出时删掉指向本服务的网络映射，避免留下红叉盘符
 	defer netmap.Cleanup(*addr)
 
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-
-	err = client.Run(ctx, func(ctx context.Context) error {
-		// 多条 MTProto 连接并行取数：单连接受 RTT 限制，池化后吞吐随连接数上升
-		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-		if perr != nil {
-			return perr
-		}
-		defer closePool()
-		store := telegramstore.New(api, volume.ChatID)
-		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
-		// 上传断点落在 data/uploads，中断后按内容 sha256 续传
-		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
-		fsys := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
+	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
+		fsys := dav.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
 		// 写入走串行队列：批量拷贝时不会互相抢 Telegram 的发消息配额
 		fsys.SetQueue(queue.New(1, 3))
 		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫

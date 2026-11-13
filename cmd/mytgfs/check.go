@@ -11,15 +11,10 @@ import (
 	"os"
 	"os/signal"
 
+	"mytgfs/internal/app"
 	"mytgfs/internal/channel"
-	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
-	"mytgfs/internal/datadir"
 	"mytgfs/internal/fsck"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/index"
-	"mytgfs/internal/sessionstore"
-	"mytgfs/internal/tgclient"
 	"mytgfs/internal/ui"
 )
 
@@ -44,46 +39,29 @@ func runCheck(args []string) {
 	fix := fs.Bool("fix", false, i18n.T("cli.flag.fix"))
 	_ = fs.Parse(args)
 
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volName := resolveVolumeName(cfg, *name)
-	volume, ok := volumeByName(cfg, volName)
+	volume, volName, ok := a.Volume(*name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
 	if volume.ChatID == 0 {
 		fatal(i18n.T("err.volume_no_channel", volName))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	var rep fsck.Report
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-	err = client.Run(ctx, func(ctx context.Context) error {
-		ch, rerr := channel.Resolve(ctx, client.API(), volume.ChatID)
+	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
+		ch, rerr := channel.Resolve(ctx, s.API, volume.ChatID)
 		if rerr != nil {
 			return rerr
 		}
 		var xerr error
-		rep, xerr = fsck.Run(ctx, idx, client.API(), ch.ChannelID, ch.AccessHash, *fix)
+		rep, xerr = fsck.Run(ctx, s.Index, s.API, ch.ChannelID, ch.AccessHash, *fix)
 		return xerr
 	})
 	if err != nil {

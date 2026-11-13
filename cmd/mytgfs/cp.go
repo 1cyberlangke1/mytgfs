@@ -25,15 +25,12 @@ import (
 	"path"
 	"strings"
 
+	"mytgfs/internal/app"
 	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
-	"mytgfs/internal/datadir"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
-	"mytgfs/internal/tgclient"
 )
 
 // runCopy 处理频道内复制。
@@ -53,17 +50,16 @@ func runCopy(args []string) {
 	if strings.HasSuffix(fs.Arg(1), "/") || strings.HasSuffix(fs.Arg(1), `\`) {
 		dst = path.Join(dst, path.Base(src))
 	}
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volName := resolveVolumeName(cfg, *name)
-	volume, ok := volumeByName(cfg, volName)
+	_, volName, ok := a.Volume(*name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
 	dstName := cmp.Or(*to, volName)
-	dstVolume, ok := volumeByName(cfg, dstName)
+	dstVolume, _, ok := a.Volume(dstName)
 	if !ok {
 		fatal(i18n.T("err.volume_target_not_found", dstName))
 	}
@@ -71,63 +67,46 @@ func runCopy(args []string) {
 	if src == dst && dstName == volName {
 		fatal(i18n.T("err.cp_same_path"))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
-
-	// 目标卷与源卷不同才需要另开索引；同卷复用同一句柄
-	dstIdx := idx
-	if dstName != volName {
-		dstIdx, err = index.Open(datadir.Path("index-" + dstName + ".db"))
-		if err != nil {
-			fatal(fmt.Sprintf(i18n.T("err.index_open_target"), err))
-		}
-		defer dstIdx.Close()
-	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	source, found, err := idx.Get(ctx, src)
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
-	}
-	if !found {
-		fatal(i18n.T("err.cp_src_missing", src))
-	}
-	old, hadOld, err := dstIdx.Get(ctx, dst)
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
-	}
-	if hadOld && !*force {
-		// 目标已有同内容的文件：不发消息，直接跳过
-		if sameContent(old, source) {
-			fmt.Printf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
-				volName, src, dstName, dst, old.DocumentID, old.Size)
-			return
+	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
+		idx := s.Index
+		// 目标卷与源卷不同才需要另开索引；同卷复用同一句柄
+		dstIdx := idx
+		if dstName != volName {
+			d, derr := a.Index(dstName)
+			if derr != nil {
+				return derr
+			}
+			defer d.Close()
+			dstIdx = d
 		}
-		fatal(i18n.T("err.cp_dst_exists", dst))
-	}
 
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-	err = client.Run(ctx, func(ctx context.Context) error {
-		srcStore := telegramstore.New(client.API(), volume.ChatID)
-		dstStore := srcStore
-		if dstVolume.ChatID != volume.ChatID {
-			dstStore = telegramstore.New(client.API(), dstVolume.ChatID)
+		source, found, gerr := idx.Get(ctx, src)
+		if gerr != nil {
+			return gerr
 		}
+		if !found {
+			fatal(i18n.T("err.cp_src_missing", src))
+		}
+		old, hadOld, gerr := dstIdx.Get(ctx, dst)
+		if gerr != nil {
+			return gerr
+		}
+		if hadOld && !*force {
+			// 目标已有同内容的文件：不发消息，直接跳过
+			if sameContent(old, source) {
+				fmt.Printf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
+					volName, src, dstName, dst, old.DocumentID, old.Size)
+				return nil
+			}
+			fatal(i18n.T("err.cp_dst_exists", dst))
+		}
+
+		srcStore := s.Store()
+		dstStore := s.StoreFor(dstVolume.ChatID)
 		srcPart := &telegramstore.Part{
 			MessageID:     source.MessageID,
 			DocumentID:    source.DocumentID,

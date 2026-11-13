@@ -17,19 +17,13 @@ import (
 	"path"
 	"strings"
 
-	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
+	"mytgfs/internal/app"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/index"
-	"mytgfs/internal/sessionstore"
-	"mytgfs/internal/telegramstore"
-	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
-	"mytgfs/internal/uploadcache"
 )
 
 // withFiles 打开指定卷的文件管理接口并执行 fn。
@@ -38,50 +32,24 @@ import (
 // 输出：操作失败时进程退出 1
 // 预期：索引为空时先用 user 会话按频道历史重建；连接在 fn 返回后关闭
 func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files) error) {
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	volName := resolveVolumeName(cfg, name)
-	vol, ok := volumeByName(cfg, volName)
+	vol, volName, ok := a.Volume(name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	// 索引是缓存：空了就重建，否则 ls/search 会给出空白结果
-	if rerr := trayapp.RebuildIndexIfEmpty(ctx, cfg, idx, vol.ChatID); rerr != nil {
-		fmt.Fprintln(os.Stderr, i18n.T("err.fs_rebuild", rerr))
-	}
 
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-	err = client.Run(ctx, func(ctx context.Context) error {
-		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-		if perr != nil {
-			return perr
+	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
+		// 索引是缓存：空了就重建，否则 ls/search 会给出空白结果
+		if rerr := trayapp.RebuildIndexIfEmpty(ctx, a.Config(), s.Index, vol.ChatID); rerr != nil {
+			fmt.Fprintln(os.Stderr, i18n.T("err.fs_rebuild", rerr))
 		}
-		defer closePool()
-		store := telegramstore.New(api, vol.ChatID)
-		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
-		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
-		davfs := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
+		davfs := dav.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
 		davfs.SetTempDir(datadir.Path("tmp"))
 		return fn(ctx, volName, fm.New(davfs))
 	})
