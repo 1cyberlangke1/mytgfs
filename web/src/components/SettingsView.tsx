@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2, RotateCcw, Save } from 'lucide-react';
+import { Loader2, Save } from 'lucide-react';
 import { AppSettingDef, AppSettings, Locale } from '../types';
 import { Translations, formatNumber } from '../utils/i18n';
 import { Button, Input, IOS_SOFT_SPRING, Switch } from './ui';
@@ -10,7 +10,6 @@ interface SettingsViewProps {
   locale: Locale;
   settings: AppSettings;
   onSaveSettings: (values: Record<string, string>) => void;
-  onResetDefaults: () => void;
   onNotifyError: (msg: string) => void;
 }
 
@@ -86,7 +85,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   locale,
   settings,
   onSaveSettings,
-  onResetDefaults,
   onNotifyError,
 }) => {
   const [draft, setDraft] = useState<Record<string, string>>(settings.values);
@@ -215,10 +213,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </h1>
 
         <div className="flex items-center gap-2 shrink-0">
-          <Button type="button" variant="outline" onClick={onResetDefaults}>
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>{t.settings.resetDefaultsBtn}</span>
-          </Button>
           <Button type="submit" variant="accent" disabled={isSaving}>
             {isSaving ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

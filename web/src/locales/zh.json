@@ -58,7 +58,7 @@
     "expandSidebar": "展开侧边栏",
     "totalUsed": "总占用",
     "loopback": "本机回环",
-    "webdavActive": "WebDAV：已开启 (/dav)",
+    "webdavActive": "WebDAV：已开启",
     "webdavOff": "WebDAV：已关闭",
     "languageLabel": "切换语言"
   },
@@ -219,7 +219,8 @@
     "macStep3": "3. 身份选择“客人 (Guest)”即可完成挂载。",
     "linuxStep1": "1. 在文件管理器地址栏或终端中使用 WebDAV 地址挂载：",
     "linuxStep2": "2. 终端挂载命令示例：",
-    "linuxStep3": "3. 挂载完成后即可在本地目录直接访问。"
+    "linuxStep3": "3. 挂载完成后即可在本地目录直接访问。",
+    "enableFirst": "WebDAV 未启用，打开开关后这里会显示真实监听地址"
   },
   "settings": {
     "title": "设置",
@@ -259,7 +260,6 @@
     "installCardDesc": "作为独立桌面应用窗口运行，支持快速启动。",
     "installBtn": "安装应用",
     "installedBadge": "已安装",
-    "resetInstallSimBtn": "重置",
     "iosGuideText": "iOS Safari 请点击底部“分享”并选择“添加到主屏幕”。",
     "cacheQuotaLabel": "单文件上限 {limit} MB",
     "savedListHeading": "已离线文件",
@@ -268,7 +268,8 @@
     "removeOfflineBtn": "移除",
     "removedOfflineToast": "已移除离线文件",
     "savedOfflineToast": "已保存为离线可用：{name}",
-    "exceededLimitToast": "文件超过离线单文件上限 ({limit} MB)，可在设置中调整。"
+    "exceededLimitToast": "文件超过离线单文件上限 ({limit} MB)，可在设置中调整。",
+    "installUnavailable": "当前浏览器不支持一键安装，请用 Chrome/Edge 的“安装应用”菜单"
   },
   "settingSections": {
     "web": "面板",

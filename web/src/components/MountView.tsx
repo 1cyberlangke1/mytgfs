@@ -29,9 +29,12 @@ export const MountView: React.FC<MountViewProps> = ({
 
   const osTabSpring = useInterruptibleViewSpring(osTab);
 
-  const webdavUrl = `http://${settings.listenHost}:${settings.panelPort}${settings.webdavPath}`;
+  // WebDAV 地址来自服务端实际监听结果，不用面板端口拼
+  const webdavUrl = settings.webdavPath.trim() ? `http://${settings.webdavPath.trim()}` : '';
+  const hasAddr = webdavUrl !== '';
 
   const handleCopy = () => {
+    if (!hasAddr) return;
     onCopyAddress(webdavUrl);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
@@ -92,13 +95,14 @@ export const MountView: React.FC<MountViewProps> = ({
               dir="ltr"
               type="text"
               readOnly
-              value={webdavUrl}
+              value={hasAddr ? webdavUrl : t.mount.enableFirst}
               className="min-w-0 flex-1 font-mono text-xs select-all text-start"
             />
             <Button
               type="button"
               variant="outline"
               onClick={handleCopy}
+              disabled={!hasAddr}
               className="sm:w-auto w-full"
             >
               {copied ? (
@@ -147,12 +151,16 @@ export const MountView: React.FC<MountViewProps> = ({
             <>
               <p>{t.mount.winStep1}</p>
               <p>{t.mount.winStep2}</p>
-              <pre
-                dir="ltr"
-                className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto text-left"
-              >
-                {`net use Z: ${webdavUrl} /persistent:yes`}
-              </pre>
+              {hasAddr ? (
+                <pre
+                  dir="ltr"
+                  className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto text-left"
+                >
+                  {`net use Z: ${webdavUrl} /persistent:yes`}
+                </pre>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">{t.mount.enableFirst}</p>
+              )}
               <p>{t.mount.winStep3}</p>
             </>
           )}
@@ -161,12 +169,16 @@ export const MountView: React.FC<MountViewProps> = ({
             <>
               <p>{t.mount.macStep1}</p>
               <p>{t.mount.macStep2}</p>
-              <pre
-                dir="ltr"
-                className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto text-left"
-              >
-                {webdavUrl}
-              </pre>
+              {hasAddr ? (
+                <pre
+                  dir="ltr"
+                  className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto text-left"
+                >
+                  {webdavUrl}
+                </pre>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">{t.mount.enableFirst}</p>
+              )}
               <p>{t.mount.macStep3}</p>
             </>
           )}
@@ -175,13 +187,17 @@ export const MountView: React.FC<MountViewProps> = ({
             <>
               <p>{t.mount.linuxStep1}</p>
               <p>{t.mount.linuxStep2}</p>
-              <pre
-                dir="ltr"
-                className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto flex items-center gap-2 text-left"
-              >
-                <Terminal className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                <code>{`gio mount dav://${settings.listenHost}:${settings.panelPort}${settings.webdavPath}`}</code>
-              </pre>
+              {hasAddr ? (
+                <pre
+                  dir="ltr"
+                  className="p-3.5 rounded-xl bg-zinc-950 text-zinc-100 border border-zinc-800 font-mono text-xs overflow-x-auto flex items-center gap-2 text-left"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                  <code>{`gio mount dav://${settings.webdavPath.trim()}`}</code>
+                </pre>
+              ) : (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">{t.mount.enableFirst}</p>
+              )}
               <p>{t.mount.linuxStep3}</p>
             </>
           )}

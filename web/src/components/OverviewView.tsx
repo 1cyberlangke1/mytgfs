@@ -201,10 +201,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 <span className="font-semibold text-zinc-900 dark:text-zinc-100">
                   {t.connection.label}: {t.connection[connectionStatus]}
                 </span>
-                <span className="text-zinc-300 dark:text-zinc-700" aria-hidden="true">·</span>
-                <span className="text-zinc-500 dark:text-zinc-400">
-                  {t.indexState.normal}
-                </span>
               </div>
               {connectionStatus !== 'connected' && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">

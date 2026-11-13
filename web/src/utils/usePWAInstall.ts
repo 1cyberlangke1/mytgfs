@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
 
+// PWA 安装状态：只反映浏览器真实能力，不做任何模拟。
+//
+// 输入：无
+// 输出：isInstallable 浏览器是否给出 beforeinstallprompt；isInstalled 是否已安装
+// 预期：不支持安装的浏览器 / 桌面壳内 isInstallable=false，不做假安装
+
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
@@ -11,8 +17,7 @@ export function usePWAInstall() {
     if (typeof window === 'undefined') return false;
     return (
       window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
-      window.localStorage.getItem('mytgfs_pwa_installed_sim') === 'true'
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true
     );
   });
   const [isIOS, setIsIOS] = useState(false);
@@ -29,7 +34,6 @@ export function usePWAInstall() {
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
-      window.localStorage.setItem('mytgfs_pwa_installed_sim', 'true');
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -41,28 +45,17 @@ export function usePWAInstall() {
     };
   }, []);
 
-  const install = async (): Promise<'accepted' | 'simulated' | 'dismissed'> => {
-    if (deferredPrompt) {
-      await deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setIsInstalled(true);
-        setDeferredPrompt(null);
-        window.localStorage.setItem('mytgfs_pwa_installed_sim', 'true');
-        return 'accepted';
-      }
-      return 'dismissed';
+  // install 仅在浏览器真的提供安装事件时可用。
+  const install = async (): Promise<'accepted' | 'dismissed' | 'unavailable'> => {
+    if (!deferredPrompt) return 'unavailable';
+    await deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+      return 'accepted';
     }
-    // In desktop browser preview where beforeinstallprompt may not fire inside an iframe,
-    // allow deterministic desktop shortcut installation state so the user can test the full flow.
-    setIsInstalled(true);
-    window.localStorage.setItem('mytgfs_pwa_installed_sim', 'true');
-    return 'simulated';
-  };
-
-  const resetInstalledState = () => {
-    setIsInstalled(false);
-    window.localStorage.removeItem('mytgfs_pwa_installed_sim');
+    return 'dismissed';
   };
 
   return {
@@ -70,6 +63,5 @@ export function usePWAInstall() {
     isInstalled,
     isIOS,
     install,
-    resetInstalledState,
   };
 }

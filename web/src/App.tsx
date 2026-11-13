@@ -719,11 +719,6 @@ export default function App() {
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
-  const handleResetSettings = () => {
-    reloadSettings()
-      .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
-  };
 
   // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表
   const handleCreateVolume = (name: string, title: string, point: string) => {
@@ -1069,12 +1064,9 @@ export default function App() {
                   dir="ltr"
                   className="font-mono text-zinc-900 dark:text-zinc-200 truncate text-start"
                 >
-                  {settings.panelPort > 0
-                    ? `http://${settings.listenHost}:${settings.panelPort}`
-                    : settings.webdavPath || t.loopbackOnlyBadge}
-                </div>
-                <div className="text-zinc-500 dark:text-zinc-400 truncate">
-                  {settings.webdavEnabled ? t.sidebar.webdavActive : t.sidebar.webdavOff}
+                  {settings.webdavEnabled && settings.webdavPath
+                    ? `WebDAV http://${settings.webdavPath}`
+                    : t.sidebar.webdavOff}
                 </div>
               </div>
             )}
@@ -1239,7 +1231,6 @@ export default function App() {
                 locale={locale}
                 settings={settings}
                 onSaveSettings={handleSaveSettings}
-                onResetDefaults={handleResetSettings}
                 onNotifyError={(msg) => pushToast(msg, 'error')}
               />
             )}

@@ -585,9 +585,20 @@ func handleAPISettings(configPath string) http.HandlerFunc {
 			schema := config.Schema()
 			values := make(map[string]string, len(schema))
 			for _, s := range schema {
-				if v, ok, err := config.GetKey(configPath, s.Key); err == nil && ok {
-					values[s.Key] = v
+				v, ok, err := config.GetKey(configPath, s.Key)
+				if err != nil {
+					continue
 				}
+				if !ok {
+					// 缺省键给类型零值，面板显示「默认」而不是空白
+					switch s.Kind {
+					case "int":
+						v = "0"
+					case "bool":
+						v = "false"
+					}
+				}
+				values[s.Key] = v
 			}
 			replyJSON(w, http.StatusOK, map[string]any{
 				"schema":        schema,

@@ -58,7 +58,7 @@
     "expandSidebar": "Expand sidebar",
     "totalUsed": "Total Used",
     "loopback": "Loopback",
-    "webdavActive": "WebDAV: Active (/dav)",
+    "webdavActive": "WebDAV: on",
     "webdavOff": "WebDAV: Off",
     "languageLabel": "Language"
   },
@@ -219,7 +219,8 @@
     "macStep3": "3. Select \"Guest\" when prompted.",
     "linuxStep1": "1. Mount via your file manager or terminal:",
     "linuxStep2": "2. Example command:",
-    "linuxStep3": "3. Once mounted, access files directly from your local mount point."
+    "linuxStep3": "3. Once mounted, access files directly from your local mount point.",
+    "enableFirst": "WebDAV is off; the real listen address appears once enabled"
   },
   "settings": {
     "title": "Settings",
@@ -259,7 +260,6 @@
     "installCardDesc": "Run in a standalone window with quick launch support.",
     "installBtn": "Install App",
     "installedBadge": "Installed",
-    "resetInstallSimBtn": "Reset",
     "iosGuideText": "On iOS Safari, tap Share and select \"Add to Home Screen\".",
     "cacheQuotaLabel": "Max {limit} MB per file",
     "savedListHeading": "Offline Files",
@@ -268,7 +268,8 @@
     "removeOfflineBtn": "Remove",
     "removedOfflineToast": "Removed offline file",
     "savedOfflineToast": "Saved for offline access: {name}",
-    "exceededLimitToast": "File exceeds offline size limit ({limit} MB)."
+    "exceededLimitToast": "File exceeds offline size limit ({limit} MB).",
+    "installUnavailable": "This browser has no install prompt; use the Install app menu in Chrome/Edge"
   },
   "settingSections": {
     "web": "Panel",

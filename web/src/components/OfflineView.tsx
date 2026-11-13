@@ -26,7 +26,7 @@ export const OfflineView: React.FC<OfflineViewProps> = ({
   onRemoveOfflineFile,
   onPreviewOfflineFile,
 }) => {
-  const { isInstalled, isIOS, install, resetInstalledState } = usePWAInstall();
+  const { isInstalled, isInstallable, isIOS, install } = usePWAInstall();
 
   const totalOfflineBytes = offlineFiles.reduce((acc, f) => acc + f.size, 0);
 
@@ -60,20 +60,19 @@ export const OfflineView: React.FC<OfflineViewProps> = ({
 
         <div className="flex items-center gap-2 shrink-0">
           {isInstalled ? (
-            <>
-              <div className="h-9 px-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-medium inline-flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{t.offline.installedBadge}</span>
-              </div>
-              <Button type="button" variant="ghost" size="sm" onClick={resetInstalledState}>
-                {t.offline.resetInstallSimBtn}
-              </Button>
-            </>
-          ) : (
+            <div className="h-9 px-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-medium inline-flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{t.offline.installedBadge}</span>
+            </div>
+          ) : isInstallable ? (
             <Button type="button" variant="accent" onClick={install}>
               <DownloadCloud className="w-3.5 h-3.5" />
               <span>{t.offline.installBtn}</span>
             </Button>
+          ) : (
+            <span className="text-xs text-zinc-500 dark:text-zinc-400 max-w-[16rem] text-end">
+              {t.offline.installUnavailable}
+            </span>
           )}
         </div>
       </section>
