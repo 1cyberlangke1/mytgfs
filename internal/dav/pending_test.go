@@ -108,6 +108,75 @@ func TestResumePendingUploadsAndIndexes(t *testing.T) {
 	}
 }
 
+// TestSuccessfulUploadClearsPendingDone 正常提交成功后不应残留已上传记账。
+func TestSuccessfulUploadClearsPendingDone(t *testing.T) {
+	fsys, _, done := newTestFS(t)
+	defer done()
+	ctx := context.Background()
+
+	f, err := fsys.OpenFile(ctx, "/a.bin", os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := fsys.idx.GetPendingDone(ctx, "/a.bin"); err != nil || ok {
+		t.Fatalf("成功后应清掉已上传记账: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestResumePendingReusesUploadedPart 上传已成功但索引没写成时，重启只补索引、不重传字节。
+func TestResumePendingReusesUploadedPart(t *testing.T) {
+	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	ctx := context.Background()
+
+	// 模拟上次崩溃：临时文件在、账本在，且上传已成功（消息号已记下）
+	tmp := filepath.Join(t.TempDir(), ".mytgfs-dav-crash")
+	if err := os.WriteFile(tmp, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.PutPending(ctx, index.PendingUpload{Path: "/a.bin", Temp: tmp, Size: 5, Mtime: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.PutPendingDone(ctx, index.PendingDone{
+		Path: "/a.bin", MessageID: 55, DocumentID: 900, AccessHash: 7,
+		FileReference: []byte("ref"), Size: 5, Sha256: helloSHA, Mtime: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st := &fakeStore{}
+	fsys := New(ctx, idx, st, 1<<20)
+	if err := fsys.ResumePending(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(st.uploadKeys) != 0 {
+		t.Fatalf("已上传过的不应重传，实际 %v", st.uploadKeys)
+	}
+	entry, ok, err := idx.Get(ctx, "/a.bin")
+	if err != nil || !ok || entry.MessageID != 55 || entry.DocumentID != 900 || entry.Sha256 != helloSHA {
+		t.Fatalf("应按已上传记账补索引: ok=%v err=%v entry=%+v", ok, err, entry)
+	}
+	if rows, _ := idx.ListPending(ctx); len(rows) != 0 {
+		t.Fatalf("账本应清空，实际 %+v", rows)
+	}
+	if _, ok, _ := idx.GetPendingDone(ctx, "/a.bin"); ok {
+		t.Fatal("已上传记账应清空")
+	}
+	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("临时文件应删除: %v", err)
+	}
+}
+
 // TestResumePendingDropsMissingTemp 临时文件已不存在（被清扫/损坏）时只清账，不上传。
 func TestResumePendingDropsMissingTemp(t *testing.T) {
 	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))

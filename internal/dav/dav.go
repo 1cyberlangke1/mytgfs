@@ -193,6 +193,31 @@ func (d *FileSystem) ResumePending() error {
 		}
 		sha := hex.EncodeToString(h.Sum(nil))
 		helper := &file{d: d, name: p.Path}
+		// 上次上传已成功（消息号已记下）但索引没写成：只补索引，不重传整份内容。
+		// 摘要不一致说明临时文件已被新内容覆盖，旧记账作废，走正常上传。
+		done, hasDone, derr := d.idx.GetPendingDone(d.ctx, p.Path)
+		if derr == nil && hasDone && done.MessageID > 0 && done.Sha256 == sha {
+			perr := helper.record(d.ctx, p.Path, sha, &telegramstore.Part{
+				MessageID:     done.MessageID,
+				DocumentID:    done.DocumentID,
+				AccessHash:    done.AccessHash,
+				FileReference: done.FileReference,
+				Size:          done.Size,
+			})
+			if perr != nil {
+				slog.Warn(i18n.T("log.pending_resume_failed", p.Path, perr), "path", p.Path, "err", perr)
+				_ = tmp.Close()
+				continue
+			}
+			_ = tmp.Close()
+			_ = d.idx.DeletePending(d.ctx, p.Path)
+			_ = os.Remove(p.Temp)
+			continue
+		}
+		if hasDone {
+			// 内容已变化：旧记账与本次提交无关，清掉避免下次误用
+			_ = d.idx.DeletePendingDone(d.ctx, p.Path)
+		}
 		if err := helper.commit(d.ctx, tmp, p.Path, sha); err != nil {
 			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, err), "path", p.Path, "err", err)
 			_ = tmp.Close()
@@ -419,6 +444,29 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 	if part == nil {
 		return errors.New(i18n.T("err.upload_no_result"))
 	}
+	return f.record(ctx, name, sha, part)
+}
+
+// record 把上传结果登记到索引，并清理被覆盖的旧消息。
+//
+// 输入：ctx；name 卷内路径；sha 内容摘要；part 已上传成功的消息
+// 输出：error
+// 预期：先写 pending_done 记账再写 files，索引失败时记账仍在，
+// 重启 ResumePending 只需补一次索引而不重传整份内容；
+// 索引写成后清掉记账，清账失败只记日志（数据已可用，不能因此再传一遍）。
+func (f *file) record(ctx context.Context, name, sha string, part *telegramstore.Part) error {
+	if err := f.d.idx.PutPendingDone(ctx, index.PendingDone{
+		Path:          name,
+		MessageID:     part.MessageID,
+		DocumentID:    part.DocumentID,
+		AccessHash:    part.AccessHash,
+		FileReference: part.FileReference,
+		Size:          part.Size,
+		Sha256:        sha,
+		Mtime:         time.Now().Unix(),
+	}); err != nil {
+		return err
+	}
 	// 覆盖写：旧消息要删掉，否则频道里会堆同路径的旧文件消息
 	old, hadOld, gerr := f.d.idx.Get(ctx, name)
 	if gerr != nil {
@@ -440,6 +488,9 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 		if derr := f.d.store.Delete(ctx, old.MessageID); derr != nil {
 			slog.Debug("删除被覆盖的旧消息失败", "path", name, "msg", old.MessageID, "err", derr)
 		}
+	}
+	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
+		slog.Debug("清理已上传记账失败（下次补索引幂等）", "path", name, "err", err)
 	}
 	return nil
 }

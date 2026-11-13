@@ -132,6 +132,10 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 
 分片级的断点续传由 `data/uploads/<sha256>.json` 负责：大文件传到一半中断，重启后跳过已完成分片继续发。
 
+上传成功但索引没写成（库锁、进程被杀）时，上传返回的消息号会立刻记进 `pending_done` 表。
+下次启动只需要按这条记账补一次索引，不会把整份内容再传一遍，频道里也不会多出同路径的重复消息；
+临时文件内容与记账摘要不一致时视为作废，回退成正常补传。
+
 **写时去重**：提交前按「大小 + sha256」在索引里查找同内容文件，命中就发一条引用已有 document 的
 新消息，不再重传字节；复用失败会自动回退成正常上传。删除某个路径只删它自己的消息，其它引用不受影响。
 
@@ -162,7 +166,7 @@ cmd/mytray/     GUI 子系统托盘入口（Windows 双击无黑框）
 internal/
   dav/          WebDAV 文件系统（读写/待补传记账）
   telegramstore/ MTProto 上传、下载、断点续传、引用复制
-  index/        SQLite 索引（files/dirs/meta/pending）
+  index/        SQLite 索引（files/dirs/meta/pending/pending_done）
   sync/         频道 pts 增量同步、caption 编解码
   web/          内嵌面板、文件管理、PWA、缩略图、分片上传
   trayapp/      托盘 + 自动同步 + 按需面板/挂载

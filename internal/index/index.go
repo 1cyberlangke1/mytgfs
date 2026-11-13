@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS pending (
 	size INTEGER NOT NULL,
 	mtime INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_done (
+	path TEXT PRIMARY KEY,
+	message_id INTEGER NOT NULL,
+	document_id INTEGER NOT NULL,
+	access_hash INTEGER NOT NULL,
+	file_reference BLOB,
+	size INTEGER NOT NULL,
+	sha256 TEXT NOT NULL DEFAULT '',
+	mtime INTEGER NOT NULL
+);
 `
 
 // Open 打开或创建索引文件。
@@ -171,6 +181,72 @@ func (i *Index) ListPending(ctx context.Context) ([]PendingUpload, error) {
 
 // Close 关闭索引。
 func (i *Index) Close() error { return i.db.Close() }
+
+// PendingDone 是一条「已经上传成功、但还没写进 files 表」的记录。
+//
+// 用途：上传返回消息号之后索引登记失败（库锁、进程被杀）时，重启只需按这条记账
+// 补一次 files 写入，不必把整份内容再传一遍，也不会在频道里留下同路径的重复消息。
+type PendingDone struct {
+	Path          string
+	MessageID     int
+	DocumentID    int64
+	AccessHash    int64
+	FileReference []byte
+	Size          int64
+	Sha256        string
+	Mtime         int64
+}
+
+// PutPendingDone 记录一条已上传待索引的提交。
+//
+// 输入：p 记录（Path 为主键）
+// 输出：error
+// 预期：同一路径重复记录时覆盖为最新一次上传的结果
+func (i *Index) PutPendingDone(ctx context.Context, p PendingDone) error {
+	_, err := i.db.ExecContext(ctx, `
+INSERT INTO pending_done(path, message_id, document_id, access_hash, file_reference, size, sha256, mtime)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(path) DO UPDATE SET
+	message_id = excluded.message_id,
+	document_id = excluded.document_id,
+	access_hash = excluded.access_hash,
+	file_reference = excluded.file_reference,
+	size = excluded.size,
+	sha256 = excluded.sha256,
+	mtime = excluded.mtime`,
+		p.Path, p.MessageID, p.DocumentID, p.AccessHash, p.FileReference, p.Size, p.Sha256, p.Mtime)
+	return err
+}
+
+// GetPendingDone 读取某路径的已上传待索引记录。
+//
+// 输入：path
+// 输出：记录、是否存在、error
+// 预期：不存在时返回零值与 false，不当作错误
+func (i *Index) GetPendingDone(ctx context.Context, path string) (PendingDone, bool, error) {
+	row := i.db.QueryRowContext(ctx, `
+SELECT path, message_id, document_id, access_hash, file_reference, size, sha256, mtime
+FROM pending_done WHERE path = ?`, path)
+	var p PendingDone
+	err := row.Scan(&p.Path, &p.MessageID, &p.DocumentID, &p.AccessHash, &p.FileReference, &p.Size, &p.Sha256, &p.Mtime)
+	if err == sql.ErrNoRows {
+		return PendingDone{}, false, nil
+	}
+	if err != nil {
+		return PendingDone{}, false, err
+	}
+	return p, true, nil
+}
+
+// DeletePendingDone 删除一条已上传待索引记录。
+//
+// 输入：path
+// 输出：error
+// 预期：幂等，记录不存在不报错
+func (i *Index) DeletePendingDone(ctx context.Context, path string) error {
+	_, err := i.db.ExecContext(ctx, `DELETE FROM pending_done WHERE path = ?`, path)
+	return err
+}
 
 // Put 写入或更新一条记录。
 //
