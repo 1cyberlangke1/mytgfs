@@ -21,6 +21,7 @@ import (
 // 预期：
 //   - 每次开启都重新读配置，[webdav].volume 改动立即生效
 //   - 启停成功后把 enabled 写回配置，下次启动沿用
+//   - 配置里 enabled=true 时随进程一起拉起，重启后不会出现「配置开着但服务没开」
 func newMountControl(cfgPath string, vols map[string]*webVolume) (*davsvc.Service, *web.MountControl) {
 	svc := &davsvc.Service{}
 	state := func() web.MountState {
@@ -62,10 +63,18 @@ func newMountControl(cfgPath string, vols map[string]*webVolume) (*davsvc.Servic
 		}
 		return nil
 	}
-	return svc, &web.MountControl{
+	ctl := &web.MountControl{
 		Status: state,
 		// 先启停再取状态：state() 必须先反映新状态，消息才不会说反
 		Enable:  func() (web.MountState, error) { err := set(true); return state(), err },
 		Disable: func() (web.MountState, error) { err := set(false); return state(), err },
 	}
+	// 配置里已开启时随进程一起拉起：否则重启后面板显示关闭、配置却还是 true，
+	// 用户会以为开关没保存
+	if cur, lerr := config.Load(cfgPath); lerr == nil && cur.WebDAV.Enabled {
+		if _, err := ctl.Enable(); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+	}
+	return svc, ctl
 }
