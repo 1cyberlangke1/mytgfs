@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -42,6 +43,7 @@ import (
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/uploadcache"
+	"mytgfs/internal/version"
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/web"
 )
@@ -54,6 +56,10 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version":
+		// 版本信息：给排障与脚本用，支持 --json
+		ui.Print(version.Get())
+		ui.Printf("%s\n", version.String())
 	case "auth":
 		if len(os.Args) < 3 {
 			usage()
@@ -785,6 +791,10 @@ func loadAPI() (int, string) {
 }
 
 func usage() {
+	if ui.JSONMode() {
+		ui.Error("usage", fmt.Errorf("mytgfs <command> [flags]"))
+		os.Exit(2)
+	}
 	fmt.Fprintln(os.Stderr, i18n.T("cli.usage"))
 }
 
@@ -834,7 +844,20 @@ func fatal(msg string) {
 // 输出：无（进程退出 1）
 // 预期：会话失效不可自愈，提示重新 auth，避免用户反复重试同一命令
 func failErr(prefix string, err error) {
-	if tgclient.IsAuthLost(err) {
+	code := "error"
+	switch {
+	case tgclient.IsAuthLost(err):
+		code = "auth_lost"
+	case errors.Is(err, os.ErrNotExist):
+		code = "not_found"
+	case errors.Is(err, context.Canceled):
+		code = "canceled"
+	}
+	if ui.JSONMode() {
+		ui.Error(code, fmt.Errorf("%s: %w", prefix, err))
+		os.Exit(1)
+	}
+	if code == "auth_lost" {
 		fatal(fmt.Sprintf("%s: %v\n%s", prefix, err, i18n.T("err.auth_lost_hint")))
 	}
 	fatal(fmt.Sprintf("%s: %v", prefix, err))

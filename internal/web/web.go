@@ -26,6 +26,7 @@ import (
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/ipc"
+	"mytgfs/internal/version"
 )
 
 //go:embed static/htmx.min.js
@@ -249,6 +250,8 @@ type pageData struct {
 	Browser *browserData
 	// Mount 非空时渲染挂盘开关卡片
 	Mount *mountData
+	// Version 是构建版本，显示在页脚，便于用户报问题时对照
+	Version string
 }
 
 // handlePage 输出内嵌的静态页面。
@@ -260,7 +263,7 @@ type pageData struct {
 func handlePage(canCreate, canSync bool, configPath string, api *filesAPI, mount *MountControl) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		data := pageData{Labels: loadLabels(canCreate), CanSync: canSync}
+		data := pageData{Labels: loadLabels(canCreate), CanSync: canSync, Version: version.Version}
 		if configPath != "" {
 			if b, err := os.ReadFile(configPath); err == nil {
 				data.Config = string(b)
@@ -1245,7 +1248,7 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
       </form>
     </section>
   </main>
-  <footer>{{.Labels.Footer}}</footer>
+  <footer>{{.Labels.Footer}}{{with .Version}} · {{.}}{{end}}</footer>
 </div>
 <div id="poller" hx-get="/frag/status" hx-trigger="load, every 3s" hx-swap="none"></div>
 <script src="/static/htmx.min.js"></script>
