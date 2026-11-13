@@ -33,6 +33,7 @@ type State struct {
 type Service struct {
 	mu     sync.Mutex
 	srv    *http.Server
+	ln     net.Listener
 	addr   string
 	volume string
 }
@@ -64,7 +65,7 @@ func (s *Service) Start(addr, volume string, fs webdav.FileSystem) (State, error
 		LockSystem: webdav.NewMemLS(),
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	s.srv, s.addr, s.volume = srv, ln.Addr().String(), volume
+	s.srv, s.ln, s.addr, s.volume = srv, ln, ln.Addr().String(), volume
 	go func() {
 		_ = srv.Serve(ln)
 	}()
@@ -78,8 +79,8 @@ func (s *Service) Start(addr, volume string, fs webdav.FileSystem) (State, error
 // 预期：先 Shutdown 再删映射，退出后端口不再监听
 func (s *Service) Stop() error {
 	s.mu.Lock()
-	srv, addr := s.srv, s.addr
-	s.srv, s.addr, s.volume = nil, "", ""
+	srv, ln, addr := s.srv, s.ln, s.addr
+	s.srv, s.ln, s.addr, s.volume = nil, nil, "", ""
 	s.mu.Unlock()
 	if srv == nil {
 		return nil
@@ -87,6 +88,11 @@ func (s *Service) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := srv.Shutdown(ctx)
+	// Serve 可能还没跑到注册监听器，Shutdown 就不会关它；
+	// 这里显式再关一次，保证 Stop 返回后端口一定不可连（Close 幂等）。
+	if ln != nil {
+		_ = ln.Close()
+	}
 	netmap.Cleanup(addr)
 	return err
 }

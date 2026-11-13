@@ -37,17 +37,19 @@ func freeAddr(t *testing.T) string {
 }
 
 // TestStartStop 启动后端口可连，停止后不可连。
+//
+// 用 127.0.0.1:0 让内核分配端口：先探测空闲端口再重新绑定会有竞态，
+// 在并发跑测试时偶发被别的进程抢走。
 func TestStartStop(t *testing.T) {
 	var s Service
-	addr := freeAddr(t)
-	st, err := s.Start(addr, "demo", fakeFS{})
+	st, err := s.Start("127.0.0.1:0", "demo", fakeFS{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.Enabled || st.Addr != addr || st.Volume != "demo" {
+	if !st.Enabled || st.Addr == "" || st.Volume != "demo" {
 		t.Fatalf("state = %+v", st)
 	}
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	conn, err := net.DialTimeout("tcp", st.Addr, 2*time.Second)
 	if err != nil {
 		t.Fatalf("启动后连不上: %v", err)
 	}
@@ -59,7 +61,7 @@ func TestStartStop(t *testing.T) {
 	if st := s.State(); st.Enabled || st.Addr != "" {
 		t.Fatalf("停止后状态 = %+v", st)
 	}
-	if _, err := net.DialTimeout("tcp", addr, 300*time.Millisecond); err == nil {
+	if _, err := net.DialTimeout("tcp", st.Addr, 300*time.Millisecond); err == nil {
 		t.Fatal("停止后端口仍在监听")
 	}
 }

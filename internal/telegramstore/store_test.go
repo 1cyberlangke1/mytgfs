@@ -9,13 +9,17 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gotd/td/tg"
 )
 
 // fakeAPI 记录所有 RPC 调用并按需返回预设结果。
+//
+// 并发安全：分片上传/下载会同时进入多个 goroutine，mu 保护被并发写的字段。
 type fakeAPI struct {
+	mu           sync.Mutex
 	channelCalls int
 	sendMedia    []*tg.MessagesSendMediaRequest
 	sendMessage  []*tg.MessagesSendMessageRequest
@@ -105,6 +109,8 @@ func (f *fakeAPI) ChannelsDeleteMessages(_ context.Context, req *tg.ChannelsDele
 }
 
 func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getFile = append(f.getFile, req)
 	if f.fileErrOnce != nil {
 		err := f.fileErrOnce
@@ -126,6 +132,8 @@ func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest)
 }
 
 func (f *fakeAPI) UploadSaveFilePart(_ context.Context, req *tg.UploadSaveFilePartRequest) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.savedParts = append(f.savedParts, req.FilePart)
 	if f.partErrOnce != nil && f.partErrOnceAt == req.FilePart {
 		err := f.partErrOnce
@@ -136,6 +144,8 @@ func (f *fakeAPI) UploadSaveFilePart(_ context.Context, req *tg.UploadSaveFilePa
 }
 
 func (f *fakeAPI) UploadSaveBigFilePart(_ context.Context, req *tg.UploadSaveBigFilePartRequest) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.bigParts = append(f.bigParts, req.FilePart)
 	if f.partErrOnce != nil && f.partErrOnceAt == req.FilePart {
 		err := f.partErrOnce
@@ -164,6 +174,8 @@ func (f *fakeAPI) UploadGetWebFile(context.Context, *tg.UploadGetWebFileRequest)
 
 // ChannelsGetMessages 记录请求并返回测试预置的消息结果。
 func (f *fakeAPI) ChannelsGetMessages(_ context.Context, req *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getMessages = append(f.getMessages, req)
 	if f.getMessagesErr != nil {
 		return nil, f.getMessagesErr
