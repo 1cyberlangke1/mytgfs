@@ -64,6 +64,22 @@ type FileSystem struct {
 	// tr 记录正在下载的文件进度；键是卷内路径
 	trMu sync.Mutex
 	tr   map[string]*Transfer
+	// onChange 可选：有可见变化（进度、提交、删除、改名）时回调
+	onChange func()
+}
+
+// SetOnChange 挂上「有可见变化」回调，供上层推送状态事件。
+//
+// 输入：fn 回调；nil 表示不通知
+// 输出：无
+// 预期：回调必须是快且非阻塞的，内部会在持锁路径之外调用
+func (d *FileSystem) SetOnChange(fn func()) { d.onChange = fn }
+
+// notify 触发变化回调。
+func (d *FileSystem) notify() {
+	if d.onChange != nil {
+		d.onChange()
+	}
 }
 
 // Transfer 是一个正在下载的文件的进度快照。

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 )
@@ -31,6 +32,22 @@ type filesAPI struct {
 	// stats 可选：返回卷内文件数与已用字节，用于卷标签上的用量显示
 	stats  func(volume string) (files, used int64, ok bool)
 	thumbs *thumbCache
+	// bus 可选：变更后推 status 事件，其它标签页与托盘跟着刷新
+	bus *eventbus.Bus
+}
+
+// setBus 挂上事件总线，供变更后广播。
+func (api *filesAPI) setBus(bus *eventbus.Bus) {
+	if api != nil {
+		api.bus = bus
+	}
+}
+
+// publishStatus 广播「状态变了」；没有总线时静默。
+func (api *filesAPI) publishStatus() {
+	if api != nil && api.bus != nil {
+		api.bus.Publish("status")
+	}
 }
 
 // newFilesAPI 组装文件管理能力；缺任一项都退化成「不提供」。
@@ -434,6 +451,7 @@ func (api *filesAPI) formAction(fn func(r *http.Request) (vol, dir, msg string, 
 		if msg == "" {
 			msg = i18n.T("web.files_done")
 		}
+		api.publishStatus()
 		renderBrowser(w, api.browser(r, vol, dir, msg, "ok"))
 	}
 }

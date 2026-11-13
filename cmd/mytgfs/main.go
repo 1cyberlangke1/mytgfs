@@ -522,7 +522,7 @@ func runWeb(args []string) {
 			return perr
 		}
 		defer closePool()
-		vols := openWebVolumes(ctx, app.New(cfg), api)
+		vols := openWebVolumes(ctx, app.New(cfg, app.Options{Bus: bus}), api)
 		defer closeWebVolumes(vols)
 		davSvc, mount := newMountControl(cfgPath, vols)
 		defer davSvc.Stop()
@@ -541,7 +541,7 @@ func runWeb(args []string) {
 				}
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
 				vwg.Go(func() {
-					trayapp.AutoSync(vsync, nil, wv.idx, differ, interval, nil)
+					trayapp.AutoSync(vsync, trayapp.StatusNotifier(bus), wv.idx, differ, interval, nil)
 				})
 			}
 		}

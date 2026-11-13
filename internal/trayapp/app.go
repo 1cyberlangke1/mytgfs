@@ -75,6 +75,23 @@ func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *
 	AutoSyncWhile(ctx, notify, idx, d, interval, mu, nil)
 }
 
+// StatusNotifier 把自动同步的增删转成 status 事件，面板据此刷新。
+//
+// 输入：bus 事件总线；nil 时返回 nil
+// 输出：AutoSync 的 notify 回调
+// 预期：只有真的增删了条目才推送，空轮不打扰面板
+func StatusNotifier(bus *eventbus.Bus) func(changed, removed []string) {
+	if bus == nil {
+		return nil
+	}
+	return func(changed, removed []string) {
+		if len(changed) == 0 && len(removed) == 0 {
+			return
+		}
+		bus.Publish("status")
+	}
+}
+
 // SyncSwitch 是自动同步的运行开关。
 //
 // 输入：由托盘菜单切换；nil 等价于常开
@@ -593,7 +610,7 @@ func Run(opts Options) error {
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、WebDAV 语义与文件管理统一由装配根给出
-		vf, oerr := app.New(cfg).OpenVolume(vctx, name, api)
+		vf, oerr := app.New(cfg, app.Options{Bus: bus}).OpenVolume(vctx, name, api)
 		if oerr != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.index_open_failed"), oerr)
 			vcancel()
@@ -615,7 +632,7 @@ func Run(opts Options) error {
 			interval = SyncInterval(0)
 		}
 		vwg.Go(func() {
-			AutoSyncWhile(vctx, nil, idx, differ, interval, &tv.mu, syncSwitch.On)
+			AutoSyncWhile(vctx, StatusNotifier(bus), idx, differ, interval, &tv.mu, syncSwitch.On)
 		})
 
 		mu.Lock()

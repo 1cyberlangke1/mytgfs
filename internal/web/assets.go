@@ -610,7 +610,7 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
   </main>
   <footer>{{.Labels.Footer}}{{with .Version}} · {{.}}{{end}}</footer>
 </div>
-<div id="poller" hx-get="/frag/status" hx-trigger="load, every 3s" hx-swap="none"></div>
+<div id="poller" hx-get="/frag/status" hx-trigger="load, status" hx-swap="none"></div>
 <script src="/static/htmx.min.js"></script>
 <script src="/static/app.js" defer></script>
 </body>

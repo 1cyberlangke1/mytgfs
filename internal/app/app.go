@@ -15,6 +15,7 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
+	"mytgfs/internal/eventbus"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/sessionstore"
@@ -37,6 +38,8 @@ type Options struct {
 	ConfigPath  string // 默认 config.toml
 	SessionPath string // 默认 secrets/bot.session
 	KeyPath     string // 默认 secrets/session.key
+	// Bus 可选：非空时卷的可见变化会以 status 事件推给订阅者
+	Bus *eventbus.Bus
 }
 
 // ErrVolumeNotFound 表示配置里没有这个卷。

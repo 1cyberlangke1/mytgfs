@@ -25,8 +25,8 @@ const UserSessionPath = "secrets/user.session"
 // rebuildPageSize 是重建时每页拉取的原始消息条数。
 const rebuildPageSize = 100
 
-// New 用已加载的配置构造 App，避免调用方重复读盘。
-func New(cfg config.Config) *App { return &App{cfg: cfg} }
+// New 用已加载的配置与装配参数构造 App，避免调用方重复读盘。
+func New(cfg config.Config, opts Options) *App { return &App{cfg: cfg, opts: opts} }
 
 // RebuildIndexIfEmpty 在索引为空时用 user 会话重建。
 //

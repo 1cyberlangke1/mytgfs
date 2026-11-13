@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
@@ -16,6 +17,9 @@ import (
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 )
+
+// statusEventGap 是状态事件的最小推送间隔：进度按块触发，节流后前端每秒最多几次。
+const statusEventGap = 400 * time.Millisecond
 
 // VolumeFS 是一个卷的文件系统后端。
 type VolumeFS struct {
@@ -55,6 +59,11 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	// 批量写入互相抢 Telegram 发消息配额，串行提交
 	fsys.SetQueue(queue.New(1, 3))
 	fsys.SetTempDir(datadir.Path("tmp"))
+	// 面板靠事件刷新状态：进度、提交、删除都推一次，节流避免高频刷屏
+	if a.opts.Bus != nil {
+		bus := a.opts.Bus
+		fsys.SetOnChange(func() { bus.PublishEvery("status", statusEventGap) })
+	}
 	// 只补传本程序记下的记录，不动频道里别的内容
 	if rerr := fsys.ResumePending(); rerr != nil {
 		fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)

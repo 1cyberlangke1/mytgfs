@@ -18,7 +18,8 @@ import (
 // 输入：bus 事件总线；nil 时返回 501
 // 输出：text/event-stream 流
 // 预期：
-//   - 事件名即主题：config / mount，data 为空对象
+//   - 事件名即主题：config / mount / status，data 为空对象
+//   - status 是「状态变了，请重取状态片段」的信号，不含数据
 //   - 客户端断开（ctx.Done）立即退订返回
 func handleEvents(bus *eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +41,8 @@ func handleEvents(bus *eventbus.Bus) http.HandlerFunc {
 		defer cancelCfg()
 		mntCh, cancelMnt := bus.Subscribe("mount")
 		defer cancelMnt()
+		stCh, cancelSt := bus.Subscribe("status")
+		defer cancelSt()
 
 		// 先写注释帧，让浏览器立刻进入 open 状态
 		fmt.Fprint(w, ": connected\n\n")
@@ -54,6 +57,9 @@ func handleEvents(bus *eventbus.Bus) http.HandlerFunc {
 				fl.Flush()
 			case <-mntCh:
 				fmt.Fprint(w, "event: mount\ndata: {}\n\n")
+				fl.Flush()
+			case <-stCh:
+				fmt.Fprint(w, "event: status\ndata: {}\n\n")
 				fl.Flush()
 			}
 		}

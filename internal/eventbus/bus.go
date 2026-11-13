@@ -9,12 +9,16 @@ package eventbus
 //   - Publish 不阻塞：订阅者来不及消费就丢弃，状态类事件重发即可
 //   - Subscribe 返回取消函数，调用方负责退订
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // Bus 是并发安全的事件总线，零值不可用，请用 New。
 type Bus struct {
 	mu   sync.Mutex
 	subs map[string]map[chan struct{}]struct{}
+	last map[string]time.Time
 }
 
 // New 创建空总线。
@@ -49,6 +53,31 @@ func (b *Bus) Subscribe(topic string) (<-chan struct{}, func()) {
 		}
 		b.mu.Unlock()
 	}
+}
+
+// PublishEvery 是带最小间隔的 Publish，用于高频进度类事件。
+//
+// 输入：topic 主题名；every 最小推送间隔（<=0 等价于 Publish）
+// 输出：无
+// 预期：间隔内的后续调用被合并丢弃；状态类事件重发即可，不会累积
+func (b *Bus) PublishEvery(topic string, every time.Duration) {
+	if every <= 0 {
+		b.Publish(topic)
+		return
+	}
+	now := time.Now()
+	b.mu.Lock()
+	if b.last == nil {
+		b.last = make(map[string]time.Time)
+	}
+	last, ok := b.last[topic]
+	if ok && now.Sub(last) < every {
+		b.mu.Unlock()
+		return
+	}
+	b.last[topic] = now
+	b.mu.Unlock()
+	b.Publish(topic)
 }
 
 // Publish 通知某主题的所有订阅者。

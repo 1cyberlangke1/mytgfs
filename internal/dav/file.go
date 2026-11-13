@@ -140,6 +140,7 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
 		slog.Debug(i18n.T("log.cleanup_acked"), "path", name, "err", err)
 	}
+	f.d.notify()
 	return nil
 }
 

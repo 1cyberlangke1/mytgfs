@@ -115,6 +115,7 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 func newMux(configPath string, opts Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
+	api.setBus(opts.Bus)
 	pwa := newPWAData(opts.PWA)
 	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, opts.Sync != nil, configPath, api, opts.Mount, pwa))
 	// htmx 与面板脚本随二进制分发：不依赖任何外网 CDN
@@ -158,6 +159,7 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.HandleFunc("/frag/play", handleFragPlay(api))
 	// 浏览器分片上传：大文件断线只重传当前分片
 	if up := newUploadAPI(opts.Files, opts.TempDir); up != nil {
+		up.bus = opts.Bus
 		mux.HandleFunc("/api/upload/init", up.handleInit)
 		mux.HandleFunc("/api/upload/chunk", up.handleChunk)
 		mux.HandleFunc("/api/upload/commit", up.handleCommit)

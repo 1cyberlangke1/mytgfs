@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 )
@@ -57,8 +58,10 @@ type uploadSession struct {
 type uploadAPI struct {
 	manager func(volume string) (fm.Files, bool)
 	tmpDir  string
-	mu      sync.Mutex
-	sess    map[string]*uploadSession
+	// bus 可选：提交成功后广播 status，让面板立刻刷新
+	bus  *eventbus.Bus
+	mu   sync.Mutex
+	sess map[string]*uploadSession
 }
 
 // newUploadAPI 创建分片上传接口。
@@ -209,6 +212,9 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.drop(s.id)
+	if u.bus != nil {
+		u.bus.Publish("status")
+	}
 	replyJSON(w, http.StatusOK, map[string]any{"path": s.target})
 }
 

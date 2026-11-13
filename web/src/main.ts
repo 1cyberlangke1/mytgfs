@@ -185,13 +185,15 @@ function initErrorBridge(): void {
 }
 
 /**
- * 服务端事件：配置与挂载变更由后端推送，不再定时轮询。
+ * 服务端事件：配置、挂载与状态变更由后端推送，不再定时轮询。
  *
  * 输入：无（订阅 /events）
  * 输出：无
  * 预期：
  *   - mount 事件只刷新 #mountbox（不存在则忽略）
  *   - config 事件只更新配置正文，且不覆盖用户正在编辑的内容
+ *   - status 事件让 #poller 重新拉一次状态片段，200ms 内的连发合并成一次
+ *   - 重连成功先补一次状态，避免断线期间的事件丢失导致界面停在旧数据
  *   - EventSource 断线由浏览器自动重连
  */
 function initEvents(): void {
@@ -206,6 +208,31 @@ function initEvents(): void {
   es.addEventListener("config", () => {
     void refreshConfig();
   });
+  es.addEventListener("status", () => {
+    scheduleStatus();
+  });
+  // 浏览器重连后补拉一次：断线窗口内的事件是拿不到的
+  es.addEventListener("open", () => {
+    scheduleStatus(0);
+  });
+}
+
+/** 待执行的状态刷新定时器；200ms 内的多次触发只跑一次。 */
+let statusTimer: number | null = null;
+
+/** 合并高频状态事件，避免一次大文件下载打爆请求。 */
+function scheduleStatus(delay = 200): void {
+  if (statusTimer !== null) {
+    return;
+  }
+  statusTimer = window.setTimeout(() => {
+    statusTimer = null;
+    const poller = document.getElementById("poller");
+    if (poller) {
+      // htmx 的 hx-trigger="status" 监听这个自定义事件
+      poller.dispatchEvent(new CustomEvent("status"));
+    }
+  }, delay);
 }
 
 /** 重新拉取挂载卡片。 */
