@@ -36,6 +36,8 @@ type Store interface {
 	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
 	// UploadResumable 按内容 key 断点续传，中断后能跳过已上传分片
 	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*telegramstore.Part, error)
+	// Refresh 按消息 ID 重新拉取 document 元数据（file_reference 过期时用）
+	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
 	Delete(ctx context.Context, ids ...int) error
 	Rename(ctx context.Context, messageID int, caption string) error
 }
@@ -153,6 +155,53 @@ func SweepTemp(dir string, maxAge time.Duration) (int, error) {
 
 // Queue 返回当前队列，nil 表示未启用。
 func (d *FileSystem) Queue() *queue.Queue { return d.q }
+
+// ResumePending 重启后按 pending 表补传未提交的文件。
+//
+// 输入：无
+// 输出：error（索引读写错误）；单条上传失败只记日志、保留账本下次再试
+// 预期：只处理本程序记下的 pending 记录；临时文件缺失时清账不上传；
+//
+//	成功后清账并删临时文件；绝不扫描或删除频道里任何别的消息。
+func (d *FileSystem) ResumePending() error {
+	rows, err := d.idx.ListPending(d.ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range rows {
+		tmp, err := os.Open(p.Temp)
+		if err != nil {
+			// 临时文件已被清扫或损坏：无法恢复，只清账
+			_ = d.idx.DeletePending(d.ctx, p.Path)
+			continue
+		}
+		st, statErr := tmp.Stat()
+		if statErr != nil || st.Size() != p.Size {
+			_ = tmp.Close()
+			_ = d.idx.DeletePending(d.ctx, p.Path)
+			_ = os.Remove(p.Temp)
+			continue
+		}
+		// 补传内容摘要按临时文件实际内容计算，作为断点键与去重依据
+		h := sha256.New()
+		_, copyErr := io.Copy(h, tmp)
+		if copyErr != nil {
+			_ = tmp.Close()
+			continue
+		}
+		sha := hex.EncodeToString(h.Sum(nil))
+		helper := &file{d: d, name: p.Path}
+		if err := helper.commit(d.ctx, tmp, p.Path, sha); err != nil {
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, err), "path", p.Path, "err", err)
+			_ = tmp.Close()
+			continue
+		}
+		_ = tmp.Close()
+		_ = d.idx.DeletePending(d.ctx, p.Path)
+		_ = os.Remove(p.Temp)
+	}
+	return nil
+}
 
 // Mkdir 创建目录。
 func (d *FileSystem) Mkdir(_ context.Context, name string, _ os.FileMode) error {
@@ -314,69 +363,104 @@ func (f *file) Abort() error {
 	return nil
 }
 
-// Close 关闭：写模式提交上传，读模式释放缓冲。
-func (f *file) Close() error {
-	if f.write && f.tmp != nil {
-		defer os.Remove(f.tmp.Name())
-		defer f.tmp.Close()
-		st, err := f.tmp.Stat()
-		if err != nil {
-			return err
+// commit 把一份完整内容上传到频道并登记索引。
+//
+// 输入：ctx；tmp 已写完的临时文件；name 卷内路径；sha 内容摘要
+// 输出：error
+// 预期：上传或索引登记失败时保留临时文件与 pending 记录，供重启补传；
+//
+//	只处理本程序记下的文件，不触碰频道里任何别的消息。
+func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error {
+	st, err := tmp.Stat()
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	caption := tgsync.EncodeCaptionHash(name, sha)
+	var part *telegramstore.Part
+	upload := func(uploadCtx context.Context) error {
+		p, uerr := f.d.store.UploadResumable(uploadCtx, tmp, st.Size(), sha,
+			path.Base(name), "application/octet-stream", caption)
+		if uerr != nil {
+			return uerr
 		}
-		if _, err := f.tmp.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		sha := ""
-		if f.sum != nil {
-			sha = hex.EncodeToString(f.sum.Sum(nil))
-		}
-		caption := tgsync.EncodeCaptionHash(f.name, sha)
-		var part *telegramstore.Part
-		upload := func(ctx context.Context) error {
-			p, uerr := f.d.store.UploadResumable(ctx, f.tmp, st.Size(), sha,
-				path.Base(f.name), "application/octet-stream", caption)
-			if uerr != nil {
-				return uerr
-			}
-			part = p
-			return nil
-		}
-		// 有队列时串行上传：批量写入不会互相抢限流额度
-		if f.d.q != nil {
-			if err := f.d.q.Do(f.d.ctx, f.name, upload); err != nil {
-				return err
-			}
-		} else if err := upload(f.d.ctx); err != nil {
-			return err
-		}
-		if part == nil {
-			return errors.New(i18n.T("err.upload_no_result"))
-		}
-		// 覆盖写：旧消息要删掉，否则频道里会堆同路径的孤儿消息
-		old, hadOld, gerr := f.d.idx.Get(f.d.ctx, f.name)
-		if gerr != nil {
-			return gerr
-		}
-		if err := f.d.idx.Put(f.d.ctx, index.File{
-			Path:          f.name,
-			MessageID:     part.MessageID,
-			DocumentID:    part.DocumentID,
-			AccessHash:    part.AccessHash,
-			FileReference: part.FileReference,
-			Size:          part.Size,
-			Mtime:         time.Now().Unix(),
-			Sha256:        sha,
-		}); err != nil {
-			return err
-		}
-		if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
-			if derr := f.d.store.Delete(f.d.ctx, old.MessageID); derr != nil {
-				slog.Debug("删除被覆盖的旧消息失败", "path", f.name, "msg", old.MessageID, "err", derr)
-			}
-		}
+		part = p
 		return nil
 	}
+	// 有队列时串行上传：批量写入不会互相抢限流额度
+	if f.d.q != nil {
+		if err := f.d.q.Do(ctx, name, upload); err != nil {
+			return err
+		}
+	} else if err := upload(ctx); err != nil {
+		return err
+	}
+	if part == nil {
+		return errors.New(i18n.T("err.upload_no_result"))
+	}
+	// 覆盖写：旧消息要删掉，否则频道里会堆同路径的旧文件消息
+	old, hadOld, gerr := f.d.idx.Get(ctx, name)
+	if gerr != nil {
+		return gerr
+	}
+	if err := f.d.idx.Put(ctx, index.File{
+		Path:          name,
+		MessageID:     part.MessageID,
+		DocumentID:    part.DocumentID,
+		AccessHash:    part.AccessHash,
+		FileReference: part.FileReference,
+		Size:          part.Size,
+		Mtime:         time.Now().Unix(),
+		Sha256:        sha,
+	}); err != nil {
+		return err
+	}
+	if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
+		if derr := f.d.store.Delete(ctx, old.MessageID); derr != nil {
+			slog.Debug("删除被覆盖的旧消息失败", "path", name, "msg", old.MessageID, "err", derr)
+		}
+	}
 	return nil
+}
+
+// Close 关闭：写模式先记账再提交上传，读模式释放缓冲。
+//
+// 上传失败时保留账本与临时文件（不 defer 删除），重启由 ResumePending 补传；
+// 成功后才删账本与临时文件。
+func (f *file) Close() error {
+	if !f.write || f.tmp == nil {
+		return nil
+	}
+	tmp := f.tmp
+	f.tmp = nil
+	sha := ""
+	if f.sum != nil {
+		sha = hex.EncodeToString(f.sum.Sum(nil))
+	}
+	st, err := tmp.Stat()
+	if err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// 提交前先记一笔：上传/登记阶段崩溃也能按账恢复
+	if err := f.d.idx.PutPending(f.d.ctx, index.PendingUpload{
+		Path: f.name, Temp: tmp.Name(), Size: st.Size(), Mtime: time.Now().Unix(),
+	}); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := f.commit(f.d.ctx, tmp, f.name, sha); err != nil {
+		// 失败：关句柄但保留磁盘临时文件与 pending 账本，重启补传
+		_ = tmp.Close()
+		return err
+	}
+	name := tmp.Name()
+	// Windows 下必须先关句柄才能删除文件
+	_ = tmp.Close()
+	_ = f.d.idx.DeletePending(f.d.ctx, f.name)
+	return os.Remove(name)
 }
 
 // Read 按需拉取一块再返回。
@@ -395,7 +479,7 @@ func (f *file) Read(p []byte) (int, error) {
 		if f.off+length > f.entry.Size {
 			length = f.entry.Size - f.off
 		}
-		data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), f.off, int(length), nil)
+		data, err := f.readRange(f.off, int(length))
 		if err != nil {
 			// 消息在 Telegram 侧被删了：索引里这条已经没有意义，删掉并按文件不存在处理
 			if telegramstore.IsMessageGone(err) {
@@ -410,6 +494,37 @@ func (f *file) Read(p []byte) (int, error) {
 	n := copy(p, f.buf[f.off-f.base:])
 	f.off += int64(n)
 	return n, nil
+}
+
+// readRange 读取一块远端数据；file_reference 过期时刷新元数据并重试一次。
+//
+// 输入：ofst 卷内偏移；length 字节数
+// 输出：数据、error
+// 预期：刷新成功时把新引用写回索引（Replace 无条件覆盖，绕过 message_id 大小比较），
+//
+//	刷新失败或二次读取仍失败则原样返回错误；不改动其它消息。
+func (f *file) readRange(ofst int64, length int) ([]byte, error) {
+	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), ofst, length, nil)
+	if err == nil {
+		return data, nil
+	}
+	if !telegramstore.IsFileReferenceError(err) {
+		return nil, err
+	}
+	part, rerr := f.d.store.Refresh(f.d.ctx, f.entry.MessageID)
+	if rerr != nil {
+		return nil, rerr
+	}
+	updated := *f.entry
+	updated.DocumentID = part.DocumentID
+	updated.AccessHash = part.AccessHash
+	updated.FileReference = part.FileReference
+	updated.Size = part.Size
+	if perr := f.d.idx.Replace(f.d.ctx, updated); perr != nil {
+		return nil, perr
+	}
+	f.entry = &updated
+	return f.d.store.ReadRange(f.d.ctx, partOf(updated), ofst, length, nil)
 }
 
 // Seek 只支持顺序定位，跳转后重新拉块。

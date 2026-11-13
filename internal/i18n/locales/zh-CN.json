@@ -187,6 +187,7 @@
   "web.no_instance": "没有正在运行的实例",
   "log.tmp_sweep": "已清理过期的上传临时文件",
   "log.tmp_sweep_failed": "清理上传临时文件失败",
+  "log.pending_resume_failed": "待补传文件上传失败，保留账本下次重试: %s: %v",
   "web.files_search": "搜索文件名",
   "web.files_sort_name": "名称",
   "web.files_sort_size": "大小",

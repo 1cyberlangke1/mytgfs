@@ -26,7 +26,30 @@ type fakeStore struct {
 	uploadSizes    []int64
 	deleted        []int
 	readErr        error
+	uploadErr      error
 	nextID         int
+	refreshCalls   int
+	refreshedRef   []byte
+	refreshErr     error
+	afterRefresh   func()
+}
+
+// Refresh 返回预置的新引用，并可选地在刷新后改变读取行为。
+func (f *fakeStore) Refresh(_ context.Context, messageID int) (*telegramstore.Part, error) {
+	f.refreshCalls++
+	if f.refreshErr != nil {
+		return nil, f.refreshErr
+	}
+	if f.afterRefresh != nil {
+		f.afterRefresh()
+	}
+	return &telegramstore.Part{
+		MessageID:     messageID,
+		DocumentID:    7,
+		AccessHash:    8,
+		FileReference: f.refreshedRef,
+		Size:          1,
+	}, nil
 }
 
 func (f *fakeStore) ReadRange(context.Context, *telegramstore.Part, int64, int, func(int64)) ([]byte, error) {
@@ -41,6 +64,9 @@ func (f *fakeStore) Upload(context.Context, io.Reader, int64, string, string, st
 }
 
 func (f *fakeStore) UploadResumable(_ context.Context, _ io.ReaderAt, size int64, key, _ string, _ string, caption string) (*telegramstore.Part, error) {
+	if f.uploadErr != nil {
+		return nil, f.uploadErr
+	}
 	f.nextID++
 	f.uploadKeys = append(f.uploadKeys, key)
 	f.uploadCaptions = append(f.uploadCaptions, caption)

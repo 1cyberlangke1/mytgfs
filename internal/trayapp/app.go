@@ -569,6 +569,10 @@ func Run(opts Options) error {
 		davfs.SetQueue(queue.New(1, 3))
 		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
 		davfs.SetTempDir(datadir.Path("tmp"))
+		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
+		if rerr := davfs.ResumePending(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "pending resume (%s): %v\n", name, rerr)
+		}
 		fmgr := fm.New(davfs)
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
 		tv := &trayVolume{name: name, idx: idx, fsys: fsys, davfs: davfs, fmgr: fmgr, store: store, differ: differ}

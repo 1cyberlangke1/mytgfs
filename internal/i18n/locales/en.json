@@ -187,6 +187,7 @@
   "web.no_instance": "No running instance",
   "log.tmp_sweep": "removed stale upload temp files",
   "log.tmp_sweep_failed": "failed to sweep upload temp files",
+  "log.pending_resume_failed": "pending upload failed, keeping record for retry: %s: %v",
   "web.files_search": "Search file name",
   "web.files_sort_name": "Name",
   "web.files_sort_size": "Size",

@@ -589,6 +589,10 @@ func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.AP
 		davfs.SetQueue(queue.New(1, 3))
 		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
 		davfs.SetTempDir(datadir.Path("tmp"))
+		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
+		if rerr := davfs.ResumePending(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "pending resume (%s): %v\n", v.Name, rerr)
+		}
 		out[v.Name] = &webVolume{
 			mgr:   fm.New(davfs),
 			davfs: davfs,

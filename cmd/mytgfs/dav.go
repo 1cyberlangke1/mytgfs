@@ -87,6 +87,10 @@ func runWebDAV(args []string) {
 		fsys.SetQueue(queue.New(1, 3))
 		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
 		fsys.SetTempDir(datadir.Path("tmp"))
+		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
+		if rerr := fsys.ResumePending(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "pending resume: %v\n", rerr)
+		}
 		handler := &webdav.Handler{
 			Prefix:     "/",
 			FileSystem: fsys,
