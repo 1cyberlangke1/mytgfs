@@ -81,6 +81,8 @@ func main() {
 		}
 	case "sync":
 		runSync(os.Args[2:])
+	case "check":
+		runCheck(os.Args[2:])
 	case "cp":
 		runCopy(os.Args[2:])
 	case "put":
