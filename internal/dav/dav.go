@@ -16,7 +16,9 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/webdav"
@@ -53,7 +55,20 @@ type FileSystem struct {
 	chunk int64
 	// q 可选：非空时上传走串行队列，避免批量写入把 Telegram 打出 FLOOD_WAIT
 	q *queue.Queue
+	// tmpDir 是上传临时文件目录；空表示系统临时目录
+	tmpDir string
+	// tmpOnce 保证每个进程只扫一次旧临时文件
+	tmpOnce sync.Once
 }
+
+// 上传临时文件的命名与保留时长。
+//
+// 异常中断（关标签页、拔网线、杀进程）时 Close 不会被调用，
+// 临时文件只能靠下次上传时按时间清理。
+const (
+	tempPattern = ".mytgfs-dav-*"
+	tempMaxAge  = 24 * time.Hour
+)
 
 // New 创建 WebDAV 文件系统。
 //
@@ -74,6 +89,68 @@ func New(ctx context.Context, idx *index.Index, store Store, chunk int64) *FileS
 // 预期：只有写入路径受影响，读取不变
 func (d *FileSystem) SetQueue(q *queue.Queue) { d.q = q }
 
+// SetTempDir 指定上传临时文件目录。
+//
+// 输入：dir 目录，空表示系统临时目录
+// 输出：无
+// 预期：目录不存在时首次写入自动创建
+func (d *FileSystem) SetTempDir(dir string) { d.tmpDir = dir }
+
+// newTemp 创建上传临时文件，并在首次使用时清理上次残留。
+//
+// 输入：无
+// 输出：已打开的临时文件；error
+// 预期：只删 tempMaxAge 以前、名字匹配 tempPattern 的普通文件
+func (d *FileSystem) newTemp() (*os.File, error) {
+	dir := d.tmpDir
+	if dir == "" {
+		dir = os.TempDir()
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	d.tmpOnce.Do(func() {
+		n, err := SweepTemp(dir, tempMaxAge)
+		if err != nil {
+			slog.Warn(i18n.T("log.tmp_sweep_failed"), "dir", dir, "err", err)
+			return
+		}
+		if n > 0 {
+			slog.Info(i18n.T("log.tmp_sweep"), "count", n, "dir", dir)
+		}
+	})
+	return os.CreateTemp(dir, tempPattern)
+}
+
+// SweepTemp 删除目录里过期的 mytgfs 上传临时文件。
+//
+// 输入：dir 目录；maxAge 保留时长
+// 输出：删除的数量；error
+// 预期：目录不存在视为没有残留；只处理名字以 .mytgfs-dav- 开头的普通文件
+func SweepTemp(dir string, maxAge time.Duration) (int, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	cutoff := time.Now().Add(-maxAge)
+	n := 0
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), ".mytgfs-dav-") {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if rerr := os.Remove(filepath.Join(dir, e.Name())); rerr == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Queue 返回当前队列，nil 表示未启用。
 func (d *FileSystem) Queue() *queue.Queue { return d.q }
 
@@ -90,7 +167,7 @@ func (d *FileSystem) Mkdir(_ context.Context, name string, _ os.FileMode) error 
 func (d *FileSystem) OpenFile(_ context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
 	name = clean(name)
 	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE) != 0 {
-		tmp, err := os.CreateTemp("", ".mytgfs-dav-*")
+		tmp, err := d.newTemp()
 		if err != nil {
 			return nil, err
 		}

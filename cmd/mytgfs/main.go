@@ -563,6 +563,8 @@ func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.AP
 		davfs := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
 		// 面板上传同样走串行队列：批量拖拽不会互相抢 Telegram 配额
 		davfs.SetQueue(queue.New(1, 3))
+		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
+		davfs.SetTempDir(datadir.Path("tmp"))
 		out[v.Name] = &webVolume{
 			mgr:   fm.New(davfs),
 			davfs: davfs,

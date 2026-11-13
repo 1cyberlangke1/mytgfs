@@ -184,5 +184,7 @@
   "web.files_prev": "上一页",
   "web.files_next": "下一页",
   "err.mount_removed": "盘符挂载已下线：请运行 mytgfs web，在面板开启 WebDAV 后映射盘符",
-  "web.no_instance": "没有正在运行的实例"
+  "web.no_instance": "没有正在运行的实例",
+  "log.tmp_sweep": "已清理过期的上传临时文件",
+  "log.tmp_sweep_failed": "清理上传临时文件失败"
 }

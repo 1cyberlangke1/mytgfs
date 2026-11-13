@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gotd/td/tgerr"
 
@@ -183,4 +184,78 @@ func TestReadReturnsData(t *testing.T) {
 		t.Fatalf("读取结果不符: n=%d err=%v", n, err)
 	}
 	_ = st
+}
+
+// TestSweepTempRemovesOnlyStale 只删过期且名字匹配的临时文件。
+//
+// 输入：目录内 4 个文件（旧匹配 / 新匹配 / 旧不匹配 / 子目录）
+// 输出：返回删除数 1；其余三个仍存在
+// 预期：不碰非本程序命名规则的文件与目录
+func TestSweepTempRemovesOnlyStale(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-48 * time.Hour)
+
+	stale := filepath.Join(dir, ".mytgfs-dav-stale")
+	fresh := filepath.Join(dir, ".mytgfs-dav-fresh")
+	other := filepath.Join(dir, "keep.txt")
+	for _, p := range []string{stale, fresh, other} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(other, old, old); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, ".mytgfs-dav-dir")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sub, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := SweepTemp(dir, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("应只删 1 个过期临时文件，实际 %d", n)
+	}
+	for _, p := range []string{fresh, other, sub} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s 不应被删: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("过期临时文件应已删除: %v", err)
+	}
+}
+
+// TestSweepTempMissingDir 目录不存在时视为没有残留。
+func TestSweepTempMissingDir(t *testing.T) {
+	n, err := SweepTemp(filepath.Join(t.TempDir(), "nope"), time.Hour)
+	if err != nil || n != 0 {
+		t.Fatalf("目录不存在应返回 0,nil，实际 %d,%v", n, err)
+	}
+}
+
+// TestNewTempUsesConfiguredDir 临时文件落在 SetTempDir 指定的目录，目录自动创建。
+func TestNewTempUsesConfiguredDir(t *testing.T) {
+	fsys, _, done := newTestFS(t)
+	defer done()
+	dir := filepath.Join(t.TempDir(), "deep", "tmp")
+	fsys.SetTempDir(dir)
+
+	f, err := fsys.OpenFile(context.Background(), "/t.bin", os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := f.(*file).tmp.Name()
+	t.Cleanup(func() { _ = f.Close() })
+	if filepath.Dir(name) != dir {
+		t.Fatalf("临时文件应在 %s，实际 %s", dir, name)
+	}
 }

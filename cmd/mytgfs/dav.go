@@ -85,6 +85,8 @@ func runWebDAV(args []string) {
 		fsys := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
 		// 写入走串行队列：批量拷贝时不会互相抢 Telegram 的发消息配额
 		fsys.SetQueue(queue.New(1, 3))
+		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
+		fsys.SetTempDir(datadir.Path("tmp"))
 		handler := &webdav.Handler{
 			Prefix:     "/",
 			FileSystem: fsys,

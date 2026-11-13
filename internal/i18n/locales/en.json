@@ -184,5 +184,7 @@
   "web.files_prev": "Previous",
   "web.files_next": "Next",
   "err.mount_removed": "Drive-letter mounting was removed: run mytgfs web and enable WebDAV in the panel",
-  "web.no_instance": "No running instance"
+  "web.no_instance": "No running instance",
+  "log.tmp_sweep": "removed stale upload temp files",
+  "log.tmp_sweep_failed": "failed to sweep upload temp files"
 }
