@@ -17,14 +17,10 @@ access_hash = 0
 # Bot API 风格的 chat_id（-100 前缀），仅展示用
 chat_id = 0
 
-[cache]
-# 磁盘块缓存上限（字节）；默认 1GB，0 = 不落盘
-max_bytes = 1073741824
-
 [mount]
-# Windows 示例："T:"；Linux 示例："/mnt/mytgfs"
+# 默认挂载点（仅记录用，WebDAV 映射盘符由 setup-webdav.ps1 / 面板决定）
 point = ""
-# 挂载期自动增量同步间隔（秒）：0 = 默认 15，负数 = 关闭
+# 托盘/面板自动增量同步间隔（秒）：0 = 默认 15，负数 = 关闭
 sync_seconds = 15
 # WebDAV 读分片（MB）：0 = 默认 8，范围 1..64；网络慢可调小
 read_chunk_mb = 8
@@ -49,17 +45,6 @@ addr = "127.0.0.1:8080"
 name = "mytgfs"
 # 单个文件允许「离线保存」的上限（MB）：0 = 默认 256，负数 = 不限制
 offline_max_mb = 256
-
-[ratelimit]
-# 全部留空即使用默认值（推荐，不需要配置）
-# 自适应最小间隔（毫秒）
-# adaptive_min_ms = 500
-# 自适应最大间隔（毫秒）
-# adaptive_max_ms = 5000
-# 单个请求最大重试次数
-# max_retries = 5
-# 单次最大等待（秒）
-# max_wait_s = 120
 
 [log]
 # 日志等级：debug / info / warn / error

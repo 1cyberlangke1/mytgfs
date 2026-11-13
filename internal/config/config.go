@@ -13,14 +13,12 @@ import (
 
 // Config 是顶层配置。
 type Config struct {
-	Telegram  Telegram  `toml:"telegram"`
-	Cache     Cache     `toml:"cache"`
-	Mount     Mount     `toml:"mount"`
-	Ratelimit Ratelimit `toml:"ratelimit"`
-	Volumes   []Volume  `toml:"volumes"`
-	WebDAV    WebDAV    `toml:"webdav"`
-	PWA       PWA       `toml:"pwa"`
-	Log       Log       `toml:"log"`
+	Telegram Telegram `toml:"telegram"`
+	Mount    Mount    `toml:"mount"`
+	Volumes  []Volume `toml:"volumes"`
+	WebDAV   WebDAV   `toml:"webdav"`
+	PWA      PWA      `toml:"pwa"`
+	Log      Log      `toml:"log"`
 }
 
 // WebDAV 是「把卷挂成盘」的可选服务。
@@ -94,16 +92,10 @@ type Telegram struct {
 	ChatID       int64  `toml:"chat_id"`
 }
 
-// Cache 是块缓存配置。
-type Cache struct {
-	MaxBytes int64 `toml:"max_bytes"`
-}
-
 // Mount 是挂载配置。
 type Mount struct {
-	Point      string `toml:"point"`
-	TotalBytes int64  `toml:"total_bytes"`
-	// SyncSeconds 是挂载期自动增量同步的间隔秒数：0 用默认 15，负数关闭。
+	Point string `toml:"point"`
+	// SyncSeconds 是托盘自动增量同步的间隔秒数：0 用默认 15，负数关闭。
 	SyncSeconds int `toml:"sync_seconds"`
 	// DownloadParallel 是下载并发块数：0 用默认 8，范围 1..32。
 	DownloadParallel int `toml:"download_parallel"`
@@ -161,23 +153,12 @@ func (m Mount) DownloadConnections() int {
 	return n
 }
 
-// Ratelimit 是可选的限速覆盖，零值表示用默认。
-type Ratelimit struct {
-	AdaptiveMinMS int `toml:"adaptive_min_ms"`
-	AdaptiveMaxMS int `toml:"adaptive_max_ms"`
-	MaxRetries    int `toml:"max_retries"`
-	MaxWaitS      int `toml:"max_wait_s"`
-}
-
 // Volume 是一个挂载卷（一个频道）。
 type Volume struct {
-	Name       string `toml:"name"`
-	ChatID     int64  `toml:"chat_id"`
-	Mode       string `toml:"mode"`
-	Enabled    bool   `toml:"enabled"`
-	Layout     string `toml:"layout"`
-	OnConflict string `toml:"on_conflict"`
-	Point      string `toml:"point"`
+	Name    string `toml:"name"`
+	ChatID  int64  `toml:"chat_id"`
+	Enabled bool   `toml:"enabled"`
+	Point   string `toml:"point"`
 }
 
 // Load 读取 TOML 配置。
@@ -198,14 +179,6 @@ func (c Config) APIHash() string { return readTrim(c.Telegram.APIHashFile) }
 
 // BotToken 读取 bot token 文件内容。
 func (c Config) BotToken() string { return readTrim(c.Telegram.BotTokenFile) }
-
-// TotalBytes 返回卷显示容量，0 表示 2^63-1。
-func (c Config) TotalBytes() int64 {
-	if c.Mount.TotalBytes <= 0 {
-		return int64(^uint64(0) >> 1)
-	}
-	return c.Mount.TotalBytes
-}
 
 func readTrim(path string) string {
 	b, err := os.ReadFile(path)

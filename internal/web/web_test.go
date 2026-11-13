@@ -247,7 +247,10 @@ func TestFragStatusSwapsOOB(t *testing.T) {
 				map[string]any{"name": "demo", "entries": 3, "used": 4096},
 			},
 			"transfers": []any{
-				map[string]any{"path": "/big.bin", "done": 512, "total": 2048},
+				map[string]any{"path": "demo:big.bin", "done": 512, "total": 2048},
+			},
+			"queue": []any{
+				map[string]any{"name": "demo:queued.bin", "state": "running"},
 			},
 		}, nil
 	}
@@ -266,12 +269,16 @@ func TestFragStatusSwapsOOB(t *testing.T) {
 		t.Errorf("OOB 标记数 = %d，期望 4", strings.Count(body, `hx-swap-oob="true"`))
 	}
 	// 卷行：名称 + 条目 + 占用
-	if !strings.Contains(body, `<span class="name">demo</span>`) || !strings.Contains(body, "12 B") {
+	if !strings.Contains(body, `<span class="name">demo</span>`) || !strings.Contains(body, "4.0 KB") {
 		t.Errorf("卷行渲染异常: %s", body)
 	}
 	// 下载行：进度百分比 + 已下载/总量
-	if !strings.Contains(body, `/big.bin`) || !strings.Contains(body, "25%") || !strings.Contains(body, "512 B") {
+	if !strings.Contains(body, "demo:big.bin") || !strings.Contains(body, "25%") || !strings.Contains(body, "512 B") {
 		t.Errorf("下载行渲染异常: %s", body)
+	}
+	// 队列行：卷名前缀
+	if !strings.Contains(body, "demo:queued.bin") {
+		t.Errorf("队列行渲染异常: %s", body)
 	}
 	if strings.Contains(body, "{{") {
 		t.Error("模板占位符泄漏")

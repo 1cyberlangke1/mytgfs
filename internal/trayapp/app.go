@@ -33,7 +33,6 @@ import (
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/tray"
-	"mytgfs/internal/vfs"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
@@ -141,7 +140,6 @@ func Run(opts Options) error {
 	type trayVolume struct {
 		name   string
 		idx    *index.Index
-		fsys   *vfs.FS
 		davfs  *dav.FileSystem
 		fmgr   *fm.Manager
 		store  *telegramstore.Store
@@ -360,9 +358,12 @@ func Run(opts Options) error {
 					auth = "lost"
 				}
 				// 下载进度：卷名 + 路径，供面板显示「正在下载」
-				var xfers []vfs.Transfer
+				var xfers []dav.Transfer
 				for _, v := range vs {
-					for _, t := range v.fsys.Transfers() {
+					if v.davfs == nil {
+						continue
+					}
+					for _, t := range v.davfs.Transfers() {
 						t.Path = v.name + ":" + t.Path
 						xfers = append(xfers, t)
 					}
@@ -399,9 +400,6 @@ func Run(opts Options) error {
 					if err != nil {
 						out = append(out, map[string]any{"name": v.name, "error": err.Error()})
 						continue
-					}
-					if res.Pulled > 0 || res.Deleted > 0 {
-						v.fsys.NotifyPaths(res.Changed, res.Removed)
 					}
 					out = append(out, map[string]any{
 						"name": v.name, "pulled": res.Pulled, "deleted": res.Deleted, "pts": res.Pts,
@@ -560,7 +558,6 @@ func Run(opts Options) error {
 		store.SetParallel(cfg.Mount.DownloadConnections())
 		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		vctx, vcancel := context.WithCancel(rootCtx)
-		fsys := vfs.New(vctx, idx, store, os.TempDir())
 		// 面板文件管理与可选 WebDAV 共用同一份 WebDAV 语义后端
 		davfs := dav.New(vctx, idx, store, cfg.Mount.ReadChunk())
 		// 面板上传与 WebDAV 共用同一队列，批量操作串行提交
@@ -573,7 +570,7 @@ func Run(opts Options) error {
 		}
 		fmgr := fm.New(davfs)
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-		tv := &trayVolume{name: name, idx: idx, fsys: fsys, davfs: davfs, fmgr: fmgr, store: store, differ: differ}
+		tv := &trayVolume{name: name, idx: idx, davfs: davfs, fmgr: fmgr, store: store, differ: differ}
 
 		volMu.Lock()
 		volumes = append(volumes, tv)
@@ -582,7 +579,7 @@ func Run(opts Options) error {
 		var vwg sync.WaitGroup
 		if interval := SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
 			vwg.Go(func() {
-				AutoSync(vctx, fsys.NotifyPaths, idx, differ, interval, &tv.mu)
+				AutoSync(vctx, nil, idx, differ, interval, &tv.mu)
 			})
 		}
 

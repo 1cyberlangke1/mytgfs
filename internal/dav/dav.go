@@ -6,6 +6,7 @@ package dav
 // 目录、改名、删除直接操作索引和消息。
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +67,73 @@ type FileSystem struct {
 	tmpDir string
 	// tmpOnce 保证每个进程只扫一次旧临时文件
 	tmpOnce sync.Once
+	// tr 记录正在下载的文件进度；键是卷内路径
+	trMu sync.Mutex
+	tr   map[string]*Transfer
+}
+
+// Transfer 是一个正在下载的文件的进度快照。
+//
+// Path 是卷内绝对路径；Done 是已从 Telegram 取回的字节数；Total 是文件大小。
+type Transfer struct {
+	Path  string `json:"path"`
+	Done  int64  `json:"done"`
+	Total int64  `json:"total"`
+}
+
+// transferMinSize 是进入进度列表的最小文件体积。
+//
+// 小于这个值的文件通常一个分块就读完，显示进度只会让面板闪一下。
+const transferMinSize = 1 << 20
+
+// track 记录一次下载进度。
+//
+// 输入：name 卷内路径；done 已取回字节；total 文件总大小
+// 输出：无
+// 预期：小于 transferMinSize 或已取完时移除记录；done 只增不减
+func (d *FileSystem) track(name string, done, total int64) {
+	if total < transferMinSize {
+		return
+	}
+	if done > total {
+		done = total
+	}
+	d.trMu.Lock()
+	defer d.trMu.Unlock()
+	if done >= total {
+		delete(d.tr, name)
+		return
+	}
+	if d.tr == nil {
+		d.tr = make(map[string]*Transfer)
+	}
+	t := d.tr[name]
+	if t == nil {
+		d.tr[name] = &Transfer{Path: name, Done: done, Total: total}
+		return
+	}
+	if done > t.Done {
+		t.Done = done
+	}
+}
+
+// untrack 移除一条下载进度。
+func (d *FileSystem) untrack(name string) {
+	d.trMu.Lock()
+	delete(d.tr, name)
+	d.trMu.Unlock()
+}
+
+// Transfers 返回当前下载进度快照，按路径排序。
+func (d *FileSystem) Transfers() []Transfer {
+	d.trMu.Lock()
+	defer d.trMu.Unlock()
+	out := make([]Transfer, 0, len(d.tr))
+	for _, t := range d.tr {
+		out = append(out, *t)
+	}
+	slices.SortFunc(out, func(a, b Transfer) int { return cmp.Compare(a.Path, b.Path) })
+	return out
 }
 
 // 上传临时文件的命名与保留时长。
@@ -655,6 +724,7 @@ type file struct {
 // 预期：只用于写入中途出错的分支；正常结束走 Close。
 // 调用后 Close 变成空操作，避免把半份内容传上去。
 func (f *file) Abort() error {
+	f.d.untrack(f.name)
 	if f.write && f.tmp != nil {
 		name := f.tmp.Name()
 		_ = f.tmp.Close()
@@ -774,6 +844,7 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 // 上传失败时保留账本与临时文件（不 defer 删除），重启由 ResumePending 补传；
 // 成功后才删账本与临时文件。
 func (f *file) Close() error {
+	f.d.untrack(f.name)
 	if !f.write || f.tmp == nil {
 		return nil
 	}
@@ -813,6 +884,7 @@ func (f *file) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if f.off >= f.entry.Size {
+		f.d.untrack(f.name)
 		return 0, io.EOF
 	}
 	if f.buf == nil || f.off < f.base || f.off >= f.base+int64(len(f.buf)) {
@@ -848,7 +920,8 @@ func (f *file) Read(p []byte) (int, error) {
 //
 //	刷新失败或二次读取仍失败则原样返回错误；不改动其它消息。
 func (f *file) readRange(ofst int64, length int) ([]byte, error) {
-	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), ofst, length, nil)
+	prog := func(done int64) { f.d.track(f.name, done, f.entry.Size) }
+	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), ofst, length, prog)
 	if err == nil {
 		return data, nil
 	}
@@ -868,7 +941,7 @@ func (f *file) readRange(ofst int64, length int) ([]byte, error) {
 		return nil, perr
 	}
 	f.entry = &updated
-	return f.d.store.ReadRange(f.d.ctx, partOf(updated), ofst, length, nil)
+	return f.d.store.ReadRange(f.d.ctx, partOf(updated), ofst, length, prog)
 }
 
 // Seek 只支持顺序定位，跳转后重新拉块。

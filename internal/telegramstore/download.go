@@ -75,7 +75,8 @@ func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int
 		WithSize(end).
 		WithThreads(s.threads())
 	if progress != nil {
-		b = b.WithProgress(func(done, _ int64) { progress(done) })
+		// gotd 的 done 是本次下载区间内已写入的字节数，换成文件内绝对偏移
+		b = b.WithProgress(func(done, _ int64) { progress(start + done) })
 	}
 	if _, err := b.Parallel(ctx, w); err != nil {
 		return nil, DescribeError(fmt.Errorf("下载 %d..%d: %w", start, end, s.noteErr(err)))

@@ -81,13 +81,12 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs auth bot` / `auth user` | bot token / 手机号登录 |
 | `mytgfs channel init --bot <username>` | 建私有频道并给 bot 提权 |
 | `mytgfs volume create --name <n> --point Y:` | 建卷 |
-| `mytgfs volume delete --name <n>` | 删卷：卸挂载、删频道、移除配置、删本地索引 |
+| `mytgfs volume delete --name <n>` | 删卷：删频道、移除配置、删本地索引 |
 | `mytgfs volume check` | 检查每个卷的频道是否仍可读写 |
 | `mytgfs web [--port N]` | 启动本地 Web 面板 |
 | `mytgfs tray [--port N]` | 系统托盘常驻（自动同步、按需面板） |
 | `mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]` | 启动 WebDAV 服务 |
 | `mytgfs unmap --addr 127.0.0.1:8080` | 清理指向本服务的网络映射 |
-| `mytgfs umount [--point Y:]` | 安全移除挂载 |
 | `mytgfs sync [--name 卷] [--limit N] [--backfill]` | 增量同步（`--name` 省略时用第一个卷）；`--backfill` 用 user 会话回填历史 |
 | `mytgfs check [--name 卷] [--fix]` | 核对索引与频道消息；`--fix` 删除缺失行、按 caption 修正路径 |
 | `mytgfs put [--name 卷] [--remote /目录] <路径...>` | 批量上传文件/目录 |
@@ -149,6 +148,11 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 **边界**：这套机制只依据本程序自己记下的 `pending` 记录和 caption 元数据工作，
 不会因为「频道里有不在索引里的消息」就去删任何东西，聊天消息始终不受影响。
 
+## 传输进度与队列
+
+- 面板的「下载中」显示的是实际已从 Telegram 取回的字节数（单文件 ≥1MB 才展示），读完或关闭文件后自动消失。
+- 上传由串行队列提交：单频道限速约 1 条消息/秒，失败按 1/2/4 秒退避重试，面板会显示排队与重试状态。
+
 ## 限制
 
 - 单文件上限约 2GB（Telegram 文档上限），不做跨消息自动分片，超限直接报错。
@@ -173,7 +177,7 @@ internal/
   index/        SQLite 索引（files/dirs/meta/pending/pending_done）
   sync/         频道 pts 增量同步、caption 编解码
   web/          内嵌面板、文件管理、PWA、缩略图、分片上传
-  trayapp/      托盘 + 自动同步 + 按需面板/挂载
+  trayapp/      托盘 + 自动同步 + 按需面板 + WebDAV 开关
   ...           auth/channel/config/crypto/fm/queue/uploadcache/...
 web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/static）
 packaging/      安装/卸载/映射脚本

@@ -158,14 +158,6 @@ func runVolumeDelete(args []string) {
 	defer cancel()
 
 	channelID := target.ChatID
-	// 先卸掉这个卷的挂载点：不然索引文件被占着，删不掉
-	if p := strings.TrimSpace(target.Point); p != "" {
-		if uerr := umountPointIfRunning(p); uerr != nil {
-			fmt.Println(i18n.T("volume.umount_failed", p, uerr))
-		} else {
-			fmt.Println(i18n.T("volume.umounted", p))
-		}
-	}
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},

@@ -75,9 +75,12 @@ func (f *fakeStore) Refresh(_ context.Context, messageID int) (*telegramstore.Pa
 	}, nil
 }
 
-func (f *fakeStore) ReadRange(context.Context, *telegramstore.Part, int64, int, func(int64)) ([]byte, error) {
+func (f *fakeStore) ReadRange(_ context.Context, _ *telegramstore.Part, off int64, length int, progress func(int64)) ([]byte, error) {
 	if f.readErr != nil {
 		return nil, f.readErr
+	}
+	if progress != nil {
+		progress(off + int64(length))
 	}
 	return []byte("x"), nil
 }

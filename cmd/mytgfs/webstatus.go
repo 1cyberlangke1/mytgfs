@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"mytgfs/internal/config"
+	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/queue"
 )
@@ -23,6 +24,7 @@ import (
 func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolume) any {
 	list := make([]map[string]any, 0, len(vols))
 	var queued []queue.Item
+	var xfers []dav.Transfer
 	for _, v := range cfg.Volumes {
 		wv, ok := vols[v.Name]
 		if !ok {
@@ -40,6 +42,10 @@ func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolum
 		if wv.davfs == nil {
 			continue
 		}
+		for _, t := range wv.davfs.Transfers() {
+			t.Path = v.Name + ":" + t.Path
+			xfers = append(xfers, t)
+		}
 		q := wv.davfs.Queue()
 		if q == nil {
 			continue
@@ -50,9 +56,10 @@ func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolum
 		}
 	}
 	return map[string]any{
-		"state":   i18n.T("web.state_local"),
-		"auth":    "ok",
-		"volumes": list,
-		"queue":   queued,
+		"state":     i18n.T("web.state_local"),
+		"auth":      "ok",
+		"volumes":   list,
+		"transfers": xfers,
+		"queue":     queued,
 	}
 }
