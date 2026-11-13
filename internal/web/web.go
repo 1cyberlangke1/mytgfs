@@ -92,6 +92,8 @@ type Options struct {
 	Bus *eventbus.Bus
 	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
 	ThumbDir string
+	// PWA 控制可安装/离线能力；零值表示启用（默认好用）
+	PWA config.PWA
 }
 
 // ServeWith 启动面板，阻塞到 ctx 取消。
@@ -100,12 +102,45 @@ type Options struct {
 // 输出：error
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时状态为空列表
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
+	srv := &http.Server{Addr: addr, Handler: newMux(configPath, opts)}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+	err := srv.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
+}
+
+// newMux 组装面板的全部路由，拆出来供单测直接验证路由可达性。
+//
+// 输入：configPath 配置文件路径；opts 面板能力
+// 输出：*http.ServeMux
+// 预期：PWA 关闭时 manifest/sw/图标路径显式 404，不落到整页兜底
+func newMux(configPath string, opts Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
-	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, opts.Sync != nil, configPath, api, opts.Mount))
+	pwa := newPWAData(opts.PWA)
+	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, opts.Sync != nil, configPath, api, opts.Mount, pwa))
 	// htmx 与面板脚本随二进制分发：不依赖任何外网 CDN
 	mux.HandleFunc("/static/htmx.min.js", handleAsset("application/javascript; charset=utf-8", htmxJS))
 	mux.HandleFunc("/static/app.js", handleAsset("application/javascript; charset=utf-8", appJS))
+	// PWA：启用时挂真实 handler；关闭时挂 404，避免被 "/" 兜底成整页 HTML
+	pwaPaths := []string{"/manifest.webmanifest", "/sw.js",
+		"/static/icon-192.png", "/static/icon-512.png", "/static/apple-touch-icon.png"}
+	if pwa.Enabled {
+		mux.HandleFunc("/manifest.webmanifest", handleManifest(opts.PWA))
+		mux.HandleFunc("/sw.js", handleServiceWorker())
+		mux.HandleFunc("/static/icon-192.png", handleAsset("image/png", icon192))
+		mux.HandleFunc("/static/icon-512.png", handleAsset("image/png", icon512))
+		mux.HandleFunc("/static/apple-touch-icon.png", handleAsset("image/png", appleTouchIcon))
+	} else {
+		for _, p := range pwaPaths {
+			mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+		}
+	}
 	// 片段接口：htmx 轮询/提交的目标，返回 HTML 而不是 JSON
 	mux.HandleFunc("/frag/status", handleFragStatus(opts.Status))
 	mux.HandleFunc("/frag/sync", handleFragSync(opts.Sync))
@@ -123,7 +158,7 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	mux.HandleFunc("/frag/files/batch", handleFragFilesBatch(api))
 	mux.HandleFunc("/files/download", handleFileDownload(api))
 	mux.HandleFunc("/files/thumb", handleFileThumb(api))
-	mux.HandleFunc("/frag/details", handleFragDetails(api))
+	mux.HandleFunc("/frag/details", handleFragDetails(api, pwa))
 	mux.HandleFunc("/frag/play", handleFragPlay(api))
 	// 浏览器分片上传：大文件断线只重传当前分片
 	if up := newUploadAPI(opts.Files, opts.TempDir); up != nil {
@@ -145,17 +180,7 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
 	mux.HandleFunc("/api/config", handleConfig(configPath))
-
-	srv := &http.Server{Addr: addr, Handler: mux}
-	go func() {
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
-	}()
-	err := srv.ListenAndServe()
-	if err == http.ErrServerClosed {
-		return nil
-	}
-	return err
+	return mux
 }
 
 // pageLabels 是页面全部文案，统一取自 i18n。
@@ -182,6 +207,11 @@ type pageLabels struct {
 	FilesSortDesc, FilesPlay, FilesClose, FilesSelectAll    string
 	FilesBatchDelete, FilesBatchMoveTo, FilesBatchGo        string
 	FilesDrop, FilesDirUpload                               string
+	// 离线（PWA）
+	FilesOffline, FilesOfflineSave, FilesOfflineSaved         string
+	FilesOfflineRemove, FilesOfflineRemoved, FilesOfflineFail string
+	FilesOfflineLarge                                         string
+	OfflineHint                                               string
 	// CanCreate 决定建卷卡片是否渲染
 	CanCreate bool
 	// 挂载为网络驱动器
@@ -265,6 +295,15 @@ func loadLabels(canCreate bool) pageLabels {
 		FilesDrop:        i18n.T("web.files_drop"),
 		FilesDirUpload:   i18n.T("web.files_dir_upload"),
 
+		FilesOffline:        i18n.T("web.files_offline"),
+		FilesOfflineSave:    i18n.T("web.files_offline_save"),
+		FilesOfflineSaved:   i18n.T("web.files_offline_saved"),
+		FilesOfflineRemove:  i18n.T("web.files_offline_remove"),
+		FilesOfflineRemoved: i18n.T("web.files_offline_removed"),
+		FilesOfflineFail:    i18n.T("web.files_offline_fail"),
+		FilesOfflineLarge:   i18n.T("web.files_offline_too_large"),
+		OfflineHint:         i18n.T("web.offline_hint"),
+
 		Mount:            i18n.T("web.mount"),
 		MountOn:          i18n.T("web.mount_on"),
 		MountOff:         i18n.T("web.mount_off"),
@@ -286,18 +325,20 @@ type pageData struct {
 	Mount *mountData
 	// Version 是构建版本，显示在页脚，便于用户报问题时对照
 	Version string
+	// PWA 决定是否输出 manifest/图标并启用离线保存
+	PWA pwaData
 }
 
 // handlePage 输出内嵌的静态页面。
 //
-// 输入：canCreate 是否显示建卷卡片；configPath 配置文件路径（空串表示不预载）；
-// api 文件管理能力；mount 挂盘开关能力
+// 输入：canCreate 是否显示建卷卡片；canSync 是否显示同步按钮；configPath 配置文件路径（空串表示不预载）；
+// api 文件管理能力；mount 挂盘开关能力；pwa 可安装/离线设置
 // 输出：HTML
-// 预期：文案、配置正文、文件列表都在服务端渲染，前端只负责主题与进度
-func handlePage(canCreate, canSync bool, configPath string, api *filesAPI, mount *MountControl) http.HandlerFunc {
+// 预期：文案、配置正文、文件列表都在服务端渲染，前端只负责主题、进度与离线
+func handlePage(canCreate, canSync bool, configPath string, api *filesAPI, mount *MountControl, pwa pwaData) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		data := pageData{Labels: loadLabels(canCreate), CanSync: canSync, Version: version.Version}
+		data := pageData{Labels: loadLabels(canCreate), CanSync: canSync, Version: version.Version, PWA: pwa}
 		if configPath != "" {
 			if b, err := os.ReadFile(configPath); err == nil {
 				data.Config = string(b)
@@ -751,6 +792,14 @@ const pageHTML = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>mytgfs</title>
+{{if .PWA.Enabled}}<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b1220">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{.PWA.Name}}">
+<meta name="application-name" content="{{.PWA.Name}}">
+{{end}}
 <script>
 // 首屏前定主题：手动选择 > 系统偏好 > 深色。避免亮暗闪烁。
 (function(){
@@ -1145,6 +1194,12 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
 @media(max-width:400px){
   .head-actions{justify-content:flex-end;gap:8px}
 }
+.offline-acts{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.offline-acts .msg{min-width:0}
+.oflist{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.ofrow{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--chip);font-size:13px}
+.ofrow .ofname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ofrow .mono{color:var(--muted)}
 @media(prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
@@ -1304,6 +1359,24 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
         </div>
       </form>
     </section>
+{{if .PWA.Enabled}}
+    <section class="card" id="offline-card" style="grid-column:1/-1">
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+          <circle cx="12" cy="12" r="4"/>
+        </svg>
+        <span>{{.Labels.FilesOffline}}</span>
+        <button type="button" class="ghost" data-offline-refresh style="margin-left:auto">{{.Labels.RefreshTip}}</button>
+      </h2>
+      <p class="msg">{{.Labels.OfflineHint}}</p>
+      <div id="offline-list" data-offline-list><div class="empty">…</div></div>
+      <div id="offline-tpl" hidden data-offline-labels
+           data-empty="{{.Labels.FilesEmpty}}"
+           data-remove="{{.Labels.FilesOfflineRemove}}"
+           data-open="{{.Labels.FilesDownload}}"></div>
+    </section>
+{{end}}
   </main>
   <footer>{{.Labels.Footer}}{{with .Version}} · {{.}}{{end}}</footer>
 </div>

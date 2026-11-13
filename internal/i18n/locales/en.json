@@ -207,5 +207,14 @@
   "err.upload_bad_request": "Invalid upload request",
   "err.upload_no_session": "Upload session is missing or expired",
   "err.upload_offset": "Chunk offset mismatch, resync and retry",
-  "err.upload_incomplete": "Upload is incomplete and cannot be committed"
+  "err.upload_incomplete": "Upload is incomplete and cannot be committed",
+  "web.manifest_desc": "Personal cloud drive backed by Telegram",
+  "web.files_offline": "Offline files",
+  "web.offline_hint": "Install this panel as an app and save files for offline access. Shell opens without a connection; saved files stay available.",
+  "web.files_offline_save": "Save offline",
+  "web.files_offline_saved": "Saved for offline use",
+  "web.files_offline_remove": "Remove offline copy",
+  "web.files_offline_removed": "Offline copy removed",
+  "web.files_offline_fail": "Could not save the offline copy",
+  "web.files_offline_too_large": "File exceeds the offline size limit"
 }

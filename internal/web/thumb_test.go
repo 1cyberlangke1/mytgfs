@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/fm"
 )
 
@@ -98,7 +99,7 @@ func TestFragDetailsImageHasThumb(t *testing.T) {
 	data := pngBytes(t)
 	withFile(f, "a.png", data)
 	rec := httptest.NewRecorder()
-	handleFragDetails(newTestAPI(f))(rec,
+	handleFragDetails(newTestAPI(f), newPWAData(config.PWA{}))(rec,
 		httptest.NewRequest(http.MethodGet, "/frag/details?vol=demo&path=%2Fa.png", nil))
 	body := rec.Body.String()
 	if !strings.Contains(body, "/files/thumb?path=%2Fa.png") {
@@ -114,7 +115,7 @@ func TestFragDetailsTextNoThumb(t *testing.T) {
 	f := newFakeFiles()
 	withFile(f, "a.txt", []byte("hello"))
 	rec := httptest.NewRecorder()
-	handleFragDetails(newTestAPI(f))(rec,
+	handleFragDetails(newTestAPI(f), newPWAData(config.PWA{}))(rec,
 		httptest.NewRequest(http.MethodGet, "/frag/details?vol=demo&path=%2Fa.txt", nil))
 	if strings.Contains(rec.Body.String(), "/files/thumb") {
 		t.Errorf("文本文件不应请求缩略图: %s", rec.Body.String())

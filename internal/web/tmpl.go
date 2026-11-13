@@ -220,5 +220,18 @@ const detailsHTML = `
     <div><dt>{{.Labels.FilesSize}}</dt><dd>{{.Size}}</dd></div>
     <div><dt>{{.Labels.FilesMtime}}</dt><dd>{{.Mod}}</dd></div>
   </dl>
+  {{if .PWA.Enabled}}
+  <div class="offline-acts" data-offline-group
+       data-offline-url="{{.Download}}" data-offline-max="{{.PWA.OfflineMax}}"
+       data-offline-saved="{{.Labels.FilesOfflineSaved}}"
+       data-offline-removed="{{.Labels.FilesOfflineRemoved}}"
+       data-offline-fail="{{.Labels.FilesOfflineFail}}"
+       data-offline-large="{{.Labels.FilesOfflineLarge}}">
+    <button type="button" class="ghost" data-offline-save>{{.Labels.FilesOfflineSave}}</button>
+    <button type="button" class="ghost" data-offline-remove hidden>{{.Labels.FilesOfflineRemove}}</button>
+    <a class="btn" href="{{.Download}}" download>{{.Labels.FilesDownload}}</a>
+    <span class="msg" data-offline-msg></span>
+  </div>
+  {{end}}
 </div>
 {{end}}`

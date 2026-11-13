@@ -611,6 +611,277 @@ function initPlayer(): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// PWA：注册 service worker，管理「离线保存」的文件。
+//
+// 所有文案由服务端渲染进 data-* 属性，这里只做状态切换，不写死任何字符串。
+// 与 SW 的通信走 postMessage，逻辑键用 vol\u0000path 比对，避开 URL 编码差异。
+// ---------------------------------------------------------------------------
+
+/** SW 消息回传的离线文件条目。 */
+interface OfflineItem {
+  key: string;
+  url: string;
+  vol: string;
+  path: string;
+  name: string;
+}
+
+/** 离线相关文案，从 #offline-tpl 的 data-* 读取。 */
+interface OfflineLabels {
+  empty: string;
+  remove: string;
+  open: string;
+}
+
+/** 面板里显示的离线状态文案（i18n 注入到详情面板的 data-*）。 */
+interface OfflineTexts {
+  saved: string;
+  removed: string;
+  fail: string;
+  large: string;
+}
+
+function offlineLabels(): OfflineLabels {
+  const tpl = document.getElementById("offline-tpl");
+  return {
+    empty: tpl?.dataset.offlineEmpty ?? "",
+    remove: tpl?.dataset.offlineRemove ?? "",
+    open: tpl?.dataset.offlineOpen ?? "",
+  };
+}
+
+/** 详情面板的离线文案：挂在按钮 data-* 上，由服务端模板写入。 */
+function offlineTexts(group: HTMLElement): OfflineTexts {
+  return {
+    saved: group.dataset.offlineSaved ?? "",
+    removed: group.dataset.offlineRemoved ?? "",
+    fail: group.dataset.offlineFail ?? "",
+    large: group.dataset.offlineLarge ?? "",
+  };
+}
+
+/** 构造 vol\u0000path 逻辑键，与 SW 的 logicalKey 保持一致。 */
+function logicalKeyOf(url: string): string {
+  try {
+    const u = new URL(url, location.origin);
+    return (u.searchParams.get("vol") || "") + "\u0000" + (u.searchParams.get("path") || "");
+  } catch {
+    return "";
+  }
+}
+
+/** 当前受控的 ServiceWorker（可能还没激活，返回 registration.active）。 */
+async function swReady(): Promise<ServiceWorker | null> {
+  if (!("serviceWorker" in navigator)) {
+    return null;
+  }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return reg.active;
+  } catch {
+    return null;
+  }
+}
+
+/** 给 SW 发消息并等待同类型回执；超时按失败处理。 */
+function swAsk(
+  worker: ServiceWorker,
+  message: Record<string, unknown>,
+): Promise<Record<string, any>> {
+  return new Promise((resolve, reject) => {
+    const ch = new MessageChannel();
+    const timer = setTimeout(() => reject(new Error("timeout")), 30000);
+    ch.port1.onmessage = (ev) => {
+      clearTimeout(timer);
+      resolve((ev.data || {}) as Record<string, any>);
+    };
+    try {
+      worker.postMessage(message, [ch.port2]);
+    } catch (err) {
+      clearTimeout(timer);
+      reject(err);
+    }
+  });
+}
+
+let offlineSet: Set<string> = new Set();
+
+/** 依据离线集合刷新所有详情面板的按钮显隐。 */
+function refreshOfflineButtons(): void {
+  document.querySelectorAll<HTMLElement>("[data-offline-group]").forEach((group) => {
+    const key = logicalKeyOf(group.dataset.offlineUrl ?? "");
+    const saved = offlineSet.has(key);
+    const save = group.querySelector<HTMLElement>("[data-offline-save]");
+    const remove = group.querySelector<HTMLElement>("[data-offline-remove]");
+    if (save) {
+      save.hidden = saved;
+    }
+    if (remove) {
+      remove.hidden = !saved;
+    }
+  });
+}
+
+/** 渲染离线文件列表卡片。 */
+function renderOfflineList(items: OfflineItem[]): void {
+  const box = document.getElementById("offline-list");
+  if (!box) {
+    return;
+  }
+  const t = offlineLabels();
+  offlineSet = new Set(items.map((it) => it.key));
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = t.empty;
+    box.replaceChildren(empty);
+  } else {
+    const wrap = document.createElement("div");
+    wrap.className = "oflist";
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "ofrow";
+      const name = document.createElement("span");
+      name.className = "ofname";
+      name.textContent = it.name;
+      const vol = document.createElement("span");
+      vol.className = "mono";
+      vol.textContent = it.vol + ":" + it.path;
+      const open = document.createElement("a");
+      open.className = "btn";
+      open.href = it.url;
+      open.setAttribute("download", "");
+      open.textContent = t.open;
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "ghost";
+      rm.dataset.offlineListRemove = it.url;
+      rm.textContent = t.remove;
+      row.append(name, vol, open, rm);
+      wrap.append(row);
+    }
+    box.replaceChildren(wrap);
+  }
+  refreshOfflineButtons();
+}
+
+/** 向 SW 请求当前离线文件列表。 */
+async function loadOfflineList(): Promise<void> {
+  const worker = await swReady();
+  if (!worker) {
+    return;
+  }
+  try {
+    const res = await swAsk(worker, { type: "list" });
+    renderOfflineList((res.items || []) as OfflineItem[]);
+  } catch {
+    /* SW 未就绪：列表保持占位，下次操作再刷新 */
+  }
+}
+
+/** 把详情面板里的动作结果写进提示区。 */
+function setOfflineMsg(group: HTMLElement, text: string, kind: "ok" | "err"): void {
+  const out = group.querySelector<HTMLElement>("[data-offline-msg]");
+  if (!out) {
+    return;
+  }
+  out.textContent = text;
+  out.className = "msg " + kind;
+}
+
+/**
+ * 注册 service worker 并挂好离线交互。
+ *
+ * 输入：无
+ * 输出：无
+ * 预期：
+ *   - 页面无 #offline-card（PWA 关闭）时不注册、不绑定
+ *   - 所有用户可见文案取自 DOM data-*，本文件无硬编码字符串
+ *   - 保存/删除成功后刷新列表与详情按钮，失败就地提示
+ */
+function initOffline(): void {
+  const enabled = document.getElementById("offline-card");
+  if (!enabled || !("serviceWorker" in navigator)) {
+    return;
+  }
+  navigator.serviceWorker.register("/sw.js").catch(() => {
+    /* 不支持或注册失败：离线功能不可用，面板其余部分照常 */
+  });
+
+  // 详情面板按钮：事件委托，#browser 会被片段整体替换
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target as Element | null;
+    const save = btn?.closest<HTMLElement>("[data-offline-save]");
+    const remove = btn?.closest<HTMLElement>("[data-offline-remove]");
+    if (save) {
+      void offlineAction(save, "cache");
+    } else if (remove) {
+      void offlineAction(remove, "uncache");
+    }
+  });
+
+  // 列表里的删除按钮
+  document.addEventListener("click", (ev) => {
+    const rm = (ev.target as Element | null)?.closest<HTMLElement>("[data-offline-list-remove]");
+    if (rm?.dataset.offlineListRemove) {
+      void offlineListRemove(rm.dataset.offlineListRemove);
+    }
+  });
+
+  // 卡片刷新按钮 + 首屏加载
+  document.querySelector("[data-offline-refresh]")?.addEventListener("click", () => {
+    void loadOfflineList();
+  });
+  void loadOfflineList();
+}
+
+/** 详情面板的保存/删除动作。 */
+async function offlineAction(btn: HTMLElement, type: "cache" | "uncache"): Promise<void> {
+  const group = btn.closest<HTMLElement>("[data-offline-group]");
+  if (!group) {
+    return;
+  }
+  const url = group.dataset.offlineUrl ?? "";
+  const max = Number(group.dataset.offlineMax ?? "0");
+  const t = offlineTexts(group);
+  const worker = await swReady();
+  if (!worker) {
+    setOfflineMsg(group, t.fail, "err");
+    return;
+  }
+  try {
+    const msg: Record<string, unknown> = { type, url };
+    if (type === "cache") {
+      msg.max = max;
+    }
+    const res = await swAsk(worker, msg);
+    if (!res.ok) {
+      const text = res.error === "too-large" ? t.large : t.fail;
+      setOfflineMsg(group, text, "err");
+      return;
+    }
+    setOfflineMsg(group, type === "cache" ? t.saved : t.removed, "ok");
+    await loadOfflineList();
+  } catch {
+    setOfflineMsg(group, t.fail, "err");
+  }
+}
+
+/** 列表里的删除动作：删完刷新列表。 */
+async function offlineListRemove(url: string): Promise<void> {
+  const worker = await swReady();
+  if (!worker) {
+    return;
+  }
+  try {
+    await swAsk(worker, { type: "uncache", url });
+    await loadOfflineList();
+  } catch {
+    /* 刷新失败保持现状 */
+  }
+}
+
 function main(): void {
   initTheme();
   initUploadProgress();
@@ -621,6 +892,7 @@ function main(): void {
   initDirectoryUpload();
   initSelectAll();
   initPlayer();
+  initOffline();
 }
 
 if (document.readyState === "loading") {

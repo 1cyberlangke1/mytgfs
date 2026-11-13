@@ -207,5 +207,14 @@
   "err.upload_bad_request": "上传参数不合法",
   "err.upload_no_session": "上传会话不存在或已过期",
   "err.upload_offset": "分片位置不连续，请重新同步进度",
-  "err.upload_incomplete": "文件还没传完，不能提交"
+  "err.upload_incomplete": "文件还没传完，不能提交",
+  "web.manifest_desc": "基于 Telegram 的个人云盘",
+  "web.files_offline": "离线文件",
+  "web.offline_hint": "把面板装成应用，并把文件保存为离线可用。断网也能打开面板；已保存的文件仍可访问。",
+  "web.files_offline_save": "离线保存",
+  "web.files_offline_saved": "已保存为离线可用",
+  "web.files_offline_remove": "删除离线副本",
+  "web.files_offline_removed": "离线副本已删除",
+  "web.files_offline_fail": "离线保存失败",
+  "web.files_offline_too_large": "文件超过离线保存大小上限"
 }

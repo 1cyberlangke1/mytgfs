@@ -20,23 +20,28 @@ type detailsData struct {
 	Mod     string
 	IsImage bool
 	Thumb   template.URL
+	// Download 是整份下载地址，离线保存与下载按钮共用
+	Download template.URL
+	// PWA 控制是否显示离线保存按钮
+	PWA     pwaData
 	Message string
 }
 
 // handleFragDetails 输出单个文件的详情（GET /frag/details?vol=&path=）。
 //
-// 输入：vol 卷名；path 卷内路径
+// 输入：vol 卷名；path 卷内路径；pwa 离线设置
 // 输出：#detail 片段
 // 预期：
 //   - 只有图片扩展名才在 <img> 里引用 /files/thumb，别让浏览器预取整批图片
 //   - 取不到条目时返回错误文案，不返回 500
-func handleFragDetails(api *filesAPI) http.HandlerFunc {
+//   - PWA 关闭时不渲染离线按钮，避免点了没反应
+func handleFragDetails(api *filesAPI, pwa pwaData) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		data := detailsData{Labels: loadLabels(false)}
+		data := detailsData{Labels: loadLabels(false), PWA: pwa}
 		if api == nil {
 			data.Message = i18n.T("web.files_unavailable")
 			renderDetails(w, data)
@@ -60,12 +65,15 @@ func handleFragDetails(api *filesAPI) http.HandlerFunc {
 		data.Path = p
 		data.Size = formatBytes(e.Size)
 		data.Mod = formatMod(e.Mod)
-		if !e.Dir && thumbExts[path.Ext(p)] && e.Size <= thumbMaxSource {
-			data.IsImage = true
-			qs := url.Values{}
-			qs.Set("vol", vol)
-			qs.Set("path", p)
-			data.Thumb = template.URL("/files/thumb?" + qs.Encode())
+		if !e.Dir {
+			data.Download = downloadURL(vol, p)
+			if thumbExts[path.Ext(p)] && e.Size <= thumbMaxSource {
+				data.IsImage = true
+				qs := url.Values{}
+				qs.Set("vol", vol)
+				qs.Set("path", p)
+				data.Thumb = template.URL("/files/thumb?" + qs.Encode())
+			}
 		}
 		renderDetails(w, data)
 	}

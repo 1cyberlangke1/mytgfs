@@ -19,6 +19,7 @@ type Config struct {
 	Ratelimit Ratelimit `toml:"ratelimit"`
 	Volumes   []Volume  `toml:"volumes"`
 	WebDAV    WebDAV    `toml:"webdav"`
+	PWA       PWA       `toml:"pwa"`
 	Log       Log       `toml:"log"`
 }
 

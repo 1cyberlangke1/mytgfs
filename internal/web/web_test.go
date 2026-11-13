@@ -102,7 +102,7 @@ func TestHandleVolumesConflict(t *testing.T) {
 
 func TestPageInjectsLabels(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handlePage(true, true, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(true, true, "", nil, nil, newPWAData(config.PWA{}))(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
 	// 建卷卡片只在支持建卷时渲染
 	if !strings.Contains(body, `name="name"`) {
@@ -121,7 +121,7 @@ func TestPageInjectsLabels(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	handlePage(false, false, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, false, "", nil, nil, newPWAData(config.PWA{}))(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	out := rec.Body.String()
 	if strings.Contains(out, `name="name"`) {
 		t.Error("create form should be absent when volume creation is disabled")
@@ -134,6 +134,25 @@ func TestPageInjectsLabels(t *testing.T) {
 	}
 }
 
+// TestPagePWAToggle 验证 PWA 开关决定 manifest/离线卡片是否渲染。
+func TestPagePWAToggle(t *testing.T) {
+	on := httptest.NewRecorder()
+	handlePage(false, false, "", nil, nil, pwaData{Enabled: true, Name: "mytgfs"})(on,
+		httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(on.Body.String(), `rel="manifest"`) ||
+		!strings.Contains(on.Body.String(), `id="offline-card"`) {
+		t.Error("PWA enabled: manifest link or offline card missing")
+	}
+
+	off := httptest.NewRecorder()
+	handlePage(false, false, "", nil, nil, pwaData{Enabled: false})(off,
+		httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(off.Body.String(), `rel="manifest"`) ||
+		strings.Contains(off.Body.String(), `id="offline-card"`) {
+		t.Error("PWA disabled: manifest link or offline card should be absent")
+	}
+}
+
 // TestPageRendersConfig 配置正文直接在服务端渲染进 textarea，省掉一次请求。
 func TestPageRendersConfig(t *testing.T) {
 	dir := t.TempDir()
@@ -142,7 +161,7 @@ func TestPageRendersConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	handlePage(false, false, path, nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, false, path, nil, nil, newPWAData(config.PWA{}))(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec.Body.String(), `point = &#34;Y:&#34;`) {
 		t.Errorf("config not rendered into textarea")
 	}

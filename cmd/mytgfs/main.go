@@ -436,9 +436,15 @@ func runWeb(args []string) {
 	defer cancel()
 
 	const cfgPath = "config.toml"
-	serve := func(opts web.Options) error { return web.ServeWith(ctx, addr, cfgPath, opts) }
+	// PWA 默认启用；配置读出来后覆盖（含用户显式关闭）。零值即好用配置。
+	pwaCfg := config.PWA{}
+	serve := func(opts web.Options) error {
+		opts.PWA = pwaCfg
+		return web.ServeWith(ctx, addr, cfgPath, opts)
+	}
 
 	cfg, err := config.Load(cfgPath)
+	pwaCfg = cfg.PWA
 	bus := eventbus.New()
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑
