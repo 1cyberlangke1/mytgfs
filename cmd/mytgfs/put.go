@@ -9,6 +9,7 @@ package main
 // 预期：
 //   - 所有上传走串行队列，避免批量时触发 FLOOD_WAIT
 //   - 按内容 sha256 续传：中断后再跑同一命令会跳过已传分片
+//   - 同内容已在索引里时发引用消息，零字节上传
 //   - 索引同时写入 sha256，后续可用 cp 做引用复制
 
 import (
@@ -19,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path"
@@ -154,11 +156,33 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, i
 		return err
 	}
 
-	part, err := store.UploadResumable(ctx, f, st.Size(), sha,
-		path.Base(it.remote), "application/octet-stream",
-		tgsync.EncodeCaptionHash(it.remote, sha))
-	if err != nil {
-		return err
+	caption := tgsync.EncodeCaptionHash(it.remote, sha)
+	var part *telegramstore.Part
+	// 同内容已在索引里就发引用消息，零字节上传
+	if hit, ok, herr := idx.FindContent(ctx, path.Dir(it.remote), st.Size(), sha); herr != nil {
+		return herr
+	} else if ok && hit.Path != it.remote && hit.DocumentID != 0 {
+		p, cerr := store.Copy(ctx, &telegramstore.Part{
+			MessageID:     hit.MessageID,
+			DocumentID:    hit.DocumentID,
+			AccessHash:    hit.AccessHash,
+			FileReference: hit.FileReference,
+			Size:          hit.Size,
+		}, path.Base(it.remote), "application/octet-stream", caption)
+		if cerr == nil {
+			part = p
+		} else {
+			// 复用失败（引用过期、对端异常）不影响正确性：回退成正常上传
+			slog.Debug("put 去重复用失败，回退上传", "path", it.remote, "src", hit.Path, "err", cerr)
+		}
+	}
+	if part == nil {
+		p, uerr := store.UploadResumable(ctx, f, st.Size(), sha,
+			path.Base(it.remote), "application/octet-stream", caption)
+		if uerr != nil {
+			return uerr
+		}
+		part = p
 	}
 	if err := idx.Put(ctx, index.File{
 		Path:          it.remote,
