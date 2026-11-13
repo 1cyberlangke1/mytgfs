@@ -336,5 +336,7 @@
   "err.volume_config_append_prefix": "写入配置失败",
   "err.volume_chat_id_invalid": "频道 id 不合法，应为 -100... 形式或裸 id",
   "err.volume_attach_unavailable": "当前入口不支持添加已有频道",
-  "cli.flag.chat_id": "频道 id：-100... 或裸 id"
+  "cli.flag.chat_id": "频道 id：-100... 或裸 id",
+  "err.user_session_missing": "还没有 user 会话：请先用 mytgfs auth login 登录一次",
+  "err.channels_unavailable": "当前入口无法列出频道，请手填 chat_id"
 }

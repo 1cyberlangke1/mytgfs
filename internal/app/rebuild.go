@@ -19,11 +19,17 @@ import (
 	"mytgfs/internal/tgclient"
 )
 
-// UserSessionPath 是用户会话文件，messages.getHistory 只有 user 可用。
-const UserSessionPath = "secrets/user.session"
-
 // rebuildPageSize 是重建时每页拉取的原始消息条数。
 const rebuildPageSize = 100
+
+// userSessionPath 返回 user 会话文件路径，Options 可覆盖。
+//
+// 输入：无
+// 输出：user.session 路径
+// 预期：默认与 CLI 约定一致，测试可指向临时目录
+func (a *App) userSessionPath() string {
+	return cmp.Or(a.opts.UserSessionPath, DefaultUserSessionPath)
+}
 
 // New 用已加载的配置与装配参数构造 App，避免调用方重复读盘。
 func New(cfg config.Config, opts Options) *App { return &App{cfg: cfg, opts: opts} }
@@ -44,7 +50,7 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 	if n > 0 {
 		return nil
 	}
-	if _, serr := os.Stat(UserSessionPath); serr != nil {
+	if _, serr := os.Stat(a.userSessionPath()); serr != nil {
 		slog.Info(i18n.T("log.rebuild_skipped"))
 		return nil
 	}
@@ -53,7 +59,7 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 		return err
 	}
 	client := tgclient.New(a.cfg.Telegram.APIID, a.cfg.APIHash(),
-		&sessionstore.Encrypted{Path: UserSessionPath, Key: key},
+		&sessionstore.Encrypted{Path: a.userSessionPath(), Key: key},
 		tgclient.Options{})
 	var total int
 	err = client.Run(ctx, func(ctx context.Context) error {

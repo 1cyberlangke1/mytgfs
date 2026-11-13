@@ -655,6 +655,10 @@ func runWeb(args []string) {
 					"title":      res.Title,
 				}, nil
 			},
+			// 列频道：getDialogs 只有 user 会话能做，走装配根开临时连接
+			Channels: func(ctx context.Context) ([]channel.Item, error) {
+				return app.New(cfg, app.Options{ConfigPath: cfgPath}).Channels(ctx)
+			},
 			// 卷用量：面板卷标签直接显示文件数与占用
 			Stats: func(name string) (int64, int64, bool) {
 				v, ok := vols[name]

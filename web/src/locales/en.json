@@ -339,6 +339,12 @@
     "chatIdHint": "-100... chat id or bare channel id, e.g. -1003536007396",
     "attachConfirm": "Attach",
     "attachSuccess": "Channel attached as volume {name}",
-    "chatIdInvalid": "Invalid channel id"
+    "chatIdInvalid": "Invalid channel id",
+    "pickChannel": "Pick from your channels",
+    "loadChannels": "Load channels",
+    "channelsLoading": "Reading channels…",
+    "channelsEmpty": "No manageable channels found. Create one and add the bot as admin first.",
+    "channelsFailed": "Failed to read channels",
+    "chatIdFilled": "Filled channel {title}"
   }
 }

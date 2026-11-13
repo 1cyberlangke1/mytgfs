@@ -6,13 +6,45 @@ package web
 // 因此具体实现在 trayapp / cmd 注入，本文件只负责 HTTP 契约。
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/i18n"
 )
+
+// handleAPIChannels 列出 user 会话可管理的频道，供「添加已有频道」下拉选择。
+//
+// 输入：GET
+// 输出：{"channels":[{id,chat_id,title,username,creator,admin}]}
+// 预期：能力未注入 501；user 会话缺失或失效时 400 并给出人话原因
+func handleAPIChannels(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+			return
+		}
+		if opts.Channels == nil {
+			replyJSONError(w, http.StatusNotImplemented, i18n.T("err.channels_unavailable"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+		defer cancel()
+		items, err := opts.Channels(ctx)
+		if err != nil {
+			replyJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if items == nil {
+			items = []channel.Item{}
+		}
+		replyJSON(w, http.StatusOK, map[string]any{"channels": items})
+	}
+}
 
 // handleAPIAttachVolume 把已有频道挂成卷。
 //

@@ -9,13 +9,17 @@ import (
 )
 
 // Item 是一个频道摘要。
+//
+// 字段说明：ID 是频道原始 id；ChatID 是 Bot API 风格的 -100... 形式，
+// 面板与配置都用它，避免前端再算一次。
 type Item struct {
-	ID         int64
-	AccessHash int64
-	Title      string
-	Username   string
-	Creator    bool
-	Admin      bool
+	ID         int64  `json:"id"`
+	AccessHash int64  `json:"-"`
+	ChatID     int64  `json:"chat_id"`
+	Title      string `json:"title"`
+	Username   string `json:"username"`
+	Creator    bool   `json:"creator"`
+	Admin      bool   `json:"admin"`
 }
 
 // List 列出当前 user 能管理的频道/超级群。
@@ -53,6 +57,7 @@ func List(ctx context.Context, api API) ([]Item, error) {
 		out = append(out, Item{
 			ID:         ch.ID,
 			AccessHash: ch.AccessHash,
+			ChatID:     -1000000000000 - ch.ID,
 			Title:      ch.Title,
 			Username:   ch.Username,
 			Creator:    ch.Creator,

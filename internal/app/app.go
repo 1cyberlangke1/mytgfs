@@ -11,7 +11,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
@@ -28,7 +30,9 @@ import (
 const (
 	DefaultConfigPath  = "config.toml"
 	DefaultSessionPath = "secrets/bot.session"
-	DefaultKeyPath     = "secrets/session.key"
+	// DefaultUserSessionPath 是 user 会话（建频道、列频道这类 bot 做不到的操作）。
+	DefaultUserSessionPath = "secrets/user.session"
+	DefaultKeyPath         = "secrets/session.key"
 	// DefaultVolumeName 是无 [[volumes]] 段时的隐式卷名。
 	DefaultVolumeName = "mytgfs"
 )
@@ -37,7 +41,9 @@ const (
 type Options struct {
 	ConfigPath  string // 默认 config.toml
 	SessionPath string // 默认 secrets/bot.session
-	KeyPath     string // 默认 secrets/session.key
+	// UserSessionPath 是 user 会话路径，默认 secrets/user.session
+	UserSessionPath string
+	KeyPath         string // 默认 secrets/session.key
 	// Bus 可选：非空时卷的可见变化会以 status 事件推给订阅者
 	Bus *eventbus.Bus
 }
@@ -54,6 +60,15 @@ type errMissingAPIHash struct{}
 func (errMissingAPIHash) Error() string { return i18n.T("err.missing_api_hash") }
 
 var ErrMissingAPIHash error = errMissingAPIHash{}
+
+// ErrUserSessionMissing 表示本机还没有 user 会话。
+//
+// 列表/建频道这类操作 bot 会话做不到，必须先 `mytgfs auth login --user` 登录一次。
+type errUserSessionMissing struct{}
+
+func (errUserSessionMissing) Error() string { return i18n.T("err.user_session_missing") }
+
+var ErrUserSessionMissing error = errUserSessionMissing{}
 
 // App 持有已读取的配置，后续所有装配都基于它。
 type App struct {
@@ -108,6 +123,47 @@ func (a *App) Volume(name string) (config.Volume, string, bool) {
 // Index 打开卷的本地索引；调用方负责 Close。
 func (a *App) Index(volumeName string) (*index.Index, error) {
 	return index.Open(datadir.Path("index-" + volumeName + ".db"))
+}
+
+// Channels 用 user 会话列出当前账号可管理的频道。
+//
+// 输入：ctx（整体超时由调用方决定）
+// 输出：频道列表，含原始 id 与 -100... 形式的 chat_id
+// 预期：
+//   - 临时开一条 user 连接，取完列表立即退出，不常驻
+//   - 只返回自己创建或有管理权限的频道/超级群；bot 会话无法列出对话
+//   - user 会话文件不存在时返回 ErrUserSessionMissing
+func (a *App) Channels(ctx context.Context) ([]channel.Item, error) {
+	userSession := a.userSessionPath()
+	if _, err := os.Stat(userSession); err != nil {
+		return nil, ErrUserSessionMissing
+	}
+	apiHash := a.cfg.APIHash()
+	if apiHash == "" {
+		return nil, ErrMissingAPIHash
+	}
+	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+	}
+	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: userSession, Key: key},
+		tgclient.Options{})
+
+	var items []channel.Item
+	var listErr error
+	runErr := client.Run(ctx, func(ctx context.Context) error {
+		items, listErr = channel.List(ctx, client.API())
+		// 返回 nil 让 gotd 收尾退出；真正的列表错误单独带出去，避免被包成 callback 错误
+		return nil
+	})
+	if listErr != nil {
+		return nil, listErr
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	return items, nil
 }
 
 // Session 是 Run 回调内可用的已连接卷。

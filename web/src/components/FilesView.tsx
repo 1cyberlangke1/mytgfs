@@ -51,6 +51,7 @@ import {
   interpolate,
 } from '../utils/i18n';
 import { motion } from 'motion/react';
+import { listChannels as apiListChannels } from '../api';
 import { RichFileTypeEmblem } from './VisualAssets';
 import { FolderTree } from './FolderTree';
 import { Button, IOS_BOUNCE_SPRING, Input, Select, useInterruptibleViewSpring } from './ui';
@@ -78,11 +79,26 @@ interface FilesViewProps {
   canCreateVolume: boolean;
   canDeleteVolume: boolean;
   canAttachVolume: boolean;
+  canListChannels: boolean;
   onCreateVolume: (name: string, title: string, point: string) => void;
   onAttachVolume: (name: string, chatId: number) => void;
   onDeleteVolume: (name: string) => void;
   onSetCover: (volumeId: string, file: File) => void;
   onRemoveCover: (volumeId: string) => void;
+}
+
+// suggestVolumeName 按频道标题猜一个合法卷名。
+//
+// 输入：title 频道标题；id 频道 id
+// 输出：只含 [A-Za-z0-9_-]、最长 32 的名字；标题全是中文时回落 ch-<id>
+// 预期：只做建议，用户可以在表单里改
+function suggestVolumeName(title: string, id: number): string {
+  const cleaned = title
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  return cleaned || `ch-${id}`;
 }
 
 // validateEntryName 校验重命名输入，返回错误文案或空串。
@@ -148,6 +164,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   canCreateVolume,
   canDeleteVolume,
   canAttachVolume,
+  canListChannels,
   onCreateVolume,
   onAttachVolume,
   onDeleteVolume,
@@ -163,6 +180,38 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const [newVolume, setNewVolume] = useState({ name: '', title: '', point: '' });
   const [showAttachVolume, setShowAttachVolume] = useState(false);
   const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
+  // 频道列表按需加载：只有打开弹窗并点「载入」时才连 Telegram
+  const [channels, setChannels] = useState<
+    { id: number; chat_id: number; title: string; username: string; creator: boolean; admin: boolean }[]
+  >([]);
+  const [channelsState, setChannelsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [channelsError, setChannelsError] = useState('');
+
+  // loadChannels 读取 user 账号可管理的频道。
+  //
+  // 输入：无；输出：更新 channels / channelsState
+  // 预期：失败把原始原因内联显示，不弹窗打断
+  const loadChannels = () => {
+    setChannelsState('loading');
+    setChannelsError('');
+    apiListChannels()
+      .then((res) => {
+        setChannels(res.channels ?? []);
+        setChannelsState('ready');
+      })
+      .catch((err) => {
+        setChannelsError(err instanceof Error ? err.message : String(err));
+        setChannelsState('error');
+      });
+  };
+
+  // pickChannel 选中频道：填 chat_id，卷名为空时按标题给个建议名
+  const pickChannel = (ch: { id: number; chat_id: number; title: string }) => {
+    setAttachForm((v) => ({
+      name: v.name || suggestVolumeName(ch.title, ch.id),
+      chatId: String(ch.chat_id),
+    }));
+  };
   const [showDeleteVolume, setShowDeleteVolume] = useState(false);
   const [deleteVolumeInput, setDeleteVolumeInput] = useState('');
   const [showRemoveCover, setShowRemoveCover] = useState(false);
@@ -449,6 +498,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
               variant="outline"
               onClick={() => {
                 setAttachForm({ name: '', chatId: '' });
+                setChannels([]);
+                setChannelsState('idle');
+                setChannelsError('');
                 setShowAttachVolume(true);
               }}
             >
@@ -1446,6 +1498,70 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 {t.volume.attachDesc}
               </p>
             </div>
+
+            {canListChannels && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium">{t.volume.pickChannel}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={loadChannels}
+                    disabled={channelsState === 'loading'}
+                  >
+                    {channelsState === 'loading' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <List className="w-3.5 h-3.5" />
+                    )}
+                    <span>{t.volume.loadChannels}</span>
+                  </Button>
+                </div>
+                {channelsState === 'error' && (
+                  <p className="text-[11px] text-rose-500 break-words">
+                    {t.volume.channelsFailed}: {channelsError}
+                  </p>
+                )}
+                {channelsState === 'ready' && channels.length === 0 && (
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.volume.channelsEmpty}</p>
+                )}
+                {channels.length > 0 && (
+                  <div
+                    className="max-h-40 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800 custom-scrollbar"
+                    role="listbox"
+                    aria-label={t.volume.pickChannel}
+                  >
+                    {channels.map((ch) => (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        role="option"
+                        aria-selected={String(ch.chat_id) === attachForm.chatId}
+                        onClick={() => pickChannel(ch)}
+                        className={`w-full text-left px-3 py-2 transition-colors ${
+                          String(ch.chat_id) === attachForm.chatId
+                            ? 'bg-sky-50 dark:bg-sky-500/10'
+                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <span className="block text-xs font-medium truncate text-zinc-900 dark:text-zinc-100">
+                          {ch.title || ch.username || String(ch.id)}
+                        </span>
+                        <span
+                          className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
+                          dir="ltr"
+                        >
+                          {ch.chat_id}
+                          {ch.username ? ` · @${ch.username}` : ''}
+                          {ch.creator ? ' · owner' : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <label htmlFor="attach-volume-name" className="block text-xs font-medium">
                 {t.volume.nameLabel}

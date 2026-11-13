@@ -128,3 +128,29 @@ func TestVolumeResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestChannelsRequiresUserSession 没有 user 会话时直接返回哨兵错误，不连网络。
+//
+// 输入：Options.UserSessionPath 指向不存在的文件
+// 输出：ErrUserSessionMissing
+// 预期：getDialogs 只有 user 能做，缺会话时不能退化成空列表骗前端
+func TestChannelsRequiresUserSession(t *testing.T) {
+	a := New(config.Config{Telegram: config.Telegram{APIID: 1}}, Options{
+		UserSessionPath: filepath.Join(t.TempDir(), "user.session"),
+	})
+	if _, err := a.Channels(context.Background()); !errors.Is(err, ErrUserSessionMissing) {
+		t.Fatalf("错误 = %v，期望缺 user 会话", err)
+	}
+}
+
+// TestChannelsRequiresAPIHash 会话文件存在但缺 api_hash 时也在联网前失败。
+func TestChannelsRequiresAPIHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "user.session")
+	if err := os.WriteFile(path, []byte("session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(config.Config{Telegram: config.Telegram{APIID: 1}}, Options{UserSessionPath: path})
+	if _, err := a.Channels(context.Background()); !errors.Is(err, ErrMissingAPIHash) {
+		t.Fatalf("错误 = %v，期望缺 api_hash", err)
+	}
+}

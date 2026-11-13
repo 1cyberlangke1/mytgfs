@@ -339,6 +339,12 @@
     "chatIdHint": "-100 开头的 chat_id 或裸频道 id，例如 -1003536007396",
     "attachConfirm": "添加",
     "attachSuccess": "已挂载频道为卷 {name}",
-    "chatIdInvalid": "频道 id 不合法"
+    "chatIdInvalid": "频道 id 不合法",
+    "pickChannel": "从账号频道里选",
+    "loadChannels": "载入频道列表",
+    "channelsLoading": "正在读取频道…",
+    "channelsEmpty": "没有可管理的频道，先建好频道并把 bot 设为管理员",
+    "channelsFailed": "读取频道失败",
+    "chatIdFilled": "已填入频道 {title}"
   }
 }

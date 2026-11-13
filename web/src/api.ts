@@ -48,7 +48,12 @@ export interface ApiQueueItem {
 
 export interface ApiState {
   volumes: ApiVolume[];
-  caps?: { createVolume?: boolean; deleteVolume?: boolean; attachVolume?: boolean };
+  caps?: {
+    createVolume?: boolean;
+    deleteVolume?: boolean;
+    attachVolume?: boolean;
+    listChannels?: boolean;
+  };
   status?: {
     state?: string;
     state_code?: string;
@@ -242,6 +247,23 @@ export function createVolume(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, title, point }),
   });
+}
+
+// listChannels 列出 user 账号里可管理的频道，供「添加已有频道」下拉使用。
+//
+// 输入：无；输出：频道数组（chat_id 已转成 -100... 形式）
+// 预期：!user 会话时抛 ApiError，调用方显示原因
+export function listChannels(): Promise<{
+  channels: {
+    id: number;
+    chat_id: number;
+    title: string;
+    username: string;
+    creator: boolean;
+    admin: boolean;
+  }[];
+}> {
+  return request('/api/channels');
 }
 
 // attachVolume 把已有频道挂成卷：后端只读校验后写配置。

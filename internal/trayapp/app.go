@@ -619,6 +619,10 @@ func Run(opts Options) error {
 					"title":      res.Title,
 				}, nil
 			},
+			// 列频道：getDialogs 只有 user 会话能做，复用装配根开临时连接
+			Channels: func(ctx context.Context) ([]channel.Item, error) {
+				return app.New(cfg, app.Options{}).Channels(ctx)
+			},
 			// 文件管理：复用挂载时创建的 WebDAV 后端，不加额外连接
 			Files: func(name string) (fm.Files, bool) {
 				volMu.Lock()

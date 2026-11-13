@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 )
@@ -37,6 +38,13 @@ type DeleteVolumeFunc func(ctx context.Context, name string) error
 // 预期：频道不可见或 bot 无发言权时报错，不写配置
 type AttachVolumeFunc func(ctx context.Context, name string, chatID int64) (any, error)
 
+// ChannelsFunc 列出 user 会话可管理的频道。
+//
+// 输入：ctx
+// 输出：频道摘要（含 -100... 形式的 chat_id）
+// 预期：只读；user 会话缺失时报错，由 handler 转成人话
+type ChannelsFunc func(ctx context.Context) ([]channel.Item, error)
+
 // Options 是面板的可选能力，零值表示只提供只读状态。
 type Options struct {
 	Status StatusFunc
@@ -47,6 +55,8 @@ type Options struct {
 	DeleteVolume DeleteVolumeFunc
 	// AttachVolume 为 nil 时「添加已有频道」返回 501
 	AttachVolume AttachVolumeFunc
+	// Channels 为 nil 时频道下拉为空，只能手填 chat_id
+	Channels ChannelsFunc
 	// Files 返回指定卷的文件管理后端；nil 表示不提供文件管理
 	Files func(volume string) (fm.Files, bool)
 	// Volumes 返回可管理卷名，按配置顺序
@@ -112,6 +122,7 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/cover", handleVolumeCover(api))
 	mux.Handle("/api/volumes", handleAPIVolumes(opts))
 	mux.Handle("/api/volumes/attach", handleAPIAttachVolume(opts))
+	mux.Handle("/api/channels", handleAPIChannels(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
 	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))

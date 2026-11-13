@@ -336,5 +336,7 @@
   "err.volume_config_append_prefix": "cannot write config",
   "err.volume_chat_id_invalid": "invalid channel id, expected -100... or bare id",
   "err.volume_attach_unavailable": "attaching an existing channel is unavailable here",
-  "cli.flag.chat_id": "channel id: -100... or bare id"
+  "cli.flag.chat_id": "channel id: -100... or bare id",
+  "err.user_session_missing": "no user session yet: run mytgfs auth login once",
+  "err.channels_unavailable": "listing channels is unavailable here, enter the chat id manually"
 }
