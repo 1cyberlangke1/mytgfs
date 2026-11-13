@@ -49,6 +49,21 @@ func (f *fakeFiles) List(_ context.Context, dir string) ([]fm.Entry, error) {
 	return f.entries[dir], nil
 }
 
+// Search 在当前目录条目里按名字子串过滤，模拟索引搜索。
+func (f *fakeFiles) Search(_ context.Context, dir, query string, limit int) ([]fm.SearchHit, error) {
+	var out []fm.SearchHit
+	for _, e := range f.entries[dir] {
+		if !strings.Contains(strings.ToLower(e.Name), strings.ToLower(query)) {
+			continue
+		}
+		out = append(out, fm.SearchHit{Path: path.Join(dir, e.Name), Dir: e.Dir, Size: e.Size, Mod: e.Mod})
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (f *fakeFiles) Info(_ context.Context, p string) (fm.Entry, error) {
 	for _, list := range f.entries {
 		for _, e := range list {
@@ -150,15 +165,16 @@ func newTestAPI(f *fakeFiles) *filesAPI {
 	return newFilesAPI(
 		func(string) (fm.Files, bool) { return f, true },
 		func() []string { return []string{"demo"} },
+		func(string) (int64, int64, bool) { return 2, 4096, true },
 		"",
 	)
 }
 
 func TestNewFilesAPINilWhenIncomplete(t *testing.T) {
-	if newFilesAPI(nil, func() []string { return nil }, "") != nil {
+	if newFilesAPI(nil, func() []string { return nil }, nil, "") != nil {
 		t.Error("缺 manager 时应退化成 nil")
 	}
-	if newFilesAPI(func(string) (fm.Files, bool) { return nil, false }, nil, "") != nil {
+	if newFilesAPI(func(string) (fm.Files, bool) { return nil, false }, nil, nil, "") != nil {
 		t.Error("缺 volumes 时应退化成 nil")
 	}
 }
@@ -443,4 +459,169 @@ func uploadRequest(t *testing.T, files map[string]string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/frag/files/upload", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
+}
+
+// TestCleanRelPath 保留子目录、拒绝越界。
+func TestCleanRelPath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"a.txt", "a.txt", true},
+		{"sub/dir/a.txt", "sub/dir/a.txt", true},
+		{`sub\dir\a.txt`, "sub/dir/a.txt", true},
+		{"/sub/a.txt", "sub/a.txt", true},
+		{"", "", false},
+		{"../etc/passwd", "", false},
+		{"sub/../../a", "", false},
+		{"./sub/a", "sub/a", true},
+	}
+	for _, c := range cases {
+		got, ok := cleanRelPath(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("cleanRelPath(%q) = %q,%v，期望 %q,%v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// TestUploadTarget 相对路径拼到当前目录，非法路径不落点。
+func TestUploadTarget(t *testing.T) {
+	got, err := uploadTarget("/docs", "sub/a.txt", "ignored.txt")
+	if err != nil || got != "/docs/sub/a.txt" {
+		t.Fatalf("拼接失败: %q %v", got, err)
+	}
+	got, err = uploadTarget("/docs", "", "a.txt")
+	if err != nil || got != "/docs/a.txt" {
+		t.Fatalf("无 rel 时应落到当前目录: %q %v", got, err)
+	}
+	if _, err := uploadTarget("/docs", "../x", "a.txt"); err == nil {
+		t.Fatal("越界路径应被拒绝")
+	}
+	if _, err := uploadTarget("/docs", "sub/", "../x"); err == nil {
+		t.Fatal("非法文件名应被拒绝")
+	}
+}
+
+// TestSortEntriesDirsFirst 排序后目录仍在前，倒序也不混排。
+func TestSortEntriesDirsFirst(t *testing.T) {
+	entries := []fm.Entry{
+		{Name: "b.bin", Size: 20},
+		{Name: "zdir", Dir: true},
+		{Name: "a.bin", Size: 10},
+		{Name: "adir", Dir: true},
+	}
+	sortEntries(entries, "size", false)
+	if !entries[0].Dir || !entries[1].Dir || entries[0].Name != "adir" {
+		t.Fatalf("目录应排在前且按名称: %+v", entries)
+	}
+	if entries[2].Name != "a.bin" || entries[3].Name != "b.bin" {
+		t.Fatalf("文件应按大小升序: %+v", entries)
+	}
+	sortEntries(entries, "size", true)
+	if !entries[0].Dir {
+		t.Fatalf("倒序时目录仍应在前: %+v", entries)
+	}
+	if entries[2].Name != "b.bin" {
+		t.Fatalf("倒序应按大小降序: %+v", entries)
+	}
+}
+
+// TestMediaKind 只认浏览器原生可播的格式。
+func TestMediaKind(t *testing.T) {
+	cases := map[string]string{
+		"a.mp4": "video", "a.WEBM": "video", "a.mp3": "audio",
+		"a.pdf": "pdf", "a.PNG": "image", "a.bin": "", "a.txt": "",
+	}
+	for name, want := range cases {
+		if got := mediaKind(name); got != want {
+			t.Errorf("mediaKind(%q) = %q，期望 %q", name, got, want)
+		}
+	}
+}
+
+// TestFragFilesBatchDelete 批量删除逐个调用后端。
+func TestFragFilesBatchDelete(t *testing.T) {
+	f := newFakeFiles()
+	req := formRequest("/frag/files/batch", "vol=demo&dir=%2F&action=delete&paths=%2Fa.bin&paths=%2Fb.bin")
+	rec := httptest.NewRecorder()
+	handleFragFilesBatch(newTestAPI(f))(rec, req)
+	if len(f.removed) != 2 {
+		t.Fatalf("应删除 2 项，实际 %v", f.removed)
+	}
+	if !strings.Contains(rec.Body.String(), "class=\"ok\"") {
+		t.Errorf("缺少成功反馈: %s", rec.Body.String())
+	}
+}
+
+// TestFragFilesBatchMove 批量移动拼出目标目录下的同名路径。
+func TestFragFilesBatchMove(t *testing.T) {
+	f := newFakeFiles()
+	req := formRequest("/frag/files/batch", "vol=demo&dir=%2F&action=move&to=%2Fdst&paths=%2Fa.bin")
+	rec := httptest.NewRecorder()
+	handleFragFilesBatch(newTestAPI(f))(rec, req)
+	if len(f.moves) != 1 || f.moves[0] != [2]string{"/a.bin", "/dst/a.bin"} {
+		t.Fatalf("移动参数不符: %v", f.moves)
+	}
+}
+
+// TestFragFilesBatchRequiresSelection 没勾选时给出提示且不动后端。
+func TestFragFilesBatchRequiresSelection(t *testing.T) {
+	f := newFakeFiles()
+	req := formRequest("/frag/files/batch", "vol=demo&dir=%2F&action=delete")
+	rec := httptest.NewRecorder()
+	handleFragFilesBatch(newTestAPI(f))(rec, req)
+	if len(f.removed) != 0 {
+		t.Fatalf("不应删除: %v", f.removed)
+	}
+	if !strings.Contains(rec.Body.String(), `class="err"`) {
+		t.Errorf("应有错误反馈: %s", rec.Body.String())
+	}
+}
+
+// TestFragFilesUploadKeepsRelativePath 目录上传按 rel 保留子目录。
+func TestFragFilesUploadKeepsRelativePath(t *testing.T) {
+	f := newFakeFiles()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("vol", "demo")
+	_ = mw.WriteField("dir", "/root")
+	_ = mw.WriteField("rel", "sub/a.txt")
+	fw, _ := mw.CreateFormFile("file", "a.txt")
+	_, _ = fw.Write([]byte("hello"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/frag/files/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	handleFragFilesUpload(newTestAPI(f))(rec, req)
+	if f.uploads["/root/sub/a.txt"] != "hello" {
+		t.Fatalf("落点不符: %v", f.uploads)
+	}
+}
+
+// TestFragPlayChoosesElement 视频用 video、PDF 用 iframe，缺失文件给提示。
+func TestFragPlayChoosesElement(t *testing.T) {
+	f := newFakeFiles()
+	f.content["/v.mp4"] = []byte("x")
+	f.content["/d.pdf"] = []byte("x")
+	api := newTestAPI(f)
+
+	rec := httptest.NewRecorder()
+	handleFragPlay(api)(rec, httptest.NewRequest(http.MethodGet, "/frag/play?vol=demo&path=%2Fv.mp4", nil))
+	if body := rec.Body.String(); !strings.Contains(body, "<video") || !strings.Contains(body, "inline=1") {
+		t.Fatalf("视频片段不符: %s", body)
+	}
+
+	rec = httptest.NewRecorder()
+	handleFragPlay(api)(rec, httptest.NewRequest(http.MethodGet, "/frag/play?vol=demo&path=%2Fd.pdf", nil))
+	if body := rec.Body.String(); !strings.Contains(body, "<iframe") {
+		t.Fatalf("PDF 片段不符: %s", body)
+	}
+
+	rec = httptest.NewRecorder()
+	handleFragPlay(api)(rec, httptest.NewRequest(http.MethodGet, "/frag/play?vol=demo&path=%2Fgone.mp4", nil))
+	if body := rec.Body.String(); !strings.Contains(body, `class="err"`) {
+		t.Fatalf("缺失文件应给错误提示: %s", body)
+	}
 }

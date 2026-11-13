@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"golang.org/x/net/webdav"
+
+	"mytgfs/internal/index"
 )
 
 var (
@@ -41,6 +43,8 @@ type Entry struct {
 // Files 是面板需要的文件管理能力。
 type Files interface {
 	List(ctx context.Context, dir string) ([]Entry, error)
+	// Search 递归按名字查找；limit<=0 用默认上限
+	Search(ctx context.Context, dir, query string, limit int) ([]SearchHit, error)
 	Info(ctx context.Context, p string) (Entry, error)
 	Mkdir(ctx context.Context, p string) error
 	Upload(ctx context.Context, p string, r io.Reader) error
@@ -92,6 +96,66 @@ func (m *Manager) List(ctx context.Context, dir string) ([]Entry, error) {
 		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
+	return out, nil
+}
+
+// SearchHit 是递归搜索命中的一条。
+//
+// 与 Entry 的区别：Path 是卷内绝对路径，命中项可能不在当前目录。
+type SearchHit struct {
+	Path string
+	Dir  bool
+	Size int64
+	Mod  time.Time
+}
+
+// Searcher 是底层文件系统的可选能力：索引级递归搜索。
+//
+// dav.FileSystem 实现了它；没有实现的实现会退化成当前目录过滤。
+type Searcher interface {
+	Search(ctx context.Context, dir, query string, limit int) ([]index.SearchHit, error)
+}
+
+// Search 递归搜索名字包含 query 的文件与目录。
+//
+// 输入：dir 起点目录；query 大小写不敏感子串；limit 命中上限（<=0 用默认）
+// 输出：命中项
+// 预期：query 为空返回空结果；底层不支持递归搜索时只过滤当前目录
+func (m *Manager) Search(ctx context.Context, dir, query string, limit int) ([]SearchHit, error) {
+	c, err := clean(dir)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.TrimSpace(query)
+	if needle == "" {
+		return nil, nil
+	}
+	if s, ok := m.fs.(Searcher); ok {
+		hits, herr := s.Search(ctx, c, needle, limit)
+		if herr != nil {
+			return nil, herr
+		}
+		out := make([]SearchHit, 0, len(hits))
+		for _, h := range hits {
+			out = append(out, SearchHit{Path: h.Path, Dir: h.IsDir, Size: h.Size, Mod: time.Unix(h.Mtime, 0)})
+		}
+		return out, nil
+	}
+	entries, lerr := m.List(ctx, c)
+	if lerr != nil {
+		return nil, lerr
+	}
+	lower := strings.ToLower(needle)
+	var out []SearchHit
+	for _, e := range entries {
+		if !strings.Contains(strings.ToLower(e.Name), lower) {
+			continue
+		}
+		out = append(out, SearchHit{Path: path.Join(c, e.Name), Dir: e.Dir, Size: e.Size, Mod: e.Mod})
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
 }
 

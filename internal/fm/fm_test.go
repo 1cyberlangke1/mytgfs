@@ -418,3 +418,27 @@ func TestOpenReads(t *testing.T) {
 		t.Errorf("内容 = %q", b)
 	}
 }
+
+// TestSearchFallsBackToList 底层没有索引搜索时只过滤当前目录。
+func TestSearchFallsBackToList(t *testing.T) {
+	mfs := newMemFS()
+	for name, body := range map[string]string{"/a.txt": "a", "/b.txt": "b"} {
+		mfs.files[name] = []byte(body)
+	}
+	m := New(mfs)
+
+	hits, err := m.Search(context.Background(), "/", "A.", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Path != "/a.txt" || hits[0].Dir {
+		t.Fatalf("退化搜索应只命中当前目录的文件: %+v", hits)
+	}
+
+	if hits, err := m.Search(context.Background(), "/", "  ", 0); err != nil || len(hits) != 0 {
+		t.Fatalf("空查询应返回空: %+v %v", hits, err)
+	}
+	if _, err := m.Search(context.Background(), "/..", "a", 0); err == nil {
+		t.Fatal("越界路径应被拒绝")
+	}
+}

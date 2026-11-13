@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,6 +36,16 @@ type Entry struct {
 	Name  string
 	IsDir bool
 	File  *File
+}
+
+// SearchHit 是递归搜索命中的一条记录。
+//
+// 与 Entry 的区别：Path 是卷内绝对路径，搜索结果跨目录时必须带上。
+type SearchHit struct {
+	Path  string
+	IsDir bool
+	Size  int64
+	Mtime int64
 }
 
 // MetaKeyChannelPts 是频道 pts 游标在 meta 表里的键名。
@@ -413,6 +425,58 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// defaultSearchLimit 是搜索默认返回的最大命中数。
+const defaultSearchLimit = 500
+
+// Search 在 dir 子树里按名字子串查找文件与目录。
+//
+// 输入：dir 起点目录；query 大小写不敏感子串；limit 最大命中数（<=0 用默认值）
+// 输出：命中项，目录在前、同类型按路径升序
+// 预期：
+//   - 只匹配路径最后一段，父目录名字不参与命中
+//   - query 为空时返回空结果，不是全量
+func (i *Index) Search(ctx context.Context, dir, query string, limit int) ([]SearchHit, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	files, err := i.ListPrefix(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	dirs, err := i.Dirs(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	root := normalizeDir(dir)
+	out := make([]SearchHit, 0, 16)
+	for _, p := range dirs {
+		if p == root || !strings.Contains(strings.ToLower(path.Base(p)), q) {
+			continue
+		}
+		out = append(out, SearchHit{Path: p, IsDir: true})
+	}
+	for _, f := range files {
+		if !strings.Contains(strings.ToLower(path.Base(f.Path)), q) {
+			continue
+		}
+		out = append(out, SearchHit{Path: f.Path, Size: f.Size, Mtime: f.Mtime})
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].IsDir != out[b].IsDir {
+			return out[a].IsDir
+		}
+		return out[a].Path < out[b].Path
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // Dirs 返回目录下所有显式目录（含深层）。

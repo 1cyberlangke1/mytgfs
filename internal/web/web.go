@@ -82,6 +82,8 @@ type Options struct {
 	Files func(volume string) (fm.Files, bool)
 	// Volumes 返回可管理卷名，按配置顺序
 	Volumes func() []string
+	// Stats 返回卷内文件数与已用字节；nil 时卷标签不显示用量
+	Stats func(volume string) (files, used int64, ok bool)
 	// Mount 控制 WebDAV 挂盘开关；nil 表示不支持
 	Mount *MountControl
 	// Bus 用于把配置/挂载变更推给所有页面；nil 时 /events 返回 501
@@ -97,7 +99,7 @@ type Options struct {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时状态为空列表
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
-	api := newFilesAPI(opts.Files, opts.Volumes, opts.ThumbDir)
+	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
 	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, opts.Sync != nil, configPath, api, opts.Mount))
 	// htmx 与面板脚本随二进制分发：不依赖任何外网 CDN
 	mux.HandleFunc("/static/htmx.min.js", handleAsset("application/javascript; charset=utf-8", htmxJS))
@@ -116,9 +118,11 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	mux.HandleFunc("/frag/files/mkdir", handleFragFilesMkdir(api))
 	mux.HandleFunc("/frag/files/remove", handleFragFilesRemove(api))
 	mux.HandleFunc("/frag/files/move", handleFragFilesMove(api))
+	mux.HandleFunc("/frag/files/batch", handleFragFilesBatch(api))
 	mux.HandleFunc("/files/download", handleFileDownload(api))
 	mux.HandleFunc("/files/thumb", handleFileThumb(api))
 	mux.HandleFunc("/frag/details", handleFragDetails(api))
+	mux.HandleFunc("/frag/play", handleFragPlay(api))
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
@@ -155,6 +159,11 @@ type pageLabels struct {
 	FilesDone, NetError                                         string
 	FilesDetails, FilesPath                                     string
 	FilesPrev, FilesNext                                        string
+	// 搜索 / 排序 / 播放 / 批量
+	FilesSearch, FilesSortName, FilesSortSize, FilesSortMod string
+	FilesSortDesc, FilesPlay, FilesClose, FilesSelectAll    string
+	FilesBatchDelete, FilesBatchMoveTo, FilesBatchGo        string
+	FilesDrop, FilesDirUpload                               string
 	// CanCreate 决定建卷卡片是否渲染
 	CanCreate bool
 	// 挂载为网络驱动器
@@ -223,6 +232,20 @@ func loadLabels(canCreate bool) pageLabels {
 		FilesNext:      i18n.T("web.files_next"),
 		FilesPath:      i18n.T("web.files_path"),
 		NetError:       i18n.T("web.net_error"),
+
+		FilesSearch:      i18n.T("web.files_search"),
+		FilesSortName:    i18n.T("web.files_sort_name"),
+		FilesSortSize:    i18n.T("web.files_sort_size"),
+		FilesSortMod:     i18n.T("web.files_sort_mod"),
+		FilesSortDesc:    i18n.T("web.files_sort_desc"),
+		FilesPlay:        i18n.T("web.files_play"),
+		FilesClose:       i18n.T("web.files_close"),
+		FilesSelectAll:   i18n.T("web.files_select_all"),
+		FilesBatchDelete: i18n.T("web.files_batch_delete"),
+		FilesBatchMoveTo: i18n.T("web.files_batch_move_to"),
+		FilesBatchGo:     i18n.T("web.files_batch_go"),
+		FilesDrop:        i18n.T("web.files_drop"),
+		FilesDirUpload:   i18n.T("web.files_dir_upload"),
 
 		Mount:            i18n.T("web.mount"),
 		MountOn:          i18n.T("web.mount_on"),
@@ -991,10 +1014,11 @@ input:hover,textarea:hover{border-color:var(--line-strong)}
   position:sticky;top:0;z-index:1;padding:8px 10px;
   background:var(--head-bg);backdrop-filter:blur(6px);
 }
-.ftable th:nth-child(1){width:auto}
-.ftable th:nth-child(2){width:110px}
-.ftable th:nth-child(3){width:168px}
-.ftable th:nth-child(4){width:1%;white-space:nowrap}
+.ftable th:nth-child(1){width:34px}
+.ftable th:nth-child(2){width:auto}
+.ftable th:nth-child(3){width:110px}
+.ftable th:nth-child(4){width:168px}
+.ftable th:nth-child(5){width:1%;white-space:nowrap}
 .ftable td{padding:10px;border-bottom:1px solid var(--line)}
 .ftable tbody tr{transition:background-color .12s ease}
 .ftable tbody tr:hover{background:var(--row-hover)}
@@ -1047,6 +1071,43 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
 .upwrap[hidden]{display:none}
 .upwrap i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .18s ease}
 
+/* 搜索/排序/批量工具栏 */
+.fsearch{display:flex;gap:8px;align-items:center;flex:1 1 260px;min-width:0}
+.fsearch input{flex:1 1 160px;min-width:0}
+.fsorts .flabel{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.fsorts button{min-height:28px;padding:4px 11px;font-size:12.5px}
+.fsorts button.on{color:var(--text);background:var(--row-hover);border-color:var(--line-strong)}
+.fbatch{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:var(--row-hover)}
+.fbatch select,.fbatch input{min-height:30px;padding:5px 9px;font-size:12.5px}
+.fbatch .chk{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.fbatch input[type=checkbox]{width:15px;height:15px;min-height:0;padding:0}
+.ftable .pick{width:34px;padding-right:0}
+.ftable .pick input{width:15px;height:15px;min-height:0;padding:0}
+.fnote{display:block;margin-top:2px;font-size:11.5px;color:var(--muted)}
+.hidden{display:none!important}
+
+/* 拖拽上传 */
+.fwrap{position:relative}
+.dropzone{
+  position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;
+  border:2px dashed var(--blue);border-radius:14px;background:rgba(42,167,224,.12);
+  color:var(--text);font-size:14px;backdrop-filter:blur(2px);
+}
+.dropzone[hidden]{display:none}
+
+/* 播放浮层 */
+.playerwrap{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62)}
+.playerwrap[hidden]{display:none}
+.playbox{width:min(1040px,100%);max-height:100%;display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid var(--line-strong);border-radius:16px;background:var(--card);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.playhead{display:flex;align-items:center;gap:12px}
+.playhead .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.playhead .meta{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.playhead .btn,.playhead button{margin-left:auto}
+.playhead button{margin-left:0}
+.playbox video,.playbox audio{width:100%;border-radius:10px;background:#000}
+.playimg{max-width:100%;max-height:70vh;object-fit:contain;border-radius:10px;align-self:center}
+.pdframe{width:100%;height:70vh;border:0;border-radius:10px;background:#fff}
+
 /* 统一滚动条（Firefox / WebKit） */
 *{scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -1057,7 +1118,7 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
 @media(max-width:640px){
   .card{padding:16px;border-radius:16px}
   .stat strong{font-size:17px}
-  .ftable td:nth-child(3),.ftable th:nth-child(3){display:none}
+  .ftable td:nth-child(4),.ftable th:nth-child(4){display:none}
   .acts .btn,.acts button{min-height:34px}
   .fup,.fmk{flex-wrap:wrap;flex-basis:100%}
   .fmk input,.fup input[type=file]{flex:1 1 100%;width:100%}
@@ -1200,6 +1261,7 @@ input[type=file]::file-selector-button:hover{background:var(--row-hover);border-
         <span>{{.Labels.Files}}</span>
       </h2>
       <div id="browser">{{template "browser" .Browser}}</div>
+      <div id="player" class="playerwrap" hidden></div>
     </section>
 {{end}}
     <section class="card" style="grid-column:1/-1">

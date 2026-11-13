@@ -508,6 +508,22 @@ func runWeb(args []string) {
 				}
 				return names
 			},
+			// 卷用量：面板卷标签直接显示文件数与占用
+			Stats: func(name string) (int64, int64, bool) {
+				v, ok := vols[name]
+				if !ok {
+					return 0, 0, false
+				}
+				files, ferr := v.idx.CountFiles(ctx)
+				if ferr != nil {
+					return 0, 0, false
+				}
+				used, uerr := v.idx.Used(ctx)
+				if uerr != nil {
+					return 0, 0, false
+				}
+				return int64(files), used, true
+			},
 			Mount: mount,
 			Bus:   bus,
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引

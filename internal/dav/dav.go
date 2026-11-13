@@ -163,6 +163,15 @@ func (d *FileSystem) Mkdir(_ context.Context, name string, _ os.FileMode) error 
 	return d.idx.PutDir(d.ctx, name)
 }
 
+// Search 在索引里递归搜索文件名。
+//
+// 输入：dir 起点目录；query 大小写不敏感子串；limit 命中上限
+// 输出：命中项，目录在前、同类型按路径升序
+// 预期：只读本地索引，不访问 Telegram
+func (d *FileSystem) Search(ctx context.Context, dir, query string, limit int) ([]index.SearchHit, error) {
+	return d.idx.Search(ctx, dir, query, limit)
+}
+
 // OpenFile 打开文件或目录。
 func (d *FileSystem) OpenFile(_ context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
 	name = clean(name)

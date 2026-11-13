@@ -240,12 +240,304 @@ async function refreshConfig(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 拖拽 / 目录上传 / 批量勾选 / 播放浮层
+//
+// 这四件事 htmx 的声明式属性做不到：拖拽要读 DataTransferItem 的目录树，
+// 目录上传要保留 webkitRelativePath，批量要联动复选框，播放浮层要拦截点击。
+// 全部用事件委托挂在 document 上，因为 #browser 会被片段整体替换。
+// ---------------------------------------------------------------------------
+
+declare const htmx: { ajax: (method: string, url: string, opts: Record<string, unknown>) => void };
+
+/** 一条待上传文件：rel 是相对当前目录的路径，保留子目录结构。 */
+interface UploadItem {
+  file: File;
+  rel: string;
+}
+
+/** FileSystemEntry 的最小形状（浏览器只在拖拽里给这个接口）。 */
+interface EntryLike {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file: (ok: (f: File) => void, fail?: (e: unknown) => void) => void;
+  createReader: () => {
+    readEntries: (ok: (list: EntryLike[]) => void, fail?: (e: unknown) => void) => void;
+  };
+}
+
+/**
+ * 单文件 XHR 上传，带进度回调。
+ *
+ * 输入：url；fd 表单；onPct 0..100 回调
+ * 输出：成功 resolve，失败 reject
+ * 预期：非 2xx 视为失败；网络错误也 reject
+ */
+function sendOne(url: string, fd: FormData, onPct: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        onPct(Math.round((ev.loaded * 100) / ev.total));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error("HTTP " + xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.send(fd);
+  });
+}
+
+/**
+ * 逐条上传并刷新列表。
+ *
+ * 输入：items 文件 + 相对路径
+ * 输出：无（结束后用 htmx 重新拉当前目录）
+ * 预期：
+ *   - 串行发送，服务端本来就串行提交，避免白白排队
+ *   - 进度按「已完成文件数 + 当前文件百分比」折算成整体百分比
+ *   - 任一失败就停下并显示网络提示条
+ */
+async function uploadItems(items: UploadItem[]): Promise<void> {
+  const form = document.querySelector<HTMLFormElement>("[data-upload]");
+  if (!form || items.length === 0) {
+    return;
+  }
+  const field = (name: string) => form.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value ?? "";
+  const vol = field("vol");
+  const dir = field("dir");
+  const out = form.querySelector<HTMLElement>("[data-progress]");
+  const wrap = form.querySelector<HTMLElement>("[data-progress-wrap]");
+  const bar = form.querySelector<HTMLElement>("[data-progress-bar]");
+  if (wrap) {
+    wrap.hidden = false;
+  }
+  let done = 0;
+  for (const it of items) {
+    const fd = new FormData();
+    fd.set("vol", vol);
+    fd.set("dir", dir);
+    fd.set("rel", it.rel);
+    fd.set("quiet", "1");
+    fd.set("file", it.file);
+    try {
+      await sendOne("/frag/files/upload", fd, (pct) => {
+        const overall = Math.round((done * 100 + pct) / items.length);
+        if (out) {
+          out.textContent = progressText(out, overall);
+        }
+        if (bar) {
+          bar.style.width = overall + "%";
+        }
+      });
+    } catch {
+      document.getElementById("neterr")?.classList.add("show");
+      break;
+    }
+    done++;
+  }
+  if (out) {
+    out.textContent = progressText(out, 100);
+  }
+  if (bar) {
+    bar.style.width = "100%";
+  }
+  htmx.ajax("GET", `/frag/files?vol=${encodeURIComponent(vol)}&dir=${encodeURIComponent(dir)}`, {
+    target: "#browser",
+    swap: "innerHTML",
+  });
+}
+
+/**
+ * 递归展开拖拽进来的目录。
+ *
+ * 输入：entry 文件或目录；prefix 当前相对路径前缀（以 / 结尾）
+ * 输出：扁平的文件列表
+ * 预期：readEntries 一次最多 100 条，必须循环读到空数组为止
+ */
+async function readEntry(entry: EntryLike, prefix: string): Promise<UploadItem[]> {
+  if (entry.isFile) {
+    const f = await new Promise<File>((ok, fail) => entry.file(ok, fail));
+    return [{ file: f, rel: prefix + f.name }];
+  }
+  if (!entry.isDirectory) {
+    return [];
+  }
+  const reader = entry.createReader();
+  const out: UploadItem[] = [];
+  for (;;) {
+    const batch = await new Promise<EntryLike[]>((ok, fail) => reader.readEntries(ok, fail));
+    if (batch.length === 0) {
+      break;
+    }
+    for (const child of batch) {
+      out.push(...(await readEntry(child, prefix + entry.name + "/")));
+    }
+  }
+  return out;
+}
+
+/** 拖拽上传：进入文件区域时显示提示层，松手后递归收集并上传。 */
+function initDropzone(): void {
+  let depth = 0;
+  const zoneOf = (ev: DragEvent) =>
+    (ev.target as Element | null)?.closest?.("[data-drop]") ?? null;
+  const hint = (zone: Element | null, show: boolean) => {
+    const el = zone?.querySelector<HTMLElement>("[data-dropzone]");
+    if (el) {
+      el.hidden = !show;
+    }
+  };
+
+  document.addEventListener("dragenter", (ev) => {
+    const zone = zoneOf(ev);
+    if (!zone) {
+      return;
+    }
+    ev.preventDefault();
+    depth++;
+    hint(zone, true);
+  });
+  document.addEventListener("dragover", (ev) => {
+    if (zoneOf(ev)) {
+      ev.preventDefault();
+    }
+  });
+  document.addEventListener("dragleave", (ev) => {
+    const zone = zoneOf(ev);
+    if (!zone) {
+      return;
+    }
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) {
+      hint(zone, false);
+    }
+  });
+  document.addEventListener("drop", (ev) => {
+    const zone = zoneOf(ev);
+    if (!zone) {
+      return;
+    }
+    ev.preventDefault();
+    depth = 0;
+    hint(zone, false);
+    const dt = ev.dataTransfer;
+    if (!dt) {
+      return;
+    }
+    void (async () => {
+      const items: UploadItem[] = [];
+      for (const it of Array.from(dt.items)) {
+        if (it.kind !== "file") {
+          continue;
+        }
+        const entry = (
+          it as DataTransferItem & { webkitGetAsEntry?: () => EntryLike | null }
+        ).webkitGetAsEntry?.() as unknown as EntryLike | null;
+        if (entry) {
+          items.push(...(await readEntry(entry, "")));
+        } else {
+          const f = it.getAsFile();
+          if (f) {
+            items.push({ file: f, rel: f.name });
+          }
+        }
+      }
+      await uploadItems(items);
+    })();
+  });
+}
+
+/** 目录上传：按钮触发隐藏的 webkitdirectory 输入，选完按相对路径上传。 */
+function initDirectoryUpload(): void {
+  document.addEventListener("click", (ev) => {
+    const btn = (ev.target as Element | null)?.closest?.("[data-dirbtn]");
+    if (!btn) {
+      return;
+    }
+    btn.closest("[data-upload]")?.querySelector<HTMLInputElement>("[data-dirpick]")?.click();
+  });
+  document.addEventListener("change", (ev) => {
+    const input = ev.target;
+    if (!(input instanceof HTMLInputElement) || !input.hasAttribute("data-dirpick")) {
+      return;
+    }
+    const files = Array.from(input.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+    const rel = (f: File) =>
+      (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    void uploadItems(files.map((f) => ({ file: f, rel: rel(f) })));
+    input.value = "";
+  });
+}
+
+/** 批量勾选：表头复选框联动所有行内复选框。 */
+function initSelectAll(): void {
+  document.addEventListener("change", (ev) => {
+    const box = ev.target;
+    if (!(box instanceof HTMLInputElement) || !box.hasAttribute("data-checkall")) {
+      return;
+    }
+    document.querySelectorAll<HTMLInputElement>('input[name="paths"]').forEach((el) => {
+      el.checked = box.checked;
+    });
+  });
+}
+
+/** 播放浮层：htmx 把片段塞进 #player 后解除 hidden，关闭键或点背景清空。 */
+function initPlayer(): void {
+  const close = () => {
+    const p = document.getElementById("player");
+    if (!p) {
+      return;
+    }
+    p.innerHTML = "";
+    p.hidden = true;
+  };
+  document.addEventListener("click", (ev) => {
+    const t = ev.target as Element | null;
+    if (t?.closest?.("[data-close-player]")) {
+      ev.preventDefault();
+      close();
+      return;
+    }
+    const p = document.getElementById("player");
+    if (p && !p.hidden && t === p) {
+      close();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      close();
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    const el = (ev as CustomEvent<{ target?: Element }>).detail?.target;
+    if (el && el.id === "player") {
+      (el as HTMLElement).hidden = false;
+    }
+  });
+}
+
 function main(): void {
   initTheme();
   initUploadProgress();
   initMenus();
   initErrorBridge();
   initEvents();
+  initDropzone();
+  initDirectoryUpload();
+  initSelectAll();
+  initPlayer();
 }
 
 if (document.readyState === "loading") {

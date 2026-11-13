@@ -186,5 +186,22 @@
   "err.mount_removed": "盘符挂载已下线：请运行 mytgfs web，在面板开启 WebDAV 后映射盘符",
   "web.no_instance": "没有正在运行的实例",
   "log.tmp_sweep": "已清理过期的上传临时文件",
-  "log.tmp_sweep_failed": "清理上传临时文件失败"
+  "log.tmp_sweep_failed": "清理上传临时文件失败",
+  "web.files_search": "搜索文件名",
+  "web.files_sort_name": "名称",
+  "web.files_sort_size": "大小",
+  "web.files_sort_mod": "时间",
+  "web.files_sort_desc": "倒序",
+  "web.files_play": "播放",
+  "web.files_close": "关闭",
+  "web.files_select_all": "全选",
+  "web.files_batch_delete": "删除所选",
+  "web.files_batch_move_to": "移到目录",
+  "web.files_batch_go": "执行",
+  "web.files_drop": "松开鼠标上传到这里",
+  "web.files_dir_upload": "上传目录",
+  "web.files_select_required": "先勾选要操作的条目",
+  "web.files_deleted_n": "已删除 %d 项",
+  "web.files_moved_n": "已移动 %d 项",
+  "web.files_action_required": "请选择批量操作"
 }

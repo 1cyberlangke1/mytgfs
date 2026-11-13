@@ -477,6 +477,27 @@ func Run(opts Options) error {
 				}
 				return names
 			},
+			// 卷用量：面板卷标签直接显示文件数与占用
+			Stats: func(name string) (int64, int64, bool) {
+				volMu.Lock()
+				vs := append([]*trayVolume(nil), volumes...)
+				volMu.Unlock()
+				for _, v := range vs {
+					if v.name != name {
+						continue
+					}
+					files, ferr := v.idx.CountFiles(context.Background())
+					if ferr != nil {
+						return 0, 0, false
+					}
+					used, uerr := v.idx.Used(context.Background())
+					if uerr != nil {
+						return 0, 0, false
+					}
+					return int64(files), used, true
+				}
+				return 0, 0, false
+			},
 			// 挂盘开关：与托盘菜单共用同一套启停逻辑
 			Mount: &web.MountControl{
 				Status: davState,

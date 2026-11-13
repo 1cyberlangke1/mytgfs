@@ -202,3 +202,43 @@ func TestPendingRoundtrip(t *testing.T) {
 		t.Fatalf("删除后剩余记录不符: %+v", rows)
 	}
 }
+
+// TestSearchMatchesBaseName 只匹配最后一段名字，父目录名不算命中。
+func TestSearchMatchesBaseName(t *testing.T) {
+	idx := newTestIndex(t)
+	ctx := context.Background()
+	for _, f := range []File{
+		{Path: "/photos/report.txt", MessageID: 1, Size: 10},
+		{Path: "/reports/a.txt", MessageID: 2, Size: 20},
+		{Path: "/docs/note.md", MessageID: 3, Size: 30},
+	} {
+		if err := idx.Put(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := idx.PutDir(ctx, "/docs/empty"); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := idx.Search(ctx, "/", "REPORT", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Path != "/photos/report.txt" {
+		t.Fatalf("应只命中文件名: %+v", hits)
+	}
+
+	hits, err = idx.Search(ctx, "/", "empty", 0)
+	if err != nil || len(hits) != 1 || !hits[0].IsDir {
+		t.Fatalf("显式目录也应命中: %+v %v", hits, err)
+	}
+
+	if hits, err = idx.Search(ctx, "/", "  ", 0); err != nil || len(hits) != 0 {
+		t.Fatalf("空查询应返回空: %+v %v", hits, err)
+	}
+
+	hits, err = idx.Search(ctx, "/docs", "a", 1)
+	if err != nil || len(hits) > 1 {
+		t.Fatalf("limit 未生效: %+v %v", hits, err)
+	}
+}

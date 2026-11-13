@@ -186,5 +186,22 @@
   "err.mount_removed": "Drive-letter mounting was removed: run mytgfs web and enable WebDAV in the panel",
   "web.no_instance": "No running instance",
   "log.tmp_sweep": "removed stale upload temp files",
-  "log.tmp_sweep_failed": "failed to sweep upload temp files"
+  "log.tmp_sweep_failed": "failed to sweep upload temp files",
+  "web.files_search": "Search file name",
+  "web.files_sort_name": "Name",
+  "web.files_sort_size": "Size",
+  "web.files_sort_mod": "Modified",
+  "web.files_sort_desc": "Descending",
+  "web.files_play": "Play",
+  "web.files_close": "Close",
+  "web.files_select_all": "Select all",
+  "web.files_batch_delete": "Delete selected",
+  "web.files_batch_move_to": "Move to folder",
+  "web.files_batch_go": "Apply",
+  "web.files_drop": "Drop to upload here",
+  "web.files_dir_upload": "Upload folder",
+  "web.files_select_required": "Select at least one item first",
+  "web.files_deleted_n": "Deleted %d items",
+  "web.files_moved_n": "Moved %d items",
+  "web.files_action_required": "Choose a batch action"
 }
