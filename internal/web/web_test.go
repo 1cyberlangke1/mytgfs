@@ -102,7 +102,7 @@ func TestHandleVolumesConflict(t *testing.T) {
 
 func TestPageInjectsLabels(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handlePage(true, "")(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(true, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
 	// 建卷卡片只在支持建卷时渲染
 	if !strings.Contains(body, `name="name"`) {
@@ -121,7 +121,7 @@ func TestPageInjectsLabels(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	handlePage(false, "")(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, "", nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	out := rec.Body.String()
 	if strings.Contains(out, `name="name"`) {
 		t.Error("create form should be absent when volume creation is disabled")
@@ -139,7 +139,7 @@ func TestPageRendersConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	handlePage(false, path)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	handlePage(false, path, nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec.Body.String(), `point = &#34;Y:&#34;`) {
 		t.Errorf("config not rendered into textarea")
 	}
@@ -300,7 +300,7 @@ func TestFragConfigSavesForm(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/frag/config", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	handleFragConfig(path)(rec, req)
+	handleFragConfig(path, nil)(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `class="ok"`) {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
 	}

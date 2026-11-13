@@ -27,6 +27,9 @@ import (
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/daemon"
 	"mytgfs/internal/datadir"
+	"mytgfs/internal/dav"
+	"mytgfs/internal/eventbus"
+	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/ipc"
@@ -36,6 +39,7 @@ import (
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
+	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/web"
 )
@@ -609,6 +613,13 @@ func runDaemon(args []string) {
 }
 
 // runWeb 启动临时本地 Web 面板。
+// runWeb 启动本地面板。
+//
+// 输入：--port 端口（0 = 随机）、--no-open 不自动开浏览器
+// 输出：无（阻塞到 Ctrl+C）
+// 预期：
+//   - 有可用 bot 凭证时，每个启用的卷都能在面板里浏览/上传/移动/删除
+//   - 凭证失效也不影响面板启动，只是没有文件管理
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	port := fs.Int("port", 0, "port (0 = random)")
@@ -632,8 +643,113 @@ func runWeb(args []string) {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	if err := web.Serve(ctx, addr, "config.toml"); err != nil {
-		fatal(err.Error())
+
+	const cfgPath = "config.toml"
+	serve := func(opts web.Options) error { return web.ServeWith(ctx, addr, cfgPath, opts) }
+
+	cfg, err := config.Load(cfgPath)
+	bus := eventbus.New()
+	if err != nil || cfg.APIHash() == "" {
+		// 没配置也能开面板：只有配置编辑
+		if err := serve(web.Options{Bus: bus}); err != nil {
+			fatal(err.Error())
+		}
+		return
+	}
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+	client := tgclient.New(cfg.Telegram.APIID, cfg.APIHash(),
+		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key}, tgclient.Options{})
+
+	err = client.Run(ctx, func(ctx context.Context) error {
+		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
+		if perr != nil {
+			return perr
+		}
+		defer closePool()
+		vols := openWebVolumes(ctx, cfg, api)
+		defer closeWebVolumes(vols)
+		davSvc, mount := newMountControl(cfgPath, vols)
+		defer davSvc.Stop()
+		return serve(web.Options{
+			Files: func(name string) (fm.Files, bool) {
+				v, ok := vols[name]
+				if !ok {
+					return nil, false
+				}
+				return v.mgr, true
+			},
+			Volumes: func() []string {
+				names := make([]string, 0, len(vols))
+				for _, v := range cfg.Volumes {
+					if _, ok := vols[v.Name]; ok {
+						names = append(names, v.Name)
+					}
+				}
+				return names
+			},
+			Mount: mount,
+			Bus:   bus,
+		})
+	})
+	if err == nil {
+		return
+	}
+	if tgclient.IsAuthLost(err) {
+		fmt.Fprintln(os.Stderr, i18n.T("err.auth_lost_hint"))
+		if serr := serve(web.Options{Bus: bus}); serr != nil {
+			fatal(serr.Error())
+		}
+		return
+	}
+	fatal(err.Error())
+}
+
+// webVolume 是一个卷在面板里用到的后端。
+type webVolume struct {
+	mgr   *fm.Manager
+	davfs *dav.FileSystem
+	idx   *index.Index
+}
+
+// openWebVolumes 为每个启用的卷打开索引与存储。
+//
+// 输入：ctx；cfg 配置；api 已认证的 MTProto 客户端
+// 输出：卷名 → 后端；打开失败的卷直接跳过（面板里就不显示）
+// 预期：只读索引 + 可写存储，每个卷独立 db 文件
+func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.API) map[string]*webVolume {
+	out := map[string]*webVolume{}
+	for _, v := range cfg.Volumes {
+		if !v.Enabled {
+			continue
+		}
+		idx, err := index.Open(datadir.Path("index-" + v.Name + ".db"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, i18n.T("tray.mount.failed", v.Name, err))
+			continue
+		}
+		store := telegramstore.New(api, v.ChatID)
+		store.SetParallel(cfg.Mount.DownloadConnections())
+		store.SetUploadParallel(cfg.Mount.UploadParallelism())
+		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
+		davfs := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
+		out[v.Name] = &webVolume{
+			mgr:   fm.New(davfs),
+			davfs: davfs,
+			idx:   idx,
+		}
+	}
+	return out
+}
+
+// closeWebVolumes 关闭所有索引。
+func closeWebVolumes(vols map[string]*webVolume) {
+	for _, v := range vols {
+		if v.idx != nil {
+			_ = v.idx.Close()
+		}
 	}
 }
 

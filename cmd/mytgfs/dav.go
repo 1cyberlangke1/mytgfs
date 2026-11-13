@@ -13,10 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
-	"strings"
 	"time"
 
 	"golang.org/x/net/webdav"
@@ -27,6 +24,7 @@ import (
 	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/netmap"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/telegramstore"
@@ -66,7 +64,7 @@ func runWebDAV(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	// 退出时删掉指向本服务的网络映射，避免留下红叉盘符
-	defer cleanupMappings(*addr)
+	defer netmap.Cleanup(*addr)
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
@@ -112,40 +110,6 @@ func runWebDAV(args []string) {
 	}
 }
 
-// cleanupMappings 删除指向本服务地址的网络映射。
-//
-// 输入：addr 监听地址（如 127.0.0.1:8080）
-// 输出：无
-// 预期：只处理命令行里包含该地址的映射；解析失败时不动任何盘符
-func cleanupMappings(addr string) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	out, err := exec.Command("net", "use").Output()
-	if err != nil {
-		return
-	}
-	// net use 把 host:port 显示成 host@port，两种写法都要匹配
-	patterns := []string{addr, strings.Replace(addr, ":", "@", 1)}
-	for _, line := range strings.Split(string(out), "\n") {
-		matched := false
-		for _, p := range patterns {
-			if p != "" && strings.Contains(line, p) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			continue
-		}
-		for _, f := range strings.Fields(line) {
-			if len(f) == 2 && strings.HasSuffix(f, ":") {
-				_ = exec.Command("net", "use", f, "/delete", "/y").Run()
-			}
-		}
-	}
-}
-
 // runUnmap 删除指向指定地址的网络映射。
 //
 // 用法：mytgfs unmap [--addr 127.0.0.1:8080]
@@ -156,6 +120,6 @@ func runUnmap(args []string) {
 	fs := flag.NewFlagSet("unmap", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "服务地址")
 	_ = fs.Parse(args)
-	cleanupMappings(*addr)
+	netmap.Cleanup(*addr)
 	fmt.Println(i18n.T("dav.cleanup_done", *addr))
 }

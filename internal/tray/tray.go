@@ -27,12 +27,41 @@ type Actions struct {
 	AutostartEnabled bool
 	// SetAutostart 打开/关闭开机自启；返回 error 时菜单保持原状态。
 	SetAutostart func(bool) error
+
+	// WebDAVEnabled 是启动时 WebDAV 挂盘服务的状态。
+	WebDAVEnabled bool
+	// SetWebDAV 打开/关闭 WebDAV 挂盘；返回 error 时菜单保持原状态。
+	SetWebDAV func(bool) error
 }
 
 var (
 	mu       sync.Mutex
 	statusIt *systray.MenuItem
+	davIt    *systray.MenuItem
+	// davWant/davSet 记录托盘就绪前收到的状态，就绪时补上
+	davWant bool
+	davSet  bool
 )
+
+// SetWebDAV 同步托盘里「挂载为网络驱动器」的勾选状态。
+//
+// 输入：enabled 当前是否正在提供 WebDAV
+// 输出：无
+// 预期：托盘尚未就绪时先记下，菜单创建后由 onReady 应用
+func SetWebDAV(enabled bool) {
+	mu.Lock()
+	davWant, davSet = enabled, true
+	it := davIt
+	mu.Unlock()
+	if it == nil {
+		return
+	}
+	if enabled {
+		it.Check()
+	} else {
+		it.Uncheck()
+	}
+}
 
 // SetStatus 更新托盘里的状态行（如「已连接」「重连中」）。
 //
@@ -77,6 +106,22 @@ func onReady(a Actions, initial string) {
 		i18n.T("tray.menu.autostart.tip"),
 		a.AutostartEnabled,
 	)
+	mDAV := systray.AddMenuItemCheckbox(
+		i18n.T("tray.menu.webdav"),
+		i18n.T("tray.menu.webdav.tip"),
+		a.WebDAVEnabled,
+	)
+	mu.Lock()
+	davIt = mDAV
+	want, set := davWant, davSet
+	mu.Unlock()
+	if set {
+		if want {
+			mDAV.Check()
+		} else {
+			mDAV.Uncheck()
+		}
+	}
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem(i18n.T("tray.menu.quit"), i18n.T("tray.menu.quit.tip"))
 
@@ -112,6 +157,21 @@ func onReady(a Actions, initial string) {
 					mAuto.Check()
 				} else {
 					mAuto.Uncheck()
+				}
+			case <-mDAV.ClickedCh:
+				if a.SetWebDAV == nil {
+					continue
+				}
+				next := !mDAV.Checked()
+				if err := a.SetWebDAV(next); err != nil {
+					fmt.Fprintf(os.Stderr, "webdav: %v\n", err)
+					continue
+				}
+				// 勾选状态跟随实际启停结果，不提前翻转
+				if next {
+					mDAV.Check()
+				} else {
+					mDAV.Uncheck()
 				}
 			case <-mQuit.ClickedCh:
 				if a.Quit != nil {

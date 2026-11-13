@@ -18,7 +18,60 @@ type Config struct {
 	Mount     Mount     `toml:"mount"`
 	Ratelimit Ratelimit `toml:"ratelimit"`
 	Volumes   []Volume  `toml:"volumes"`
+	WebDAV    WebDAV    `toml:"webdav"`
 	Log       Log       `toml:"log"`
+}
+
+// WebDAV 是「把卷挂成盘」的可选服务。
+//
+// 默认关闭（Enabled=false）：面板本身已经能做增删改查，
+// 只有确实要用资源管理器/rclone 挂盘时才需要打开。
+type WebDAV struct {
+	Enabled bool `toml:"enabled"`
+	// Addr 监听地址，空则用 DefaultWebDAVAddr
+	Addr string `toml:"addr"`
+	// Volume 只暴露这个卷；空则用第一个启用的卷
+	Volume string `toml:"volume"`
+}
+
+// DefaultWebDAVAddr 是 WebDAV 默认监听地址。
+const DefaultWebDAVAddr = "127.0.0.1:8080"
+
+// ListenAddr 返回实际监听地址。
+//
+// 输入：无
+// 输出：非空地址，默认 127.0.0.1:8080
+// 预期：只绑本地回环，不对外网暴露
+func (w WebDAV) ListenAddr() string {
+	if a := strings.TrimSpace(w.Addr); a != "" {
+		return a
+	}
+	return DefaultWebDAVAddr
+}
+
+// Target 挑出要暴露的卷。
+//
+// 输入：volumes 配置里的卷
+// 输出：卷与是否存在
+// 预期：
+//   - Volume 非空时按名字精确匹配（找不到就 false，不静默换卷）
+//   - Volume 为空时取第一个 enabled 的卷
+func (w WebDAV) Target(volumes []Volume) (Volume, bool) {
+	want := strings.TrimSpace(w.Volume)
+	if want != "" {
+		for _, v := range volumes {
+			if strings.EqualFold(v.Name, want) {
+				return v, true
+			}
+		}
+		return Volume{}, false
+	}
+	for _, v := range volumes {
+		if v.Enabled {
+			return v, true
+		}
+	}
+	return Volume{}, false
 }
 
 // Log 是日志配置。

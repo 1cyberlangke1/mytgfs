@@ -1,0 +1,127 @@
+package web
+
+// 页面模板集合：整页与「文件浏览器」片段共用同一个 template.Template，
+// 这样整页里的 {{template "browser"}} 和 htmx 片段渲染用的是同一份定义。
+
+import "html/template"
+
+// pageTmpl 是整页 + 片段模板集合。
+var pageTmpl = buildTemplates()
+
+func buildTemplates() *template.Template {
+	t := template.New("page").Funcs(tmplFuncs)
+	template.Must(t.Parse(pageHTML))
+	// 片段模板单独命名，执行时用 ExecuteTemplate(w, "browser", data)
+	template.Must(t.New("browser").Funcs(tmplFuncs).Parse(browserHTML))
+	template.Must(t.New("mountbox").Funcs(tmplFuncs).Parse(mountboxHTML))
+	return t
+}
+
+// browserHTML 是文件浏览器的片段内容（#browser 的 innerHTML）。
+//
+// 输入：browserData
+// 输出：工具栏 + 面包屑 + 表格
+// 预期：
+//   - 每个表单都带上 vol/dir 隐藏字段，片段替换后上下文不丢
+//   - 操作失败也返回这段内容，htmx 就地替换
+const browserHTML = `
+{{if .Message}}<p class="msg"><span class="{{.MsgKind}}">{{.Message}}</span></p>{{end}}
+{{if .Available}}
+<div class="vtabs">
+  {{range .Volumes}}<button type="button" class="ghost{{if eq . $.Volume}} on{{end}}" hx-get="/frag/files?vol={{urlq .}}&dir=%2F" hx-target="#browser" hx-swap="innerHTML">{{.}}</button>{{end}}
+</div>
+<div class="fbar">
+  <nav class="crumbs">
+    {{range .Crumbs}}<a hx-get="/frag/files?vol={{urlq $.Volume}}&dir={{urlq .Path}}" hx-target="#browser" hx-swap="innerHTML">{{.Name}}</a>{{end}}
+  </nav>
+</div>
+<div class="fbar">
+  <form class="fup" data-upload hx-post="/frag/files/upload" hx-encoding="multipart/form-data"
+        hx-target="#browser" hx-swap="innerHTML">
+    <input type="hidden" name="vol" value="{{.Volume}}">
+    <input type="hidden" name="dir" value="{{.Dir}}">
+    <input type="file" name="file" multiple required>
+    <button type="submit">{{.Labels.FilesUpload}}</button>
+    <span class="msg" data-progress data-progress-label="{{.Labels.FilesUploading}}"></span>
+  </form>
+  <form class="fmk" hx-post="/frag/files/mkdir" hx-target="#browser" hx-swap="innerHTML">
+    <input type="hidden" name="vol" value="{{.Volume}}">
+    <input type="hidden" name="dir" value="{{.Dir}}">
+    <input name="name" autocomplete="off" placeholder="{{.Labels.FilesNewDir}}" required>
+    <button type="submit">{{.Labels.FilesMkdir}}</button>
+  </form>
+</div>
+<div class="fwrap">
+<table class="ftable">
+  <thead>
+    <tr>
+      <th>{{.Labels.FilesName}}</th>
+      <th class="num">{{.Labels.FilesSize}}</th>
+      <th class="num">{{.Labels.FilesMtime}}</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td class="fname">
+        {{if .Dir}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>{{else}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>{{end}}
+        {{if .Dir}}<a hx-get="/frag/files?vol={{urlq $.Volume}}&dir={{urlq .Path}}" hx-target="#browser" hx-swap="innerHTML">{{.Name}}</a>{{else}}{{.Name}}{{end}}
+      </td>
+      <td class="num">{{if not .Dir}}{{bytes .Size}}{{end}}</td>
+      <td class="num">{{fmtTime .Mod}}</td>
+      <td class="acts">
+        {{if not .Dir}}<a class="btn" href="{{.Download}}" download>{{$.Labels.FilesDownload}}</a>{{end}}
+        <details class="menu">
+          <summary>{{$.Labels.FilesMove}}</summary>
+          <form hx-post="/frag/files/move" hx-target="#browser" hx-swap="innerHTML">
+            <input type="hidden" name="vol" value="{{$.Volume}}">
+            <input type="hidden" name="dir" value="{{$.Dir}}">
+            <input type="hidden" name="from" value="{{.Path}}">
+            <input name="to" value="{{.Path}}" autocomplete="off" aria-label="{{$.Labels.FilesMove}}">
+            <button type="submit">{{$.Labels.FilesDone}}</button>
+          </form>
+        </details>
+        <form class="finline" hx-post="/frag/files/remove" hx-target="#browser" hx-swap="innerHTML"
+              hx-confirm="{{$.Labels.FilesConfirm}}">
+          <input type="hidden" name="vol" value="{{$.Volume}}">
+          <input type="hidden" name="dir" value="{{$.Dir}}">
+          <input type="hidden" name="path" value="{{.Path}}">
+          <button type="submit" class="danger">{{$.Labels.FilesDelete}}</button>
+        </form>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="4" class="empty">{{.Labels.FilesEmpty}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}`
+
+// mountboxHTML 是「挂载为网络驱动器」开关片段（#mountbox 的 innerHTML）。
+//
+// 输入：mountData
+// 输出：说明 + 一个开关按钮 + 当前监听地址与卷名
+// 预期：
+//   - 表单带隐藏字段 on，值为当前状态取反，提交后由服务端确认新状态
+//   - 不可用时只显示提示，不渲染按钮
+const mountboxHTML = `
+{{if not .Available}}
+<p class="msg"><span class="err">{{.Labels.MountUnavailable}}</span></p>
+{{else}}
+<p class="msg">{{.Labels.MountHint}}</p>
+<form hx-post="/frag/mount" hx-target="#mountbox" hx-swap="innerHTML">
+  <div class="row">
+    <input type="hidden" name="on" value="{{if .Enabled}}0{{else}}1{{end}}">
+    <button type="submit"{{if .Enabled}} class="ghost"{{end}}>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+        {{if .Enabled}}<path d="M18 6 6 18M6 6l12 12"/>{{else}}<path d="M12 5v14M5 12h14"/>{{end}}
+      </svg>
+      <span>{{if .Enabled}}{{.Labels.MountOff}}{{else}}{{.Labels.MountOn}}{{end}}</span>
+    </button>
+      <span class="msg">{{.Labels.MountAddr}}: <code id="davaddr">{{if .Addr}}{{.Addr}}{{else}}—{{end}}</code>{{with .Volume}} · {{.}}{{end}}</span>
+  </div>
+</form>
+{{if .Message}}<p class="msg"><span class="{{.MsgKind}}">{{.Message}}</span></p>{{end}}
+{{end}}`

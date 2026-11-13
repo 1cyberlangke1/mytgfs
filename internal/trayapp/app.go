@@ -20,8 +20,13 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
+	"mytgfs/internal/dav"
+	"mytgfs/internal/davsvc"
+	"mytgfs/internal/eventbus"
+	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
@@ -138,6 +143,9 @@ func Run(opts Options) error {
 		name   string
 		idx    *index.Index
 		fsys   *vfs.FS
+		davfs  *dav.FileSystem
+		fmgr   *fm.Manager
+		store  *telegramstore.Store
 		differ tgsync.ChannelDiffer
 		mu     sync.Mutex // 自动同步与手动同步互斥
 	}
@@ -177,6 +185,111 @@ func Run(opts Options) error {
 		for _, c := range cs {
 			c()
 		}
+	}
+
+	// ---- 可选 WebDAV 挂盘服务 ----
+	//
+	// 默认关闭；Web 面板与托盘菜单都能启停，状态写回 [webdav].enabled。
+	// 只暴露一个卷（[webdav].volume，空则第一个启用的卷）。
+	davSvc := &davsvc.Service{}
+	// bus 把配置/挂载变更立刻推给面板与托盘，不走轮询
+	bus := eventbus.New()
+
+	// 托盘勾选状态订阅事件：无论从面板还是菜单触发，都会同步
+	mountCh, cancelMountSub := bus.Subscribe("mount")
+	defer cancelMountSub()
+	go func() {
+		for {
+			select {
+			case <-rootCtx.Done():
+				return
+			case _, ok := <-mountCh:
+				if !ok {
+					return
+				}
+				tray.SetWebDAV(davSvc.State().Enabled)
+			}
+		}
+	}()
+
+	davState := func() web.MountState {
+		st := davSvc.State()
+		return web.MountState{
+			Available: st.Enabled || len(volumes) > 0,
+			Enabled:   st.Enabled,
+			Addr:      st.Addr,
+			Volume:    st.Volume,
+		}
+	}
+
+	// findVolume 取已挂载卷的运行时句柄。
+	findVolume := func(name string) *trayVolume {
+		volMu.Lock()
+		defer volMu.Unlock()
+		for _, v := range volumes {
+			if v.name == name {
+				return v
+			}
+		}
+		return nil
+	}
+
+	stopDAV := func() error {
+		was := davSvc.State().Enabled
+		if err := davSvc.Stop(); err != nil {
+			return fmt.Errorf("%s: %w", i18n.T("err.webdav_stop"), err)
+		}
+		if was {
+			bus.Publish("mount")
+		}
+		return nil
+	}
+
+	startDAV := func() error {
+		if davSvc.State().Enabled {
+			return nil
+		}
+		// 重新读配置：面板/手动编辑过的 [webdav] 段以文件为准
+		cur, cerr := config.Load(cfgPath)
+		if cerr != nil {
+			return fmt.Errorf("%s: %w", i18n.T("err.config_load"), cerr)
+		}
+		vol, ok := cur.WebDAV.Target(cur.Volumes)
+		if !ok {
+			return fmt.Errorf("%s", i18n.T("err.webdav_no_volume"))
+		}
+		tv := findVolume(vol.Name)
+		if tv == nil || tv.davfs == nil {
+			return fmt.Errorf("%s: %s", i18n.T("err.webdav_no_volume"), vol.Name)
+		}
+		// 写请求串行化，批量拷贝不抢 Telegram 配额
+		tv.davfs.SetQueue(queue.New(1, 3))
+		if _, err := davSvc.Start(cur.WebDAV.ListenAddr(), vol.Name, tv.davfs); err != nil {
+			return fmt.Errorf("%s: %w", i18n.T("err.webdav_start"), err)
+		}
+		bus.Publish("mount")
+		return nil
+	}
+
+	// setDAV 启停并落盘，托盘与面板共用。
+	setDAV := func(on bool) error {
+		var derr error
+		if on {
+			derr = startDAV()
+		} else {
+			derr = stopDAV()
+		}
+		if derr != nil {
+			return derr
+		}
+		w := config.WebDAV{Enabled: on, Addr: cfg.WebDAV.ListenAddr(), Volume: cfg.WebDAV.Volume}
+		if werr := config.SetWebDAV(cfgPath, w); werr != nil {
+			// 服务已经启停成功，配置失败只提醒，不撤销
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("err.webdav_config"), werr)
+		} else {
+			bus.Publish("config")
+		}
+		return nil
 	}
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
@@ -325,6 +438,42 @@ func Run(opts Options) error {
 				}
 				return out, nil
 			},
+			// 文件管理：复用挂载时创建的 WebDAV 后端，不加额外连接
+			Files: func(name string) (fm.Files, bool) {
+				volMu.Lock()
+				defer volMu.Unlock()
+				for _, v := range volumes {
+					if v.name == name && v.fmgr != nil {
+						return v.fmgr, true
+					}
+				}
+				return nil, false
+			},
+			Volumes: func() []string {
+				volMu.Lock()
+				defer volMu.Unlock()
+				names := make([]string, 0, len(volumes))
+				for _, v := range volumes {
+					if v.fmgr != nil {
+						names = append(names, v.name)
+					}
+				}
+				return names
+			},
+			// 挂盘开关：与托盘菜单共用同一套启停逻辑
+			Mount: &web.MountControl{
+				Status: davState,
+				Enable: func() (web.MountState, error) {
+					err := setDAV(true)
+					return davState(), err
+				},
+				Disable: func() (web.MountState, error) {
+					err := setDAV(false)
+					return davState(), err
+				},
+			},
+			// 事件推送：面板保存配置/切换挂载后，其它标签页立刻同步
+			Bus: bus,
 		}
 		go func() {
 			if serr := web.ServeWith(ctx, addr, cfgPath, webOpts); serr != nil {
@@ -372,20 +521,17 @@ func Run(opts Options) error {
 		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		vctx, vcancel := context.WithCancel(rootCtx)
 		fsys := vfs.New(vctx, idx, store, os.TempDir())
+		// 面板文件管理与可选 WebDAV 共用同一份 WebDAV 语义后端
+		davfs := dav.New(vctx, idx, store, cfg.Mount.ReadChunk())
+		fmgr := fm.New(davfs)
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-		tv := &trayVolume{name: name, idx: idx, fsys: fsys, differ: differ}
+		tv := &trayVolume{name: name, idx: idx, fsys: fsys, davfs: davfs, fmgr: fmgr, store: store, differ: differ}
 
 		volMu.Lock()
 		volumes = append(volumes, tv)
 		volMu.Unlock()
 
 		var vwg sync.WaitGroup
-		// 崩溃/断网遗留的写入在后台补传，不阻塞挂载
-		vwg.Add(1)
-		go func() {
-			defer vwg.Done()
-			fsys.ResumePending()
-		}()
 		if interval := SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
 			vwg.Add(1)
 			go func() {
@@ -398,13 +544,11 @@ func Run(opts Options) error {
 		cancels = append(cancels, vcancel)
 		mu.Unlock()
 
+		// 卷常驻到退出：FUSE 挂载已移除，这里不再有内核挂载点需要等待
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if merr := vfs.Mount(vctx, fsys, mp, name); merr != nil {
-				fmt.Fprintf(os.Stderr, "%s\n", i18n.T("tray.mount.failed", name, merr))
-			}
-			vcancel()
+			<-vctx.Done()
 			vwg.Wait()
 			_ = idx.Close()
 			closePool()
@@ -419,18 +563,29 @@ func Run(opts Options) error {
 		}()
 	}
 
-	if len(cfg.Volumes) == 0 {
-		mountOne("mytgfs", cfg.Telegram.ChannelID, point)
-	} else {
-		for _, v := range cfg.Volumes {
-			if !v.Enabled {
-				continue
+	// mountAll 在连接就绪后执行一次：卷初始化需要已登录的 MTProto 客户端
+	// （PooledAPI 在未初始化时会空指针），所以不能提前调用。
+	var mountOnce sync.Once
+	mountAll := func() {
+		if len(cfg.Volumes) == 0 {
+			mountOne("mytgfs", cfg.Telegram.ChannelID, point)
+		} else {
+			for _, v := range cfg.Volumes {
+				if !v.Enabled {
+					continue
+				}
+				mp := v.Point
+				if mp == "" {
+					mp = point
+				}
+				mountOne(v.Name, v.ChatID, mp)
 			}
-			mp := v.Point
-			if mp == "" {
-				mp = point
+		}
+		// 挂盘服务要在卷就绪之后才能启动；失败不影响挂载与托盘
+		if cfg.WebDAV.Enabled {
+			if derr := startDAV(); derr != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", derr)
 			}
-			mountOne(v.Name, v.ChatID, mp)
 		}
 	}
 
@@ -443,6 +598,7 @@ func Run(opts Options) error {
 			if self, serr := client.Self(ctx); serr == nil {
 				setBotUsername(self.Username)
 			}
+			mountOnce.Do(mountAll)
 			<-ctx.Done()
 			return nil
 		})
@@ -484,8 +640,12 @@ func Run(opts Options) error {
 			}
 			return autostart.Disable()
 		},
+		WebDAVEnabled: davState().Enabled,
+		SetWebDAV:     setDAV,
 		Quit: func() {
 			setState(i18n.T("tray.state.unmounted"))
+			// 先停 WebDAV 再卸卷，避免客户端读到已关闭的索引
+			_ = stopDAV()
 			unmountAll()
 			stopWeb()
 			rootCancel()
@@ -501,7 +661,8 @@ func Run(opts Options) error {
 		<-sigCtx.Done()
 	}
 
-	// 托盘退出后收尾：再确保卸载与取消，最多等 5 秒让 WinFsp 完成卸载
+	// 托盘退出后收尾：停挂盘服务、卸载卷、取消后台任务
+	_ = stopDAV()
 	unmountAll()
 	rootCancel()
 	done := make(chan struct{})

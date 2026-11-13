@@ -196,6 +196,22 @@ type file struct {
 	sum hash.Hash
 }
 
+// Abort 丢弃写模式的临时文件，不提交上传。
+//
+// 输入：无
+// 输出：error（删除临时文件失败）
+// 预期：只用于写入中途出错的分支；正常结束走 Close。
+// 调用后 Close 变成空操作，避免把半份内容传上去。
+func (f *file) Abort() error {
+	if f.write && f.tmp != nil {
+		name := f.tmp.Name()
+		_ = f.tmp.Close()
+		f.tmp = nil
+		return os.Remove(name)
+	}
+	return nil
+}
+
 // Close 关闭：写模式提交上传，读模式释放缓冲。
 func (f *file) Close() error {
 	if f.write && f.tmp != nil {

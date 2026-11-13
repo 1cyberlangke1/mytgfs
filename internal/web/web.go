@@ -15,12 +15,15 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/natefinch/atomic"
 	"mytgfs/internal/config"
 	"mytgfs/internal/daemon"
+	"mytgfs/internal/eventbus"
+	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/ipc"
 )
@@ -28,9 +31,14 @@ import (
 //go:embed static/htmx.min.js
 var htmxJS []byte
 
+//go:embed static/app.js
+var appJS []byte
+
 // tmplFuncs 是模板里可用的辅助函数。
 var tmplFuncs = template.FuncMap{
-	"bytes": formatBytes,
+	"bytes":   formatBytes,
+	"fmtTime": formatMod,
+	"urlq":    url.QueryEscape,
 }
 
 // formatBytes 把字节数格式化成人类可读的字符串。
@@ -71,6 +79,14 @@ type Options struct {
 	Sync   SyncFunc
 	// CreateVolume 为 nil 时建卷接口返回 501，面板按钮置灰
 	CreateVolume CreateVolumeFunc
+	// Files 返回指定卷的文件管理后端；nil 表示不提供文件管理
+	Files func(volume string) (fm.Files, bool)
+	// Volumes 返回可管理卷名，按配置顺序
+	Volumes func() []string
+	// Mount 控制 WebDAV 挂盘开关；nil 表示不支持
+	Mount *MountControl
+	// Bus 用于把配置/挂载变更推给所有页面；nil 时 /events 返回 501
+	Bus *eventbus.Bus
 }
 
 // Serve 启动只读面板，状态回落到 daemon IPC。
@@ -85,14 +101,26 @@ func Serve(ctx context.Context, addr, configPath string) error {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时尝试连 daemon
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, configPath))
-	// htmx 随二进制分发：面板不依赖任何外网 CDN
+	api := newFilesAPI(opts.Files, opts.Volumes)
+	mux.HandleFunc("/", handlePage(opts.CreateVolume != nil, configPath, api, opts.Mount))
+	// htmx 与面板脚本随二进制分发：不依赖任何外网 CDN
 	mux.HandleFunc("/static/htmx.min.js", handleAsset("application/javascript; charset=utf-8", htmxJS))
+	mux.HandleFunc("/static/app.js", handleAsset("application/javascript; charset=utf-8", appJS))
 	// 片段接口：htmx 轮询/提交的目标，返回 HTML 而不是 JSON
 	mux.HandleFunc("/frag/status", handleFragStatus(opts.Status))
 	mux.HandleFunc("/frag/sync", handleFragSync(opts.Sync))
-	mux.HandleFunc("/frag/config", handleFragConfig(configPath))
+	mux.HandleFunc("/frag/config", handleFragConfig(configPath, opts.Bus))
 	mux.HandleFunc("/frag/volume", handleFragVolume(opts.CreateVolume, configPath))
+	mux.HandleFunc("/frag/mount", handleFragMount(opts.Mount, opts.Bus))
+	// 事件流：配置/挂载变更主动推送
+	mux.HandleFunc("/events", handleEvents(opts.Bus))
+	// 文件管理
+	mux.HandleFunc("/frag/files", handleFragFiles(api))
+	mux.HandleFunc("/frag/files/upload", handleFragFilesUpload(api))
+	mux.HandleFunc("/frag/files/mkdir", handleFragFilesMkdir(api))
+	mux.HandleFunc("/frag/files/remove", handleFragFilesRemove(api))
+	mux.HandleFunc("/frag/files/move", handleFragFilesMove(api))
+	mux.HandleFunc("/files/download", handleFileDownload(api))
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))
@@ -122,8 +150,16 @@ type pageLabels struct {
 	Create, Creating, Created, Restart, AuthLost, NameNeed string
 	StatVols, StatFiles, StatUsed, Xfer                    string
 	Footer, Lang, ThemeTip, RefreshTip                     string
+	// 文件管理
+	Files, FilesUpload, FilesUploading, FilesMkdir, FilesNewDir string
+	FilesName, FilesSize, FilesMtime, FilesEmpty                string
+	FilesDownload, FilesMove, FilesDelete, FilesConfirm         string
+	FilesDone, NetError                                         string
 	// CanCreate 决定建卷卡片是否渲染
 	CanCreate bool
+	// 挂载为网络驱动器
+	Mount, MountOn, MountOff, MountHint string
+	MountUnavailable, MountAddr         string
 }
 
 // loadLabels 读取当前语言的页面文案。
@@ -166,6 +202,29 @@ func loadLabels(canCreate bool) pageLabels {
 		ThemeTip:   i18n.T("web.theme_tip"),
 		RefreshTip: i18n.T("web.refresh_tip"),
 		CanCreate:  canCreate,
+
+		Files:          i18n.T("web.files"),
+		FilesUpload:    i18n.T("web.files_upload"),
+		FilesUploading: i18n.T("web.files_uploading"),
+		FilesMkdir:     i18n.T("web.files_mkdir"),
+		FilesNewDir:    i18n.T("web.files_newdir"),
+		FilesName:      i18n.T("web.files_name"),
+		FilesSize:      i18n.T("web.files_size"),
+		FilesMtime:     i18n.T("web.files_mtime"),
+		FilesEmpty:     i18n.T("web.files_empty"),
+		FilesDownload:  i18n.T("web.files_download"),
+		FilesMove:      i18n.T("web.files_move"),
+		FilesDelete:    i18n.T("web.files_delete"),
+		FilesConfirm:   i18n.T("web.files_confirm"),
+		FilesDone:      i18n.T("web.files_done"),
+		NetError:       i18n.T("web.net_error"),
+
+		Mount:            i18n.T("web.mount"),
+		MountOn:          i18n.T("web.mount_on"),
+		MountOff:         i18n.T("web.mount_off"),
+		MountHint:        i18n.T("web.mount_hint"),
+		MountUnavailable: i18n.T("web.mount_unavailable"),
+		MountAddr:        i18n.T("web.mount_addr"),
 	}
 }
 
@@ -173,14 +232,19 @@ func loadLabels(canCreate bool) pageLabels {
 type pageData struct {
 	Labels pageLabels
 	Config string
+	// Browser 非空时渲染文件管理卡片及其首屏内容
+	Browser *browserData
+	// Mount 非空时渲染挂盘开关卡片
+	Mount *mountData
 }
 
 // handlePage 输出内嵌的静态页面。
 //
-// 输入：canCreate 是否显示建卷卡片；configPath 配置文件路径（空串表示不预载）
+// 输入：canCreate 是否显示建卷卡片；configPath 配置文件路径（空串表示不预载）；
+// api 文件管理能力；mount 挂盘开关能力
 // 输出：HTML
-// 预期：文案与配置正文都在服务端渲染，前端只负责主题切换
-func handlePage(canCreate bool, configPath string) http.HandlerFunc {
+// 预期：文案、配置正文、文件列表都在服务端渲染，前端只负责主题与进度
+func handlePage(canCreate bool, configPath string, api *filesAPI, mount *MountControl) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		data := pageData{Labels: loadLabels(canCreate)}
@@ -189,14 +253,18 @@ func handlePage(canCreate bool, configPath string) http.HandlerFunc {
 				data.Config = string(b)
 			}
 		}
+		if api != nil {
+			b := api.browser(r, "", "", "", "")
+			data.Browser = &b
+		}
+		if mount != nil && mount.Status != nil {
+			data.Mount = &mountData{Labels: data.Labels, MountState: mount.Status()}
+		}
 		if err := pageTmpl.Execute(w, data); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
 }
-
-// pageTmpl 是内嵌的面板页面模板。
-var pageTmpl = template.Must(template.New("page").Funcs(tmplFuncs).Parse(pageHTML))
 
 // handleAsset 输出内嵌的静态资源。
 //
@@ -554,7 +622,7 @@ func handleFragSync(sync SyncFunc) http.HandlerFunc {
 }
 
 // handleFragConfig 保存配置正文（表单字段 content）。
-func handleFragConfig(path string) http.HandlerFunc {
+func handleFragConfig(path string, bus *eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -568,6 +636,10 @@ func handleFragConfig(path string) http.HandlerFunc {
 		if err := atomic.WriteFile(path, strings.NewReader(r.PostFormValue("content"))); err != nil {
 			renderFragment(w, msgFrag, msgData{Class: "err", Text: err.Error()})
 			return
+		}
+		// 通知其它已打开的页面：配置变了，重新拉正文
+		if bus != nil {
+			bus.Publish("config")
 		}
 		renderFragment(w, msgFrag, msgData{Class: "ok", Text: l.Saved})
 	}
@@ -779,6 +851,36 @@ textarea::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8p
 textarea::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 textarea::-webkit-scrollbar-track{background:transparent}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.vtabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.vtabs button{padding:6px 12px;border-radius:999px;font-size:13px}
+.vtabs button.on{border-color:rgba(42,167,224,.55);background:rgba(42,167,224,.16)}
+.fbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.crumbs{display:flex;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.crumbs a{cursor:pointer;color:var(--blue);text-decoration:none}
+.crumbs a:hover{text-decoration:underline}
+.crumbs a+a::before{content:"/";color:var(--muted);margin-right:6px}
+.fup,.fmk{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fup input[type=file]{width:auto;padding:6px;font-size:13px}
+.fwrap{overflow-x:auto}
+.ftable{width:100%;border-collapse:collapse;font-size:14px}
+.ftable th{text-align:left;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
+.ftable td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.ftable tr:last-child td{border-bottom:0}
+.ftable .num{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.fname{display:flex;align-items:center;gap:8px;word-break:break-all}
+.fname a{cursor:pointer;color:var(--text);text-decoration:none}
+.fname a:hover{color:var(--blue)}
+.acts{text-align:right;white-space:nowrap}
+.acts .btn{display:inline-flex;align-items:center;padding:6px 10px;border-radius:9px;border:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px;background:var(--btn-ghost);margin-left:6px}
+.acts .btn:hover{filter:brightness(1.1)}
+.acts button{padding:6px 10px;font-size:13px;border-radius:9px;margin-left:6px}
+.acts .danger{border-color:rgba(255,107,122,.45);background:transparent;color:var(--red)}
+.finline{display:inline}
+details.menu{display:inline-block;position:relative;margin-left:6px}
+details.menu summary{list-style:none;cursor:pointer;padding:6px 10px;border-radius:9px;border:1px solid var(--line);font-size:13px;background:var(--btn-ghost)}
+details.menu summary::-webkit-details-marker{display:none}
+details.menu form{position:absolute;right:0;top:110%;z-index:5;display:flex;gap:6px;padding:10px;border-radius:12px;background:var(--card);border:1px solid var(--line-strong);box-shadow:var(--shadow)}
+details.menu form input{width:240px}
 .banner{grid-column:1/-1;border-radius:14px;padding:12px 16px;font-size:13px;line-height:1.6;display:none;
   color:var(--banner-text);background:var(--banner-bg);border:1px solid var(--banner-line)}
 .banner.show{display:block}
@@ -822,6 +924,7 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
 
   <main>
     <div id="authbar" class="banner">{{.Labels.AuthLost}}</div>
+    <div id="neterr" class="banner">{{.Labels.NetError}}</div>
 
     <section class="card">
       <h2>
@@ -865,6 +968,20 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
       </div>
       <p class="msg" id="syncmsg"></p>
     </section>
+{{if .Mount}}
+    <section class="card" style="grid-column:1/-1">
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/>
+          <rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+          <line x1="6" x2="6.01" y1="6" y2="6"/>
+          <line x1="6" x2="6.01" y1="18" y2="18"/>
+        </svg>
+        <span>{{.Labels.Mount}}</span>
+      </h2>
+      <div id="mountbox">{{template "mountbox" .Mount}}</div>
+    </section>
+{{end}}
 {{if .Labels.CanCreate}}
     <section class="card" style="grid-column:1/-1">
       <h2>
@@ -890,6 +1007,17 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
           <span class="msg" id="nv-msg"></span>
         </div>
       </form>
+    </section>
+{{end}}
+{{if .Browser}}
+    <section class="card" id="files-card" style="grid-column:1/-1">
+      <h2>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+        </svg>
+        <span>{{.Labels.Files}}</span>
+      </h2>
+      <div id="browser">{{template "browser" .Browser}}</div>
     </section>
 {{end}}
     <section class="card" style="grid-column:1/-1">
@@ -919,34 +1047,6 @@ footer{margin-top:22px;color:var(--muted);font-size:12px;text-align:center}
 </div>
 <div id="poller" hx-get="/frag/status" hx-trigger="load, every 3s" hx-swap="none"></div>
 <script src="/static/htmx.min.js"></script>
-<script>
-// 主题：首屏已在 head 里定好，这里只处理手动切换与系统偏好变更。
-// 状态刷新、表单提交全部交给 htmx，页面里没有轮询代码。
-(function(){
-  var root = document.documentElement;
-  var btn = document.getElementById('theme');
-  if (!btn) return;
-  var paint = function(){
-    btn.setAttribute('aria-pressed', root.dataset.theme === 'light' ? 'true' : 'false');
-  };
-  btn.addEventListener('click', function(){
-    root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
-    try { localStorage.setItem('mytgfs-theme', root.dataset.theme); } catch (e) {}
-    paint();
-  });
-  paint();
-  if (window.matchMedia) {
-    var mq = window.matchMedia('(prefers-color-scheme: light)');
-    var onChange = function(e){
-      try { if (localStorage.getItem('mytgfs-theme')) return; } catch (err) {}
-      root.dataset.theme = e.matches ? 'light' : 'dark';
-      paint();
-    };
-    if (mq.addEventListener) mq.addEventListener('change', onChange);
-    else if (mq.addListener) mq.addListener(onChange);
-  }
-})();
-</script>
+<script src="/static/app.js" defer></script>
 </body>
-</html>
 </html>`
