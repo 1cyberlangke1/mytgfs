@@ -612,6 +612,10 @@ func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.AP
 			fmt.Fprintln(os.Stderr, i18n.T("tray.mount.failed", v.Name, err))
 			continue
 		}
+		// 索引是缓存：空了就用 user 会话按频道历史重建，避免面板一片空白
+		if rerr := trayapp.RebuildIndexIfEmpty(ctx, cfg, idx, v.ChatID); rerr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("tray.mount.failed", v.Name), rerr)
+		}
 		store := telegramstore.New(api, v.ChatID)
 		store.SetParallel(cfg.Mount.DownloadConnections())
 		store.SetUploadParallel(cfg.Mount.UploadParallelism())
