@@ -493,14 +493,11 @@ func runWeb(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// PWA 默认启用；配置读出来后覆盖（含用户显式关闭）。零值即好用配置。
-	pwaCfg := config.PWA{}
+	// PWA 资源由前端构建产物内嵌，配置只影响离线保存上限
 	serve := func(opts web.Options) error {
-		opts.PWA = pwaCfg
 		return web.ServeWith(ctx, addr, cfgPath, opts)
 	}
 
-	pwaCfg = cfg.PWA
 	bus := eventbus.New()
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑

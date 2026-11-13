@@ -76,6 +76,9 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+# 内嵌进二进制的构建产物需要入库（go:embed 要求存在）
+!internal/web/dist/
+!internal/web/dist/**
 
 # 编译产物
 build/

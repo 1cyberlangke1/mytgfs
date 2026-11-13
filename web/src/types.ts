@@ -1,0 +1,97 @@
+export type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'invalid_credentials';
+
+export type IndexStatus = 'ready' | 'rebuilding';
+
+export type FileCategory = 'folder' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'document';
+
+export interface FileItem {
+  id: string;
+  volumeId: string;
+  parentId: string | null; // null means root of the volume
+  name: string;
+  isDir: boolean;
+  size: number; // in bytes (0 for directories, or calculated dynamically)
+  updatedAt: string; // ISO string
+  category: FileCategory;
+  mimeType?: string;
+  thumbnailUrl?: string;
+  previewUrl?: string;
+  durationSec?: number;
+  pageCount?: number;
+  tgMessageIds?: number[];
+  chunksCount?: number;
+}
+
+export interface VolumeInfo {
+  id: string;
+  name: string;
+  alias: string;
+  aliasEn?: string;
+  channelHint: string;
+  description: string;
+  descriptionEn?: string;
+  createdAt: string;
+}
+
+export type TransferDirection = 'upload' | 'download';
+export type TransferState = 'transferring' | 'queued' | 'paused' | 'completed' | 'failed';
+
+export interface TransferTask {
+  id: string;
+  fileName: string;
+  volumeId: string;
+  targetParentId: string | null;
+  direction: TransferDirection;
+  size: number;
+  transferredBytes: number;
+  state: TransferState;
+  speedBps: number;
+  isChunkedResume: boolean;
+  chunkSize: number;
+  currentChunk: number;
+  totalChunks: number;
+  errorMessage?: string;
+  createdAt: string;
+  category?: FileCategory;
+}
+
+export interface AppSettings {
+  listenHost: '127.0.0.1';
+  panelPort: number;
+  autoSyncIntervalSec: number;
+  downloadConnections: number;
+  uploadConcurrency: number;
+  readChunkSizeMb: number;
+  pwaOfflineMaxFileMb: number;
+  webdavEnabled: boolean;
+  webdavPath: string;
+}
+
+export interface OfflineSavedFile {
+  fileId: string;
+  volumeId: string;
+  name: string;
+  size: number;
+  category: FileCategory;
+  savedAt: string;
+  thumbnailUrl?: string;
+  previewUrl?: string;
+}
+
+export type SortField = 'name' | 'size' | 'updatedAt';
+export type SortOrder = 'asc' | 'desc';
+export type NavTab = 'overview' | 'files' | 'mount' | 'settings' | 'offline';
+// 语言包目录里的文件名即 Locale；新增语言只丢 JSON，不改类型
+export type Locale = string;
+export type ThemeMode = 'light' | 'dark';
+
+export type ConfigErrorCode =
+  | 'SYNTAX_MISSING_EQ'
+  | 'INVALID_HOST'
+  | 'INVALID_PORT'
+  | 'INVALID_SYNC_INTERVAL'
+  | 'INVALID_DL_CONN'
+  | 'INVALID_UL_CONC'
+  | 'INVALID_CHUNK_SIZE'
+  | 'INVALID_BOOL'
+  | 'INVALID_PWA_LIMIT';

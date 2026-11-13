@@ -1,66 +1,87 @@
 package web
 
-// 服务端事件推送（SSE）。
+// 服务端事件通道：前端用 EventSource 订阅，取代定时轮询。
 //
-// 配置保存、挂载开关这类低频一致性事件由服务端主动推给所有打开的页面，
-// 前端不再靠定时轮询去猜「别处有没有改过」。
+// 主题：status（文件/进度变化）、config（配置保存）、mount（WebDAV 开关）。
+// 事件只带主题名，前端收到后自行拉取最新快照。
 
 import (
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 
 	"mytgfs/internal/eventbus"
-	"mytgfs/internal/i18n"
 )
 
-// handleEvents 维持一条 SSE 连接。
+// eventTopics 是面板关心的全部主题。
+var eventTopics = []string{"status", "config", "mount"}
+
+// handleAPIEvents 输出 text/event-stream。
 //
-// 输入：bus 事件总线；nil 时返回 501
-// 输出：text/event-stream 流
-// 预期：
-//   - 事件名即主题：config / mount / status，data 为空对象
-//   - status 是「状态变了，请重取状态片段」的信号，不含数据
-//   - 客户端断开（ctx.Done）立即退订返回
-func handleEvents(bus *eventbus.Bus) http.HandlerFunc {
+// 输入：GET /api/events
+// 输出：SSE 流，形如 "event: status\ndata: {}\n\n"
+// 预期：客户端断开即返回；Bus 为 nil 时 501；25s 一次心跳防代理超时
+func handleAPIEvents(bus *eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			replyJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		if bus == nil {
-			http.Error(w, i18n.T("err.http_events_unavailable"), http.StatusNotImplemented)
+			replyJSONError(w, http.StatusNotImplemented, "events unavailable")
 			return
 		}
-		fl, ok := w.(http.Flusher)
+		flusher, ok := w.(http.Flusher)
 		if !ok {
-			http.Error(w, i18n.T("err.http_stream_unsupported"), http.StatusInternalServerError)
+			replyJSONError(w, http.StatusInternalServerError, "stream unsupported")
 			return
 		}
-		h := w.Header()
-		h.Set("Content-Type", "text/event-stream")
-		h.Set("Cache-Control", "no-cache")
-		h.Set("Connection", "keep-alive")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
 
-		cfgCh, cancelCfg := bus.Subscribe("config")
-		defer cancelCfg()
-		mntCh, cancelMnt := bus.Subscribe("mount")
-		defer cancelMnt()
-		stCh, cancelSt := bus.Subscribe("status")
-		defer cancelSt()
+		// 每个主题一个订阅，扇入到 merged，主循环只处理一个通道
+		merged := make(chan string, 16)
+		var wg sync.WaitGroup
+		stop := make([]func(), 0, len(eventTopics))
+		for _, topic := range eventTopics {
+			ch, cancel := bus.Subscribe(topic)
+			stop = append(stop, cancel)
+			wg.Go(func() {
+				for range ch {
+					select {
+					case merged <- topic:
+					default: // 满则丢弃：前端拿到任一事件就会拉最新快照
+					}
+				}
+			})
+		}
+		defer func() {
+			for _, cancel := range stop {
+				cancel()
+			}
+			wg.Wait()
+		}()
 
-		// 先写注释帧，让浏览器立刻进入 open 状态
-		fmt.Fprint(w, ": connected\n\n")
-		fl.Flush()
+		fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+		flusher.Flush()
+
+		heartbeat := time.NewTicker(25 * time.Second)
+		defer heartbeat.Stop()
 
 		for {
 			select {
 			case <-r.Context().Done():
 				return
-			case <-cfgCh:
-				fmt.Fprint(w, "event: config\ndata: {}\n\n")
-				fl.Flush()
-			case <-mntCh:
-				fmt.Fprint(w, "event: mount\ndata: {}\n\n")
-				fl.Flush()
-			case <-stCh:
-				fmt.Fprint(w, "event: status\ndata: {}\n\n")
-				fl.Flush()
+			case topic := <-merged:
+				fmt.Fprintf(w, "event: %s\ndata: {}\n\n", topic)
+				flusher.Flush()
+			case <-heartbeat.C:
+				fmt.Fprint(w, ": ping\n\n")
+				flusher.Flush()
 			}
 		}
 	}

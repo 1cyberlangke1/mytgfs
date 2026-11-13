@@ -312,16 +312,3 @@ func newToken(n int) string {
 	}
 	return hex.EncodeToString(b)
 }
-
-// writeJSON 输出 JSON。
-func replyJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-// replyJSONError 输出统一错误体。
-func replyJSONError(w http.ResponseWriter, code int, msg string) {
-	replyJSON(w, code, map[string]any{"error": msg})
-}

@@ -608,10 +608,8 @@ func Run(opts Options) error {
 					return davState(), err
 				},
 			},
-			// 事件推送：面板保存配置/切换挂载后，其它标签页立刻同步
+			// 事件推送：面板保存配置/切换挂载后，托盘立刻同步
 			Bus: bus,
-			// PWA：默认启用，配置里可改名/关掉/限制单文件离线大小
-			PWA: cfg.PWA,
 		}
 		return web.NewHandler(cfgPath, webOpts)
 	}

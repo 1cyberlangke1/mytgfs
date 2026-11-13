@@ -1,0 +1,1250 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  FolderTree,
+  Globe,
+  HardDrive,
+  LayoutDashboard,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Server,
+  Sliders,
+  Sun,
+  WifiOff,
+  X,
+} from 'lucide-react';
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
+import {
+  AppSettings,
+  ConnectionStatus,
+  FileCategory,
+  FileItem,
+  IndexStatus,
+  Locale,
+  NavTab,
+  OfflineSavedFile,
+  ThemeMode,
+  TransferTask,
+  VolumeInfo,
+} from './types';
+import { computeOverviewSummary, formatBytes, inferFileCategory } from './utils/fsLogic';
+import {
+  DICTIONARY,
+  LOCALE_OPTIONS,
+  formatNumber,
+  formatPercent,
+  getLocaleMeta,
+  i18next,
+  interpolate,
+} from './utils/i18n';
+import {
+  ApiFile,
+  ApiState,
+  ApiTransfer,
+  cacheFile,
+  fileURL,
+  getSettings,
+  getState,
+  listFiles,
+  mkdir,
+  moveItems,
+  removeItems,
+  saveSettings,
+  setMount,
+  triggerSync,
+  uncacheFile,
+  uploadFile,
+} from './api';
+import { OverviewView } from './components/OverviewView';
+import { FilesView } from './components/FilesView';
+import { MountView } from './components/MountView';
+import { SettingsView } from './components/SettingsView';
+import { OfflineView } from './components/OfflineView';
+import { FilePreviewModal } from './components/FilePreviewModal';
+import { BrandEmblemSvg } from './components/VisualAssets';
+import {
+  Button,
+  IOS_BOUNCE_SPRING,
+  IOS_SOFT_SPRING,
+  IOS_SPRING,
+  Select,
+  useInterruptibleViewSpring,
+} from './components/ui';
+import { CustomScrollArea, WindowCustomScrollbar } from './components/CustomScrollbar';
+
+const STORAGE_KEYS = {
+  tab: 'mytgfs_active_tab_v1',
+  locale: 'mytgfs_locale_v1',
+  theme: 'mytgfs_theme_v1',
+  offline: 'mytgfs_offline_v1',
+  activeVol: 'mytgfs_active_vol_v1',
+};
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+interface ToastMessage {
+  id: string;
+  type: 'success' | 'error';
+  text: string;
+}
+
+// EMPTY_SETTINGS 是服务端设置到达前的占位，字段与 [web]/[mount]/[pwa] 对齐。
+const EMPTY_SETTINGS: AppSettings = {
+  listenHost: '127.0.0.1',
+  panelPort: 0,
+  autoSyncIntervalSec: 15,
+  downloadConnections: 4,
+  uploadConcurrency: 4,
+  readChunkSizeMb: 8,
+  pwaOfflineMaxFileMb: 256,
+  webdavEnabled: false,
+  webdavPath: '',
+};
+
+// toFileItem 把服务端条目转成前端展示结构。
+function toFileItem(f: ApiFile): FileItem {
+  return {
+    id: f.id,
+    volumeId: f.volumeId,
+    parentId: f.parentId,
+    name: f.name,
+    isDir: f.isDir,
+    size: f.size,
+    updatedAt: f.updatedAt,
+    category: f.category as FileCategory,
+    thumbnailUrl: f.thumbnailUrl,
+    previewUrl: f.previewUrl,
+  };
+}
+
+// transferFromServer 把服务端下载进度转成传输任务。
+function transferFromServer(t: ApiTransfer, index: number): TransferTask {
+  const volumeId = t.path.includes(':') ? t.path.slice(0, t.path.indexOf(':')) : '';
+  const name = t.path.includes(':') ? t.path.slice(t.path.indexOf(':') + 1) : t.path;
+  return {
+    id: `dl-${index}-${t.path}`,
+    fileName: name.split('/').pop() || name,
+    volumeId,
+    targetParentId: null,
+    direction: 'download',
+    size: t.total,
+    transferredBytes: t.done,
+    state: 'transferring',
+    speedBps: 0,
+    isChunkedResume: false,
+    chunkSize: 0,
+    currentChunk: 0,
+    totalChunks: 0,
+    createdAt: new Date().toISOString(),
+    category: inferFileCategory(name, false),
+  };
+}
+
+export default function App() {
+  const globalUploadRef = useRef<HTMLInputElement | null>(null);
+
+  const [activeTab, setActiveTab] = useState<NavTab>(() =>
+    loadFromStorage<NavTab>(STORAGE_KEYS.tab, 'overview')
+  );
+  const [locale, setLocale] = useState<Locale>(() => {
+    const saved = loadFromStorage<Locale | null>(STORAGE_KEYS.locale, null);
+    if (saved && DICTIONARY[saved]) return saved;
+    return 'zh';
+  });
+  const [theme, setTheme] = useState<ThemeMode>(() =>
+    loadFromStorage<ThemeMode>(STORAGE_KEYS.theme, 'dark')
+  );
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+
+  const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
+  const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
+  const [offlineFiles, setOfflineFiles] = useState<OfflineSavedFile[]>(() =>
+    loadFromStorage<OfflineSavedFile[]>(STORAGE_KEYS.offline, [])
+  );
+
+  const [activeVolumeId, setActiveVolumeId] = useState<string>(() =>
+    loadFromStorage<string>(STORAGE_KEYS.activeVol, '')
+  );
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+
+  const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const t = DICTIONARY[locale] || DICTIONARY.zh;
+  const localeMeta = getLocaleMeta(locale);
+  const summary = computeOverviewSummary(volumes, files);
+  const viewSpring = useInterruptibleViewSpring(activeTab);
+
+  // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
+  const uploadAbort = useRef(new Map<string, AbortController>());
+  const uploadInputs = useRef(new Map<string, { file: File; volumeId: string; parentId: string | null }>());
+
+  const transfers = useMemo(
+    () => [...uploadTasks, ...serverTransfers],
+    [uploadTasks, serverTransfers]
+  );
+
+  const cycleNextLocale = () => {
+    const idx = LOCALE_OPTIONS.findIndex((o) => o.id === locale);
+    const next = LOCALE_OPTIONS[(idx + 1) % LOCALE_OPTIONS.length];
+    setLocale(next.id);
+  };
+
+  const pushToast = (text: string, type: 'success' | 'error' = 'success') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setToasts((prev) => [...prev.slice(-3), { id, type, text }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((item) => item.id !== id));
+    }, 4500);
+  };
+
+  // 服务端状态转连接状态码
+  const connOf = (st?: ApiState['status']): ConnectionStatus => {
+    switch (st?.state_code) {
+      case 'online':
+        return 'connected';
+      case 'reconnecting':
+        return 'reconnecting';
+      case 'auth_lost':
+        return 'invalid_credentials';
+      case 'connecting':
+      case 'starting':
+        return 'connecting';
+      default:
+        return 'connected';
+    }
+  };
+
+  // reloadState 只刷新卷摘要与传输进度（轻量，用于轮询）
+  const reloadState = useCallback(async () => {
+    const st = await getState();
+    setVolumes((prev) => {
+      const next = st.volumes.map((v) => ({
+        id: v.name,
+        name: v.name,
+        alias: prev.find((p) => p.id === v.name)?.alias || v.name,
+        channelHint: prev.find((p) => p.id === v.name)?.channelHint || '',
+        description: prev.find((p) => p.id === v.name)?.description || '',
+        createdAt: prev.find((p) => p.id === v.name)?.createdAt || '',
+      }));
+      return next;
+    });
+    setConnectionStatus(connOf(st.status));
+    setServerTransfers((st.status?.transfers ?? []).map(transferFromServer));
+    if (st.mount) {
+      setSettings((prev) => ({
+        ...prev,
+        webdavEnabled: st.mount!.enabled,
+        webdavPath: st.mount!.addr || prev.webdavPath,
+      }));
+    }
+  }, []);
+
+  // reloadFiles 拉取所有卷的完整条目（索引查询，不进 Telegram）
+  const volumesRef = useRef<VolumeInfo[]>([]);
+  useEffect(() => {
+    volumesRef.current = volumes;
+  }, [volumes]);
+
+  const reloadFiles = useCallback(async (names?: string[]) => {
+    const targets = names ?? volumesRef.current.map((v) => v.id);
+    if (targets.length === 0) return;
+    const lists = await Promise.all(
+      targets.map(async (name) => {
+        try {
+          return await listFiles(name, true);
+        } catch {
+          return [] as ApiFile[];
+        }
+      })
+    );
+    setFiles(lists.flat().map(toFileItem));
+  }, []);
+
+  const reloadSettings = useCallback(async () => {
+    const s = await getSettings();
+    setSettings((prev) => ({
+      ...prev,
+      panelPort: s.panelPort,
+      autoSyncIntervalSec: s.autoSyncIntervalSec,
+      downloadConnections: s.downloadConnections,
+      uploadConcurrency: s.uploadConcurrency,
+      readChunkSizeMb: s.readChunkSizeMb,
+      pwaOfflineMaxFileMb: s.pwaOfflineMaxFileMb,
+      webdavEnabled: s.webdavEnabled,
+    }));
+  }, []);
+
+  // 首屏：设置 + 状态；卷挂载是异步的，卷名到达前每隔 1.5s 重试一次
+  useEffect(() => {
+    let alive = true;
+    let timer = 0;
+    const tick = async (attempt: number) => {
+      try {
+        const st = await getState();
+        if (!alive) return;
+        setConnectionStatus(connOf(st.status));
+        setServerTransfers((st.status?.transfers ?? []).map(transferFromServer));
+        if (st.volumes.length === 0) {
+          if (attempt < 40) {
+            timer = window.setTimeout(() => void tick(attempt + 1), 1500);
+          }
+          return;
+        }
+        setVolumes(
+          st.volumes.map((v) => ({
+            id: v.name,
+            name: v.name,
+            alias: v.name,
+            channelHint: '',
+            description: '',
+            createdAt: '',
+          }))
+        );
+        setActiveVolumeId((cur) => cur || st.volumes[0]?.name || '');
+        const lists = await Promise.all(st.volumes.map((v) => listFiles(v.name, true)));
+        if (alive) setFiles(lists.flat().map(toFileItem));
+      } catch (err) {
+        if (alive) pushToast(err instanceof Error ? err.message : String(err), 'error');
+      }
+    };
+    void tick(0);
+    reloadSettings().catch(() => {});
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [reloadSettings]);
+
+  // 事件驱动：服务端有变化时才推送，前端收到后拉最新快照（取代定时轮询）
+  useEffect(() => {
+    // 状态与文件分别防抖：进度类事件密集，避免每次事件都全量拉取
+    let stateTimer = 0;
+    let filesTimer = 0;
+    const scheduleState = () => {
+      window.clearTimeout(stateTimer);
+      stateTimer = window.setTimeout(() => {
+        reloadState().catch(() => {});
+      }, 200);
+    };
+    const scheduleFiles = () => {
+      window.clearTimeout(filesTimer);
+      filesTimer = window.setTimeout(() => {
+        reloadFiles().catch(() => {});
+      }, 1500);
+    };
+
+    const es = new EventSource('/api/events');
+    const onStatus = () => {
+      scheduleState();
+      scheduleFiles();
+    };
+    const onConfig = () => {
+      reloadSettings().catch(() => {});
+      scheduleState();
+      scheduleFiles();
+    };
+    es.addEventListener('status', onStatus);
+    es.addEventListener('mount', scheduleState);
+    es.addEventListener('config', onConfig);
+    // 断线重连后补拉一次，覆盖断线期间丢失的事件
+    es.addEventListener('ready', onStatus);
+
+    return () => {
+      window.clearTimeout(stateTimer);
+      window.clearTimeout(filesTimer);
+      es.close();
+    };
+  }, [reloadState, reloadFiles, reloadSettings]);
+
+  // 主题
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+    window.localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(theme));
+  }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.tab, JSON.stringify(activeTab));
+  }, [activeTab]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.locale, JSON.stringify(locale));
+    const meta = getLocaleMeta(locale);
+    document.documentElement.lang = meta.htmlLang;
+    document.documentElement.dir = meta.dir;
+    document.title = DICTIONARY[locale]?.pageTitle || 'mytgfs';
+    if (i18next.language !== locale) {
+      i18next.changeLanguage(locale).catch(() => {});
+    }
+  }, [locale]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.offline, JSON.stringify(offlineFiles));
+  }, [offlineFiles]);
+
+  useEffect(() => {
+    if (activeVolumeId) window.localStorage.setItem(STORAGE_KEYS.activeVol, JSON.stringify(activeVolumeId));
+  }, [activeVolumeId]);
+
+  // 单文件上传：更新任务进度，成功后刷新索引
+  const runUpload = async (task: TransferTask, file: File, volumeId: string, parentId: string | null) => {
+    const ctl = new AbortController();
+    uploadAbort.current.set(task.id, ctl);
+    setUploadTasks((prev) =>
+      prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'transferring' } : tr))
+    );
+    try {
+      await uploadFile(
+        volumeId,
+        parentId || '/',
+        '',
+        file,
+        (ratio) => {
+          setUploadTasks((prev) =>
+            prev.map((tr) =>
+              tr.id === task.id
+                ? {
+                    ...tr,
+                    transferredBytes: Math.round(tr.size * ratio),
+                    speedBps: 0,
+                  }
+                : tr
+            )
+          );
+        },
+        ctl.signal
+      );
+      setUploadTasks((prev) =>
+        prev.map((tr) =>
+          tr.id === task.id
+            ? { ...tr, state: 'completed', transferredBytes: tr.size, speedBps: 0 }
+            : tr
+        )
+      );
+      uploadAbort.current.delete(task.id);
+      await reloadFiles();
+      await reloadState();
+    } catch (err) {
+      const aborted = err instanceof Error && err.message === 'aborted';
+      setUploadTasks((prev) =>
+        prev.map((tr) =>
+          tr.id === task.id
+            ? {
+                ...tr,
+                state: aborted ? 'paused' : 'failed',
+                speedBps: 0,
+                errorMessage: aborted ? undefined : err instanceof Error ? err.message : String(err),
+              }
+            : tr
+        )
+      );
+      uploadAbort.current.delete(task.id);
+      if (!aborted) pushToast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
+
+  const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
+    const incoming = Array.from(fileList);
+    if (incoming.length === 0) return;
+    const plan = incoming.map((file) => {
+      const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const task: TransferTask = {
+        id,
+        fileName: file.name,
+        volumeId,
+        targetParentId: parentId,
+        direction: 'upload',
+        size: file.size,
+        transferredBytes: 0,
+        state: 'queued',
+        speedBps: 0,
+        isChunkedResume: false,
+        chunkSize: 0,
+        currentChunk: 0,
+        totalChunks: 1,
+        createdAt: new Date().toISOString(),
+        category: inferFileCategory(file.name, false),
+      };
+      uploadInputs.current.set(id, { file, volumeId, parentId });
+      return task;
+    });
+    setUploadTasks((prev) => [...prev, ...plan]);
+    pushToast(
+      interpolate(t.files.uploadStartedToast, { name: plan[0].fileName }, locale),
+      'success'
+    );
+    for (let i = 0; i < plan.length; i++) {
+      void runUpload(plan[i], incoming[i], volumeId, parentId);
+    }
+  };
+
+  const handleToggleTransferPause = (taskId: string) => {
+    const task = uploadTasks.find((tr) => tr.id === taskId);
+    if (!task) return;
+    if (task.state === 'transferring' || task.state === 'queued') {
+      uploadAbort.current.get(taskId)?.abort();
+      return;
+    }
+    if (task.state === 'paused') {
+      const input = uploadInputs.current.get(taskId);
+      if (!input) return;
+      void runUpload(task, input.file, input.volumeId, input.parentId);
+    }
+  };
+
+  const handleCancelTransfer = (taskId: string) => {
+    uploadAbort.current.get(taskId)?.abort();
+    uploadAbort.current.delete(taskId);
+    uploadInputs.current.delete(taskId);
+    setUploadTasks((prev) => prev.filter((tr) => tr.id !== taskId));
+  };
+
+  const handleClearCompletedTransfers = () => {
+    setUploadTasks((prev) => prev.filter((tr) => tr.state !== 'completed'));
+  };
+
+  const handleCreateFolder = (volumeId: string, parentId: string | null, name: string) => {
+    mkdir(volumeId, parentId || '/', name)
+      .then(() => reloadFiles([volumeId]))
+      .then(() => pushToast(interpolate(t.files.folderCreatedToast, { name }, locale), 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // 改名/移动：同一父目录只改末段，跨目录用目标目录 + 原名
+  const handleRenameMoveItem = (itemId: string, newName: string, targetParentId: string | null) => {
+    const item = files.find((f) => f.id === itemId);
+    if (!item) return;
+    const targetDir = targetParentId || '/';
+    const dest = targetDir === '/' ? `/${newName}` : `${targetDir}/${newName}`;
+    moveItems(item.volumeId, [itemId], targetDir, dest)
+      .then(() => reloadFiles([item.volumeId]))
+      .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleBatchMoveItems = (itemIds: string[], targetParentId: string | null) => {
+    const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
+    if (!vol || itemIds.length === 0) return;
+    moveItems(vol, itemIds, targetParentId || '/')
+      .then(() => reloadFiles([vol]))
+      .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleDeleteItems = (itemIds: string[]) => {
+    const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
+    if (!vol || itemIds.length === 0) return;
+    removeItems(vol, itemIds)
+      .then(() => {
+        setOfflineFiles((prev) => prev.filter((off) => !itemIds.includes(off.fileId)));
+        return reloadFiles([vol]);
+      })
+      .then(() => pushToast(t.files.deletedToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleDownloadFile = (file: FileItem) => {
+    const url = fileURL(file.volumeId, file.id);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    pushToast(interpolate(t.files.downloadStartedToast, { name: file.name }, locale), 'success');
+  };
+
+  const handleSaveOffline = (file: FileItem) => {
+    const maxBytes = settings.pwaOfflineMaxFileMb * 1024 * 1024;
+    if (maxBytes > 0 && file.size > maxBytes) {
+      pushToast(
+        interpolate(t.offline.exceededLimitToast, { limit: settings.pwaOfflineMaxFileMb }, locale),
+        'error'
+      );
+      return;
+    }
+    cacheFile(fileURL(file.volumeId, file.id))
+      .then(() => {
+        setOfflineFiles((prev) => {
+          if (prev.some((o) => o.fileId === file.id)) return prev;
+          return [
+            {
+              fileId: file.id,
+              volumeId: file.volumeId,
+              name: file.name,
+              size: file.size,
+              category: file.category,
+              savedAt: new Date().toISOString(),
+              thumbnailUrl: file.thumbnailUrl,
+              previewUrl: file.previewUrl,
+            },
+            ...prev,
+          ];
+        });
+        pushToast(interpolate(t.offline.savedOfflineToast, { name: file.name }, locale), 'success');
+      })
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleRemoveOfflineFile = (fileId: string) => {
+    const saved = offlineFiles.find((o) => o.fileId === fileId);
+    const done = () => {
+      setOfflineFiles((prev) => prev.filter((o) => o.fileId !== fileId));
+      pushToast(t.offline.removedOfflineToast, 'success');
+    };
+    if (!saved) {
+      done();
+      return;
+    }
+    uncacheFile(fileURL(saved.volumeId, saved.fileId)).then(done).catch(done);
+  };
+
+  const handleToggleWebdav = (enabled: boolean) => {
+    setMount(enabled)
+      .then((st) => {
+        setSettings((prev) => ({
+          ...prev,
+          webdavEnabled: st.enabled,
+          webdavPath: st.addr || prev.webdavPath,
+        }));
+        pushToast(enabled ? t.mount.toggleSavedToastOn : t.mount.toggleSavedToastOff, 'success');
+      })
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleCopyAddress = (url: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+    pushToast(t.mount.copiedToast, 'success');
+  };
+
+  const handleSaveSettings = (nextSettings: AppSettings) => {
+    saveSettings({
+      panelPort: nextSettings.panelPort,
+      autoSyncIntervalSec: nextSettings.autoSyncIntervalSec,
+      downloadConnections: nextSettings.downloadConnections,
+      uploadConcurrency: nextSettings.uploadConcurrency,
+      readChunkSizeMb: nextSettings.readChunkSizeMb,
+      pwaOfflineMaxFileMb: nextSettings.pwaOfflineMaxFileMb,
+    })
+      .then(() => {
+        setSettings(nextSettings);
+        return reloadSettings();
+      })
+      .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  const handleResetSettings = () => {
+    reloadSettings()
+      .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'overview', label: t.nav.overview, icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
+    { id: 'files', label: t.nav.files, icon: <FolderTree className="w-4 h-4 shrink-0" /> },
+    { id: 'mount', label: t.nav.mount, icon: <Server className="w-4 h-4 shrink-0" /> },
+    { id: 'settings', label: t.nav.settings, icon: <Sliders className="w-4 h-4 shrink-0" /> },
+    { id: 'offline', label: t.nav.offline, icon: <WifiOff className="w-4 h-4 shrink-0" /> },
+  ];
+
+  return (
+    <div
+      dir={localeMeta.dir}
+      className="min-h-screen flex flex-col bg-[#F5F5F7] dark:bg-[#090A0F] text-zinc-900 dark:text-zinc-100"
+    >
+      {/* Global Hidden File Input for Quick Upload */}
+      <input
+        ref={globalUploadRef}
+        type="file"
+        multiple
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            const targetVol =
+              volumes.find((v) => v.id === activeVolumeId)?.id ||
+              volumes[0]?.id ||
+              'vol-archive';
+            handleUploadFiles(e.target.files, targetVol, currentFolderId);
+            e.target.value = '';
+          }
+        }}
+        className="hidden"
+        aria-label={t.header.quickUpload}
+      />
+
+      {/* Phone Top Status Bar (Only visible on <768px phones; Tablet & Desktop have NO top bar) */}
+      <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <motion.a
+            href="#overview"
+            whileTap={{ scale: 0.92 }}
+            transition={IOS_BOUNCE_SPRING}
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveTab('overview');
+            }}
+            className="flex items-center gap-2 min-w-0 shrink-0"
+          >
+            <BrandEmblemSvg className="w-7 h-7 shrink-0" />
+            <div className="min-w-0">
+              <div dir="ltr" className="text-sm font-bold tracking-tight text-zinc-950 dark:text-white leading-tight">
+                {t.appName}
+              </div>
+              <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate leading-tight">
+                {t.loopbackOnlyBadge} · {formatBytes(summary.totalBytes, 1, locale)}
+              </div>
+            </div>
+          </motion.a>
+
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="relative flex items-center">
+              <Globe className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 absolute start-2.5 pointer-events-none" />
+              <Select
+                aria-label={t.sidebar.languageLabel}
+                value={locale}
+                onChange={(e) => setLocale(e.target.value as Locale)}
+                className="h-8 ps-7 pe-2 text-xs max-w-[116px] truncate"
+              >
+                {LOCALE_OPTIONS.map((opt) => (
+                  <option
+                    key={opt.id}
+                    value={opt.id}
+                    className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+                  >
+                    {opt.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
+              aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+            >
+              {theme === 'dark' ? (
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+              ) : (
+                <Moon className="w-3.5 h-3.5 text-zinc-700" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Workspace Canvas: Collapsible iOS/iPadOS/macOS Spring Sidebar (md+) + Main Content Viewport */}
+      <div className="flex-1 flex min-w-0">
+        <motion.aside
+          initial={false}
+          animate={{ width: sidebarCollapsed ? 76 : 256 }}
+          transition={IOS_SPRING}
+          className="hidden md:flex shrink-0 flex-col border-e border-zinc-200/80 dark:border-zinc-800/80 bg-white/80 dark:bg-[#0C0E14]/90 backdrop-blur-xl sticky top-0 h-screen overflow-hidden"
+        >
+          <CustomScrollArea className="flex-1 h-full" viewportClassName="p-3.5">
+            <div className="space-y-5">
+            {/* Brand Identity + Collapse Toggle */}
+            <div className="flex items-center justify-between gap-2 px-1">
+              {!sidebarCollapsed && (
+                <motion.a
+                  href="#overview"
+                  whileTap={{ scale: 0.93 }}
+                  whileHover={{ scale: 1.015 }}
+                  transition={IOS_BOUNCE_SPRING}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setActiveTab('overview');
+                  }}
+                  className="flex items-center gap-2.5 min-w-0"
+                >
+                  <BrandEmblemSvg className="w-8 h-8 shrink-0" />
+                  <div className="min-w-0">
+                    <div
+                      dir="ltr"
+                      className="text-sm font-bold text-zinc-950 dark:text-white tracking-tight truncate"
+                    >
+                      {t.appName}
+                    </div>
+                    <div className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
+                      {t.loopbackOnlyBadge}
+                    </div>
+                  </div>
+                </motion.a>
+              )}
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setSidebarCollapsed((c) => !c)}
+                aria-label={sidebarCollapsed ? t.sidebar.expandSidebar : t.sidebar.collapseSidebar}
+                title={sidebarCollapsed ? t.sidebar.expandSidebar : t.sidebar.collapseSidebar}
+                className={sidebarCollapsed ? 'mx-auto' : 'ms-auto'}
+              >
+                {sidebarCollapsed ? (
+                  <PanelLeftOpen className="w-4 h-4" />
+                ) : (
+                  <PanelLeftClose className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
+
+            {/* Navigation Section with iOS Liquid Spring Pill & Tactile Press */}
+            <LayoutGroup id="desktop-sidebar-nav">
+              <nav aria-label={t.a11y.primaryNav} className="space-y-1">
+                {navItems.map((item) => {
+                  const isActive = activeTab === item.id;
+                  return (
+                    <motion.a
+                      key={item.id}
+                      href={`#${item.id}`}
+                      whileTap={{ scale: 0.92 }}
+                      whileHover={{ scale: 1.015 }}
+                      transition={IOS_BOUNCE_SPRING}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setActiveTab(item.id);
+                      }}
+                      title={sidebarCollapsed ? item.label : undefined}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={`relative w-full h-10 ${
+                        sidebarCollapsed ? 'justify-center px-0' : 'justify-between px-3'
+                      } rounded-xl text-xs font-medium flex items-center transition-colors select-none z-10 ${
+                        isActive
+                          ? 'text-white font-semibold'
+                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-200/50 dark:hover:bg-white/[0.04]'
+                      }`}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="sidebar-active-pill"
+                          transition={IOS_SPRING}
+                          className="absolute inset-0 rounded-xl bg-[#007AFF] dark:bg-[#0A84FF] shadow-xs -z-10"
+                        />
+                      )}
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        {item.icon}
+                        {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                      </span>
+                      {!sidebarCollapsed && item.id === 'files' && (
+                        <span
+                          className={`font-mono text-[11px] tabular-nums shrink-0 ${
+                            isActive ? 'text-white/90' : 'text-zinc-400 dark:text-zinc-500'
+                          }`}
+                        >
+                          {formatNumber(summary.totalFiles, locale)}
+                        </span>
+                      )}
+                      {!sidebarCollapsed && item.id === 'offline' && (
+                        <span
+                          className={`font-mono text-[11px] tabular-nums shrink-0 ${
+                            isActive ? 'text-white/90' : 'text-zinc-400 dark:text-zinc-500'
+                          }`}
+                        >
+                          {formatNumber(offlineFiles.length, locale)}
+                        </span>
+                      )}
+                    </motion.a>
+                  );
+                })}
+              </nav>
+            </LayoutGroup>
+
+            {/* Total Used Header + Per-Volume Usage (xxG xx%) */}
+            {!sidebarCollapsed && (
+              <div className="space-y-2 pt-4 border-t border-zinc-200/80 dark:border-zinc-800/80">
+                <div className="px-2.5 py-1 flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  <span className="truncate">{t.sidebar.totalUsed}</span>
+                  <span
+                    dir="ltr"
+                    className="font-mono font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 shrink-0"
+                  >
+                    {formatBytes(summary.totalBytes, 1, locale)}
+                  </span>
+                </div>
+                {summary.perVolume.map(({ volume, totalBytes }) => {
+                  const isCurrentVol = activeVolumeId === volume.id && activeTab === 'files';
+                  const sharePct = Math.round(
+                    (totalBytes / Math.max(1, summary.totalBytes)) * 100
+                  );
+                  const visualWidth = Math.min(100, Math.max(6, sharePct));
+                  return (
+                    <motion.button
+                      key={volume.id}
+                      type="button"
+                      whileTap={{ scale: 0.93 }}
+                      whileHover={{ scale: 1.015 }}
+                      transition={IOS_BOUNCE_SPRING}
+                      onClick={() => {
+                        setActiveVolumeId(volume.id);
+                        setCurrentFolderId(null);
+                        setActiveTab('files');
+                      }}
+                      className={`w-full px-2.5 py-2.5 rounded-xl text-start transition-colors space-y-1.5 cursor-pointer ${
+                        isCurrentVol
+                          ? 'bg-[#007AFF]/10 text-[#007AFF] dark:text-[#0A84FF] ring-1 ring-[#007AFF]/30'
+                          : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/50 dark:hover:bg-white/[0.04]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 min-w-0">
+                          <HardDrive className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                          <span dir="ltr" className="text-xs font-mono font-semibold truncate">
+                            {volume.name}
+                          </span>
+                        </span>
+                        <span
+                          dir="ltr"
+                          className="text-[11px] font-mono tabular-nums text-zinc-500 dark:text-zinc-400 shrink-0"
+                        >
+                          {formatBytes(totalBytes, 1, locale)} {formatPercent(sharePct, locale)}
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
+                        <motion.div
+                          initial={false}
+                          animate={{ width: `${visualWidth}%` }}
+                          transition={IOS_SOFT_SPRING}
+                          className="h-full bg-[#007AFF] dark:bg-[#0A84FF] rounded-full"
+                        />
+                      </div>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Bottom Sidebar Loopback Telemetry + Multi-Language Selector & Theme Controls */}
+          <div className="space-y-3 pt-4 border-t border-zinc-200/80 dark:border-zinc-800/80">
+            {!sidebarCollapsed && (
+              <div className="p-3 rounded-xl bg-zinc-100/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800/80 space-y-1 text-[11px]">
+                <div className="flex items-center justify-between gap-2 text-zinc-500 dark:text-zinc-400">
+                  <span className="truncate">{t.sidebar.loopback}</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
+                    {t.connection[connectionStatus]}
+                  </span>
+                </div>
+                <div
+                  dir="ltr"
+                  className="font-mono text-zinc-900 dark:text-zinc-200 truncate text-start"
+                >
+                  {settings.panelPort > 0
+                    ? `http://${settings.listenHost}:${settings.panelPort}`
+                    : settings.webdavPath || t.loopbackOnlyBadge}
+                </div>
+                <div className="text-zinc-500 dark:text-zinc-400 truncate">
+                  {settings.webdavEnabled ? t.sidebar.webdavActive : t.sidebar.webdavOff}
+                </div>
+              </div>
+            )}
+
+            {sidebarCollapsed ? (
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={cycleNextLocale}
+                  aria-label={t.sidebar.languageLabel}
+                  title={`${t.sidebar.languageLabel}: ${localeMeta.label}`}
+                  className="px-0 justify-center"
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
+                  aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+                  className="px-0 justify-center"
+                >
+                  {theme === 'dark' ? (
+                    <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  ) : (
+                    <Moon className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="relative flex items-center flex-1 min-w-0">
+                  <Globe className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 absolute start-2.5 pointer-events-none" />
+                  <Select
+                    aria-label={t.sidebar.languageLabel}
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value as Locale)}
+                    className="h-8 w-full ps-7 pe-2 text-xs rounded-lg truncate"
+                  >
+                    {LOCALE_OPTIONS.map((opt) => (
+                      <option
+                        key={opt.id}
+                        value={opt.id}
+                        className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
+                  aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+                  title={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+                  className="px-2.5 shrink-0"
+                >
+                  {theme === 'dark' ? (
+                    <>
+                      <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span className="truncate max-w-[72px]">{t.header.themeLight}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Moon className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
+                      <span className="truncate max-w-[72px]">{t.header.themeDark}</span>
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+          </div>
+          </CustomScrollArea>
+        </motion.aside>
+
+        {/* Custom iOS / macOS Interactive Floating Window Scrollbar */}
+        <WindowCustomScrollbar />
+
+        {/* Main Content Viewport: Persistent, velocity-preserving iOS spring (zero unmount flash, 100% mid-flight interruptible) */}
+        <main className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full overflow-x-hidden">
+          <motion.div
+            style={{
+              y: viewSpring.y,
+              scale: viewSpring.scale,
+              opacity: viewSpring.opacity,
+              transformOrigin: 'top center',
+            }}
+          >
+            {activeTab === 'overview' && (
+              <OverviewView
+                t={t}
+                locale={locale}
+                connectionStatus={connectionStatus}
+                volumes={volumes}
+                files={files}
+                transfers={transfers}
+                activeVolumeId={activeVolumeId}
+                onSelectVolumeAndBrowse={(volId) => {
+                  setActiveVolumeId(volId);
+                  setCurrentFolderId(null);
+                  setActiveTab('files');
+                }}
+                onUploadFiles={handleUploadFiles}
+                onToggleTransferPause={handleToggleTransferPause}
+                onCancelTransfer={handleCancelTransfer}
+                onClearCompletedTransfers={handleClearCompletedTransfers}
+              />
+            )}
+
+            {activeTab === 'files' && (
+              <FilesView
+                t={t}
+                locale={locale}
+                volumes={volumes}
+                activeVolumeId={activeVolumeId}
+                onChangeVolume={(volId) => {
+                  setActiveVolumeId(volId);
+                  setCurrentFolderId(null);
+                }}
+                currentFolderId={currentFolderId}
+                onNavigateFolder={setCurrentFolderId}
+                files={files}
+                offlineFiles={offlineFiles}
+                connectionStatus={connectionStatus}
+                onUploadFiles={handleUploadFiles}
+                onCreateFolder={handleCreateFolder}
+                onRenameMoveItem={handleRenameMoveItem}
+                onBatchMoveItems={handleBatchMoveItems}
+                onDeleteItems={handleDeleteItems}
+                onDownloadFile={handleDownloadFile}
+                onSaveOffline={handleSaveOffline}
+                onPreviewFile={setPreviewFile}
+              />
+            )}
+
+            {activeTab === 'mount' && (
+              <MountView
+                t={t}
+                settings={settings}
+                onToggleWebdav={handleToggleWebdav}
+                onCopyAddress={handleCopyAddress}
+              />
+            )}
+
+            {activeTab === 'settings' && (
+              <SettingsView
+                t={t}
+                locale={locale}
+                settings={settings}
+                onSaveSettings={handleSaveSettings}
+                onResetDefaults={handleResetSettings}
+                onNotifyError={(msg) => pushToast(msg, 'error')}
+              />
+            )}
+
+            {activeTab === 'offline' && (
+              <OfflineView
+                t={t}
+                locale={locale}
+                settings={settings}
+                offlineFiles={offlineFiles}
+                allFiles={files}
+                onRemoveOfflineFile={handleRemoveOfflineFile}
+                onPreviewOfflineFile={setPreviewFile}
+              />
+            )}
+          </motion.div>
+        </main>
+      </div>
+
+      {/* Phone Native iOS Frosted Bottom Tab Bar (<768px) */}
+      <LayoutGroup id="phone-bottom-dock">
+        <nav
+          aria-label={t.a11y.primaryNav}
+          className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white/88 dark:bg-[#0C0E14]/92 backdrop-blur-2xl px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+        >
+          <div className="grid grid-cols-5 gap-1 max-w-md mx-auto">
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              const badgeCount =
+                item.id === 'files'
+                  ? summary.totalFiles
+                  : item.id === 'offline'
+                  ? offlineFiles.length
+                  : null;
+              return (
+                <motion.a
+                  key={item.id}
+                  href={`#${item.id}`}
+                  whileTap={{ scale: 0.86 }}
+                  transition={IOS_BOUNCE_SPRING}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setActiveTab(item.id);
+                  }}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${
+                    isActive
+                      ? 'text-[#007AFF] dark:text-[#0A84FF] font-semibold'
+                      : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  {isActive && (
+                    <motion.span
+                      layoutId="phone-bottom-tab-pill"
+                      transition={IOS_SPRING}
+                      className="absolute inset-0 rounded-xl bg-[#007AFF]/12 dark:bg-[#0A84FF]/18 -z-10"
+                    />
+                  )}
+                  <div className="relative flex items-center justify-center">
+                    {item.icon}
+                    {badgeCount !== null && badgeCount > 0 && (
+                      <span className="absolute -top-1.5 -end-3 min-w-[15px] h-[15px] px-1 rounded-full bg-[#007AFF] text-white text-[9px] font-mono font-bold inline-flex items-center justify-center leading-none">
+                        {formatNumber(badgeCount, locale)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="mt-1 truncate max-w-full leading-none">{item.label}</span>
+                </motion.a>
+              );
+            })}
+          </div>
+        </nav>
+      </LayoutGroup>
+
+      {/* File Details & Media Preview Modal */}
+      <FilePreviewModal
+        file={previewFile}
+        allFiles={files}
+        t={t}
+        locale={locale}
+        onClose={() => setPreviewFile(null)}
+        onDownload={handleDownloadFile}
+        onSaveOffline={handleSaveOffline}
+        isOfflineSaved={
+          previewFile ? offlineFiles.some((o) => o.fileId === previewFile.id) : false
+        }
+      />
+
+      {/* iOS Dynamic Toast Notification Stack */}
+      <div
+        aria-live="polite"
+        className="fixed bottom-20 md:bottom-4 end-4 z-50 flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] sm:w-auto pointer-events-none"
+      >
+        <AnimatePresence>
+          {toasts.map((toast) => (
+            <motion.div
+              key={toast.id}
+              layout
+              initial={{ opacity: 0, y: 16, scale: 0.94 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94, transition: { duration: 0.15 } }}
+              transition={IOS_SPRING}
+              className={`pointer-events-auto flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl shadow-lg border text-xs font-medium backdrop-blur-xl ${
+                toast.type === 'error'
+                  ? 'bg-red-950/90 text-red-100 border-red-800/80'
+                  : 'bg-zinc-900/90 text-zinc-100 border-white/10'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                {toast.type === 'error' ? (
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                )}
+                <span className="leading-relaxed">{toast.text}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setToasts((prev) => prev.filter((item) => item.id !== toast.id))
+                }
+                aria-label={t.a11y.dismissToast}
+                className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}

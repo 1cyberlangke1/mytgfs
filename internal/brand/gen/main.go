@@ -105,6 +105,9 @@ func render(size int) (image.Image, error) {
 
 	s := float64(size)
 	radius := 11.0 / 40.0 * s
+	// 描边带宽：随尺寸缩放，最小 1px，保证 16px 托盘图标也看得出边框
+	strokeW := math.Max(1, s*0.012)
+	innerRadius := math.Max(radius-strokeW, 0)
 	out := image.NewRGBA(image.Rect(0, 0, size, size))
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
@@ -113,15 +116,24 @@ func render(size int) (image.Image, error) {
 			if cover <= 0 {
 				continue
 			}
-			t := (fx + fy) / (2 * s)
-			r, g, b := lerpStops(t)
-			// 外层 1px 白色高光边
-			if cover < 1 {
-				out.SetRGBA(x, y, color.RGBA{R: 255, G: 255, B: 255, A: uint8(64 * cover)})
+			// cover-inner = 落在描边带内的比例
+			inner := roundedCoverage(fx-strokeW, fy-strokeW, s-2*strokeW, innerRadius)
+			if inner < 1 {
+				band := math.Min(1, cover-inner)
+				// image.RGBA 是预乘 alpha：白色必须写成 R=G=B=A，否则编码时溢出发黑
+				a := uint8(205 * band)
+				out.SetRGBA(x, y, color.RGBA{R: a, G: a, B: a, A: a})
 				continue
 			}
-			a := uint8(255)
-			out.SetRGBA(x, y, color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: a})
+			t := (fx + fy) / (2 * s)
+			r, g, b := lerpStops(t)
+			// 最外 1px 亚像素边：半透明白，避免圆角发毛
+			if cover < 1 {
+				rim := uint8(64 * cover)
+				out.SetRGBA(x, y, color.RGBA{R: rim, G: rim, B: rim, A: rim})
+				continue
+			}
+			out.SetRGBA(x, y, color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255})
 		}
 	}
 
@@ -218,7 +230,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	for _, size := range []int{16, 24, 32, 48, 64, 128, 256, 512, 1024} {
+	for _, size := range []int{16, 24, 32, 48, 64, 128, 192, 256, 512, 1024} {
 		img, err := render(size)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
