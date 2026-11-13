@@ -1,0 +1,101 @@
+name: Release
+
+# 打 tag 即发布：构建三平台二进制、打包、上传到 GitHub Release。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-amd64
+            ext: ''
+            gui: ''
+            archive: tar.gz
+          - os: windows-latest
+            platform: windows-amd64
+            ext: '.exe'
+            gui: '-H=windowsgui'
+            archive: zip
+          - os: macos-latest
+            platform: darwin-arm64
+            ext: ''
+            gui: ''
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Linux 托盘（fyne.io/systray）需要 GTK 与 AppIndicator 头文件
+      - name: 安装 Linux 托盘依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+      - name: 构建
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          commit="$(git rev-parse --short HEAD)"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ld="-s -w -X mytgfs/internal/version.Version=$ver -X mytgfs/internal/version.Commit=$commit -X mytgfs/internal/version.Date=$date"
+          mkdir -p dist
+          go build -trimpath -ldflags "$ld" -o "dist/mytgfs${{ matrix.ext }}" ./cmd/mytgfs
+          go build -trimpath -ldflags "$ld ${{ matrix.gui }}" -o "dist/mytgfs-tray${{ matrix.ext }}" ./cmd/mytray
+      - name: 打包（tar.gz）
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="pkg/mytgfs-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          mkdir -p "$pkg"
+          cp dist/mytgfs dist/mytgfs-tray LICENSE config.example.toml README.md "$pkg"/
+          cp packaging/uninstall.ps1 packaging/setup-webdav.ps1 "$pkg"/
+          tar -czf "$pkg.tar.gz" -C pkg "$(basename "$pkg")"
+      - name: 打包（zip）
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $pkg = "pkg/mytgfs-$env:GITHUB_REF_NAME-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item dist/mytgfs.exe, dist/mytgfs-tray.exe, LICENSE, config.example.toml, README.md $pkg -Force
+          Copy-Item packaging/install.ps1, packaging/uninstall.ps1, packaging/setup-webdav.ps1 $pkg -Force
+          Compress-Archive -Path "$pkg/*" -DestinationPath "$pkg.zip"
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: mytgfs-${{ matrix.platform }}
+          path: pkg/*.zip
+          if-no-files-found: ignore
+      - name: 上传构建产物（tar.gz）
+        if: matrix.archive == 'tar.gz'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mytgfs-${{ matrix.platform }}-tar
+          path: pkg/*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

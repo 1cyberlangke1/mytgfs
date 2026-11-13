@@ -41,7 +41,7 @@
 go build -o mytgfs ./cmd/mytgfs
 ```
 
-## 安装（Windows，日常不需要命令行）
+## 安装
 
 1. 解压发行包，在 PowerShell 里执行一次 `.\install.ps1`
    （默认装到 `%LOCALAPPDATA%\mytgfs`，并创建开始菜单快捷方式）。
