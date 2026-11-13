@@ -1,5 +1,10 @@
 # mytgfs
 
+[![CI](https://github.com/1cyberlangke1/mytgfs/actions/workflows/ci.yml/badge.svg)](https://github.com/1cyberlangke1/mytgfs/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/1cyberlangke1/mytgfs)](https://github.com/1cyberlangke1/mytgfs/blob/master/go.mod)
+[![License](https://img.shields.io/github/license/1cyberlangke1/mytgfs)](https://github.com/1cyberlangke1/mytgfs/blob/master/LICENSE)
+[![Release](https://img.shields.io/github/v/release/1cyberlangke1/mytgfs)](https://github.com/1cyberlangke1/mytgfs/releases)
+
 把 Telegram 私有频道当文件存储用的工具。用 bot 通过 MTProto 直连 Telegram，
 文件内容存频道，路径等元数据写在文件消息的 caption 里，本地 SQLite 只是可重建的索引缓存。
 
@@ -95,10 +100,17 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs volume create --name <n> --point Y:` | 建卷 |
 | `mytgfs volume delete --name <n>` | 删卷：删频道、移除配置、删本地索引 |
 | `mytgfs volume check` | 检查每个卷的频道是否仍可读写 |
-| `mytgfs web [--port N]` | 启动本地 Web 面板 |
+| `mytgfs web [--port N] [--no-open]` | 启动本地 Web 面板（端口默认取 `[web].port`） |
 | `mytgfs tray [--port N]` | 系统托盘常驻（自动同步、按需面板） |
 | `mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]` | 启动 WebDAV 服务 |
 | `mytgfs unmap --addr 127.0.0.1:8080` | 清理指向本服务的网络映射 |
+| `mytgfs ls [--name 卷] [目录]` | 列出目录 |
+| `mytgfs mkdir [--name 卷] <目录>` | 创建目录 |
+| `mytgfs rm [--name 卷] <路径...>` | 删除文件或目录（目录递归） |
+| `mytgfs mv [--name 卷] <源> <目标>` | 移动或改名 |
+| `mytgfs get [--name 卷] <远端> [本地\|-]` | 下载文件（`-` 输出到 stdout） |
+| `mytgfs search [--name 卷] [--dir 目录] [--limit N] <关键词>` | 按文件名递归搜索 |
+| `mytgfs config show\|get\|set\|keys` | 读写配置（与面板配置卡片等价） |
 | `mytgfs sync [--name 卷] [--limit N] [--backfill]` | 增量同步（`--name` 省略时用第一个卷）；`--backfill` 用 user 会话回填历史 |
 | `mytgfs check [--name 卷] [--fix]` | 核对索引与频道消息；`--fix` 删除缺失行、按 caption 修正路径 |
 | `mytgfs put [--name 卷] [--remote /目录] <路径...>` | 批量上传文件/目录 |
@@ -114,7 +126,8 @@ go build -o mytgfs ./cmd/mytgfs
 
 - `[telegram]`：`api_id` 填这里；`api_hash_file` / `bot_token_file` 指向 `secrets/` 下的文件。
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
-  `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒）。
+  `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
+- `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）、`auto_open`（打开面板时是否自动开浏览器，默认 `true`）。
 - `[webdav]`：默认 `enabled = false`，只绑本机回环；可在面板或托盘里开关。
 - `[pwa]`：默认启用可安装 PWA 与「离线保存」，单文件上限默认 256MB。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
@@ -194,6 +207,17 @@ internal/
 web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/static）
 packaging/      安装/卸载/映射脚本
 ```
+
+## 托盘
+
+`mytgfs-tray.exe`（或 `mytgfs tray`）常驻任务栏，菜单里的常用项：
+
+- **打开面板 / 关闭面板**：按需启停本地 Web 服务；`[web].auto_open = false` 时只起服务不开浏览器。
+- **自动同步**：即时开关频道增量同步，状态写回 `config.toml` 的 `[mount].sync_seconds`。
+- **WebDAV**：开关网络盘服务，状态写回 `[webdav].enabled`。
+- **开机自启**：写当前用户的系统注册项，默认关闭。
+
+鼠标悬停在图标上会显示连接状态、每个卷的文件数与占用、正在下载/排队的任务数。
 
 ## 测试
 

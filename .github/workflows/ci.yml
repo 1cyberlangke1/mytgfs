@@ -7,6 +7,8 @@ on:
 
 jobs:
   # 纯 Go 构建：WebDAV 时代已无 FUSE/cgofuse，不需要任何系统 SDK 或 CGO flags。
+  # 三个平台都跑完整的 build / vet / test，平台差异（路径分隔符、注册表、
+  # 托盘构建标签）由各自的 runner 验证。
   build:
     strategy:
       fail-fast: false
@@ -24,10 +26,34 @@ jobs:
         run: go build ./...
       - name: 静态检查
         run: go vet ./...
+      - name: 格式检查
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化："
+            echo "$unformatted"
+            exit 1
+          fi
+      # Linux 额外开竞态检测与覆盖率；Windows/macOS 跑普通测试覆盖平台分支。
+      - name: 测试（竞态 + 覆盖率）
+        if: runner.os == 'Linux'
+        run: go test -count=1 -race -covermode=atomic -coverprofile=coverage.out ./...
       - name: 测试
-        run: go test ./... -cover
+        if: runner.os != 'Linux'
+        run: go test -count=1 ./... -cover
+      - name: 覆盖率摘要
+        if: runner.os == 'Linux'
+        run: go tool cover -func=coverage.out | tail -n 1
+      - name: 上传覆盖率
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error
 
-  # 前端：TypeScript 类型检查（产物 app.js 已内嵌，不需要在 CI 里重新打包）
+  # 前端：类型检查 + 产物一致性（app.js 是提交进仓库的构建产物）。
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -41,3 +67,8 @@ jobs:
       - name: 类型检查
         working-directory: web
         run: npx tsc --noEmit
+      - name: 构建产物与源码一致
+        working-directory: web
+        run: |
+          npm run build
+          git diff --exit-code -- ../internal/web/static/app.js
