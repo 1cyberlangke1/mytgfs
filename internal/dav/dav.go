@@ -32,6 +32,7 @@ import (
 	"mytgfs/internal/queue"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/upload"
 )
 
 // Store 是 WebDAV 层需要的存储能力。
@@ -750,40 +751,20 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 		return err
 	}
 	caption := tgsync.EncodeCaptionHash(name, sha)
-	var part *telegramstore.Part
-	// 写时去重：库里已有同内容文件时，引用它的 document，不重传字节。
-	// 排除自己这条路径（同路径覆盖写仍按原逻辑上传），命中源不会被改动。
-	reused := false
-	if hit, ok, ferr := f.d.idx.FindContent(ctx, path.Dir(name), st.Size(), sha); ferr != nil {
-		return ferr
-	} else if ok && hit.Path != name && hit.DocumentID != 0 {
-		p, cerr := f.d.store.Copy(ctx, partOf(hit), path.Base(name), "application/octet-stream", caption)
-		if cerr == nil {
-			part = p
-			reused = true
-		} else {
-			// 复用失败（引用过期、对端异常）不影响正确性：回退成正常上传
-			slog.Debug(i18n.T("log.dedup_fallback"), "path", name, "src", hit.Path, "err", cerr)
-		}
-	}
-	upload := func(uploadCtx context.Context) error {
-		p, uerr := f.d.store.UploadResumable(uploadCtx, tmp, st.Size(), sha,
-			path.Base(name), "application/octet-stream", caption)
-		if uerr != nil {
-			return uerr
-		}
-		part = p
-		return nil
+	req := upload.Request{
+		Path:    name,
+		Reader:  tmp,
+		Size:    st.Size(),
+		SHA:     sha,
+		Caption: caption,
 	}
 	// 有队列时串行上传：批量写入不会互相抢限流额度
-	if !reused {
-		if f.d.q != nil {
-			if err := f.d.q.Do(ctx, name, upload); err != nil {
-				return err
-			}
-		} else if err := upload(ctx); err != nil {
-			return err
-		}
+	if f.d.q != nil {
+		req.Queue = f.d.q
+	}
+	part, _, uerr := upload.Write(ctx, f.d.idx, f.d.store, req)
+	if uerr != nil {
+		return uerr
 	}
 	if part == nil {
 		return errors.New(i18n.T("err.upload_no_result"))

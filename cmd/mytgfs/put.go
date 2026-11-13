@@ -15,12 +15,8 @@ package main
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"flag"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path"
@@ -34,6 +30,7 @@ import (
 	"mytgfs/internal/queue"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/upload"
 )
 
 // putItem 是一个待上传的本地文件。
@@ -116,42 +113,22 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, i
 	if st.Size() > telegramstore.MaxFileSize {
 		return telegramstore.ErrTooLarge
 	}
-	sum := sha256.New()
-	if _, err := io.Copy(sum, f); err != nil {
-		return err
-	}
-	sha := hex.EncodeToString(sum.Sum(nil))
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	sha, err := upload.Hash(f, st.Size())
+	if err != nil {
 		return err
 	}
 
 	caption := tgsync.EncodeCaptionHash(it.remote, sha)
-	var part *telegramstore.Part
-	// 同内容已在索引里就发引用消息，零字节上传
-	if hit, ok, herr := idx.FindContent(ctx, path.Dir(it.remote), st.Size(), sha); herr != nil {
-		return herr
-	} else if ok && hit.Path != it.remote && hit.DocumentID != 0 {
-		p, cerr := store.Copy(ctx, &telegramstore.Part{
-			MessageID:     hit.MessageID,
-			DocumentID:    hit.DocumentID,
-			AccessHash:    hit.AccessHash,
-			FileReference: hit.FileReference,
-			Size:          hit.Size,
-		}, path.Base(it.remote), "application/octet-stream", caption)
-		if cerr == nil {
-			part = p
-		} else {
-			// 复用失败（引用过期、对端异常）不影响正确性：回退成正常上传
-			slog.Debug(i18n.T("log.dedup_fallback"), "path", it.remote, "src", hit.Path, "err", cerr)
-		}
-	}
-	if part == nil {
-		p, uerr := store.UploadResumable(ctx, f, st.Size(), sha,
-			path.Base(it.remote), "application/octet-stream", caption)
-		if uerr != nil {
-			return uerr
-		}
-		part = p
+	// 同内容已在索引里就发引用消息，零字节上传；否则正常上传
+	part, _, err := upload.Write(ctx, idx, store, upload.Request{
+		Path:    it.remote,
+		Reader:  f,
+		Size:    st.Size(),
+		SHA:     sha,
+		Caption: caption,
+	})
+	if err != nil {
+		return err
 	}
 	if err := idx.Put(ctx, index.File{
 		Path:          it.remote,
