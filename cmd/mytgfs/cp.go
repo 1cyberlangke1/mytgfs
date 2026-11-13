@@ -6,10 +6,14 @@ package main
 // 只换 caption 里的路径。源文件不动，目标路径的旧消息（如存在）会被删掉。
 //
 // 用法：
-//   mytgfs cp [--name mytgfs] [--force] <src> <dst>
+//   mytgfs cp [--name mytgfs] [--to <卷名>] [--force] <src> <dst>
 // 输入：src 源路径（卷内绝对路径，或以 / 开头的相对写法均可）
-// 输出：COPY / OVERWRITE 行；失败退出 1
-// 预期：src 必须在索引里；dst 已存在时默认拒绝，--force 才覆盖
+// 输出：COPY / SKIP 行；失败退出 1
+// 预期：
+//   - src 必须在索引里
+//   - dst 已存在且内容相同 => 直接跳过，不发消息
+//   - dst 已存在且内容不同 => 默认拒绝，--force 才覆盖
+//   - --force 表示强制覆盖，不参与跳过
 
 import (
 	"cmp"
@@ -106,6 +110,12 @@ func runCopy(args []string) {
 		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
 	}
 	if hadOld && !*force {
+		// 目标已有同内容的文件：不发消息，直接跳过
+		if sameContent(old, source) {
+			fmt.Printf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
+				volName, src, dstName, dst, old.DocumentID, old.Size)
+			return
+		}
 		fatal(i18n.T("err.cp_dst_exists", dst))
 	}
 
@@ -170,6 +180,15 @@ func runCopy(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.cp_prefix"), err)
 	}
+}
+
+// sameContent 判断两条索引记录是否指向同一份内容。
+//
+// 输入：dst 目标路径已有记录；src 源记录
+// 输出：true 表示大小一致且 sha256 非空并相同
+// 预期：重建索引后的旧记录 sha256 可能为空，无法证明相同，一律按不同处理
+func sameContent(dst, src index.File) bool {
+	return src.Sha256 != "" && dst.Sha256 == src.Sha256 && dst.Size == src.Size
 }
 
 // volPath 把命令行路径规范成卷内绝对路径。
