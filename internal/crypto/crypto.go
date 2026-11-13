@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"mytgfs/internal/i18n"
@@ -25,7 +26,12 @@ const (
 )
 
 // ErrLegacyPlain 表示输入不是本包加密的格式。
-var ErrLegacyPlain = errors.New(i18n.T("err.crypto_legacy"))
+// 用类型而不是包级字符串：文案要按当前语言惰性求值。
+type errLegacyPlain struct{}
+
+func (errLegacyPlain) Error() string { return i18n.T("err.crypto_legacy") }
+
+var ErrLegacyPlain error = errLegacyPlain{}
 
 // LoadOrCreateKey 读取 hex 编码的 32 字节密钥；不存在时生成并写入。
 //
@@ -49,6 +55,10 @@ func LoadOrCreateKey(path string) ([]byte, error) {
 	}
 	key := make([]byte, KeySize)
 	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	// 首次运行 secrets/ 可能还不存在，这里一并创建
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {

@@ -1,11 +1,88 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"mytgfs/internal/config"
 )
 
+// TestRunRejectsUnknownVolume 未知卷名必须在连 Telegram 之前就失败。
+func TestRunRejectsUnknownVolume(t *testing.T) {
+	a := &App{cfg: config.Config{Telegram: config.Telegram{ChannelID: 1}}}
+	err := a.Run(context.Background(), "nope", func(context.Context, *Session) error {
+		t.Fatal("不应进入回调")
+		return nil
+	})
+	var nf ErrVolumeNotFound
+	if !errors.As(err, &nf) || nf.Name != "nope" {
+		t.Fatalf("错误 = %v，期望卷不存在", err)
+	}
+}
+
+// TestRunRejectsMissingAPIHash 缺 api_hash 时直接返回哨兵错误。
+func TestRunRejectsMissingAPIHash(t *testing.T) {
+	a := &App{cfg: config.Config{Volumes: []config.Volume{{Name: "demo", ChatID: 1}}}}
+	err := a.Run(context.Background(), "demo", func(context.Context, *Session) error {
+		t.Fatal("不应进入回调")
+		return nil
+	})
+	if !errors.Is(err, ErrMissingAPIHash) {
+		t.Fatalf("错误 = %v，期望缺 api_hash", err)
+	}
+}
+
+// TestOpenVolumeRejectsUnknownVolume 未知卷名同样在开索引前失败。
+func TestOpenVolumeRejectsUnknownVolume(t *testing.T) {
+	a := &App{cfg: config.Config{Telegram: config.Telegram{ChannelID: 1}}}
+	if _, err := a.OpenVolume(context.Background(), "nope", nil); err == nil {
+		t.Fatal("期望返回卷不存在")
+	}
+}
+
+// TestIndexCreatesPerVolumeDB 索引按卷名分文件，且目录自动创建。
+func TestIndexCreatesPerVolumeDB(t *testing.T) {
+	dir := t.TempDir()
+	old, werr := os.Getwd()
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	if cerr := os.Chdir(dir); cerr != nil {
+		t.Fatal(cerr)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+
+	a := &App{}
+	idx, err := a.Index("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "data", "index-demo.db")); serr != nil {
+		t.Fatalf("索引文件未创建: %v", serr)
+	}
+}
+
+// TestErrMessagesFollowLanguage 哨兵错误的文案跟着当前语言走。
+func TestErrMessagesFollowLanguage(t *testing.T) {
+	msg := ErrMissingAPIHash.Error()
+	if msg == "" {
+		t.Fatal("错误文案为空")
+	}
+	if strings.Contains(msg, "missing api_hash") {
+		t.Fatalf("文案未走 i18n: %q", msg)
+	}
+}
+
+// 输入：构造好的 config.Config 与命令行给的卷名
+// 输出：解析出的卷名、卷定义、是否存在
+// 预期：无卷段时只有 mytgfs 可解析；有卷段时空名取第一个，未知名报不存在
 // TestVolumeResolution 覆盖卷名解析：空名取首个、无 [[volumes]] 段退化为 mytgfs。
 //
 // 输入：构造好的 config.Config 与命令行给的卷名
