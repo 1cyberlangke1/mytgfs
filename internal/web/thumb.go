@@ -36,6 +36,8 @@ const (
 	thumbMaxSource = 16 << 20
 	// thumbMaxSide 缩略图最长边
 	thumbMaxSide = 320
+	// coverMaxSide 卷封面最长边：卡片头图约 400px 宽，2x 屏取 720
+	coverMaxSide = 720
 )
 
 // thumbExts 是允许生成缩略图的扩展名。
@@ -134,7 +136,7 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 		api.thumbs.mu.Lock()
 		b := api.thumbs.load(key)
 		if b == nil {
-			b = generateThumb(r, m, p)
+			b = generateThumb(r, m, p, thumbMaxSide)
 			if b != nil {
 				api.thumbs.save(key, b)
 			}
@@ -149,7 +151,10 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 }
 
 // generateThumb 读取远端文件并缩放成 JPEG；失败返回 nil。
-func generateThumb(r *http.Request, m fm.Files, p string) []byte {
+//
+// 输入：r 请求（用于 ctx）；m 文件后端；p 路径；side 最长边像素
+// 输出：JPEG 字节；解码或读取失败返回 nil
+func generateThumb(r *http.Request, m fm.Files, p string, side int) []byte {
 	f, err := m.Open(r.Context(), p)
 	if err != nil {
 		return nil
@@ -159,7 +164,7 @@ func generateThumb(r *http.Request, m fm.Files, p string) []byte {
 	if err != nil {
 		return nil
 	}
-	dst := scaleThumb(src)
+	dst := scaleThumb(src, side)
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 82}); err != nil {
 		return nil
@@ -167,21 +172,21 @@ func generateThumb(r *http.Request, m fm.Files, p string) []byte {
 	return buf.Bytes()
 }
 
-// scaleThumb 等比缩放到最长边 thumbMaxSide。
-func scaleThumb(src image.Image) image.Image {
+// scaleThumb 等比缩放到指定最长边。
+func scaleThumb(src image.Image, side int) image.Image {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w <= 0 || h <= 0 {
 		return src
 	}
-	if w <= thumbMaxSide && h <= thumbMaxSide {
+	if w <= side && h <= side {
 		return src
 	}
-	nw, nh := thumbMaxSide, thumbMaxSide
+	nw, nh := side, side
 	if w >= h {
-		nh = max(1, h*thumbMaxSide/w)
+		nh = max(1, h*side/w)
 	} else {
-		nw = max(1, w*thumbMaxSide/h)
+		nw = max(1, w*side/h)
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, b, xdraw.Src, nil)

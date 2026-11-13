@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"strconv"
@@ -48,6 +49,120 @@ var settings = map[string]setting{
 	"log.level":               {"log", "level", kindString},
 }
 
+// SettingInfo 描述一个可读写键给界面用。
+type SettingInfo struct {
+	Key     string   `json:"key"`
+	Kind    string   `json:"kind"` // string | int | bool
+	Min     int      `json:"min,omitempty"`
+	Max     int      `json:"max,omitempty"`
+	Options []string `json:"options,omitempty"`
+}
+
+// settingLimits 是整数键的合法范围（含端点）。
+//
+// 与各键的运行时夹取范围保持一致：调大只会被夹回，不如直接拒绝写入。
+var settingLimits = map[string]struct{ min, max int }{
+	"web.port":                {0, 65535},
+	"mount.sync_seconds":      {-1, 86400},
+	"mount.download_parallel": {0, 8},
+	"mount.upload_parallel":   {0, 16},
+	"mount.read_chunk_mb":     {0, 64},
+	"pwa.offline_max_mb":      {-1, 1048576},
+}
+
+// settingOptions 是枚举键的合法取值。
+var settingOptions = map[string][]string{
+	"log.level": {"debug", "info", "warn", "error"},
+}
+
+// validateValue 校验一个键的取值。
+//
+// 输入：key 键名；raw 已规范化的字面量（如 "true"、"8080"、`"127.0.0.1:8080"`）
+// 输出：error；不合法时带「为什么非法」的可读原因
+// 预期：
+//   - CLI 的 config set 与面板 PUT 共用这一份规则
+//   - 范围键拒绝越界，枚举键拒绝未知值，端口/地址拒绝非法格式
+func validateValue(key, raw string) error {
+	v := strings.Trim(strings.TrimSpace(raw), `"`)
+	if lim, ok := settingLimits[key]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf(i18n.T("err.config_int_format"), raw)
+		}
+		if n < lim.min || n > lim.max {
+			return fmt.Errorf(i18n.T("err.config_range"), key, lim.min, lim.max, n)
+		}
+		return nil
+	}
+	if opts, ok := settingOptions[key]; ok {
+		for _, o := range opts {
+			if v == o {
+				return nil
+			}
+		}
+		return fmt.Errorf(i18n.T("err.config_enum"), key, strings.Join(opts, " / "), v)
+	}
+	switch key {
+	case "webdav.addr":
+		if v == "" {
+			return nil
+		}
+		if err := checkHostPort(v); err != nil {
+			return fmt.Errorf(i18n.T("err.config_addr"), v)
+		}
+	case "pwa.name", "webdav.volume":
+		if len([]rune(v)) > 64 {
+			return fmt.Errorf(i18n.T("err.config_too_long"), key, 64)
+		}
+	}
+	return nil
+}
+
+// checkHostPort 校验 host:port 形式，端口必须在 1..65535。
+//
+// 输入：addr 形如 127.0.0.1:8080
+// 输出：error；缺端口或端口越界时非 nil
+// 预期：允许主机名与 IPv4，不做 DNS 解析
+func checkHostPort(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return fmt.Errorf("bad host:port")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("bad port")
+	}
+	return nil
+}
+
+// Schema 返回全部可读写键及其类型、范围与枚举，按字典序排列。
+//
+// 输入：无
+// 输出：键名、类型、整数范围、枚举取值
+// 预期：面板据此动态渲染表单并做前端预校验，规则与 validateValue 同源
+func Schema() []SettingInfo {
+	out := make([]SettingInfo, 0, len(settings))
+	for k, s := range settings {
+		kind := "string"
+		switch s.kind {
+		case kindInt:
+			kind = "int"
+		case kindBool:
+			kind = "bool"
+		}
+		info := SettingInfo{Key: k, Kind: kind}
+		if lim, ok := settingLimits[k]; ok {
+			info.Min, info.Max = lim.min, lim.max
+		}
+		if opts, ok := settingOptions[k]; ok {
+			info.Options = opts
+		}
+		out = append(out, info)
+	}
+	slices.SortFunc(out, func(a, b SettingInfo) int { return strings.Compare(a.Key, b.Key) })
+	return out
+}
+
 // Keys 返回所有可读写键，按字典序排列。
 //
 // 输入：无
@@ -78,6 +193,9 @@ func SetKey(path, name, value string) error {
 	lit, err := normalizeValue(s.kind, value)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
+	}
+	if err := validateValue(name, lit); err != nil {
+		return err
 	}
 	return rewriteSection(path, s.section, []string{s.key + " = " + lit}, nil)
 }

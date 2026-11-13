@@ -23,6 +23,7 @@ import {
   VolumeInfo,
 } from '../types';
 import { computeOverviewSummary, formatBytes } from '../utils/fsLogic';
+import { coverURL } from '../api';
 import {
   Translations,
   formatNumber,
@@ -276,6 +277,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   <div>
                     <div className="relative h-28 w-full overflow-hidden bg-gradient-to-br from-[#007AFF] via-[#0284C7] to-[#06B6D4]">
                       <BrandEmblemSvg className="absolute -end-4 -bottom-6 w-32 h-32 opacity-25" />
+                      {/* 卷根目录存在 .cover.jpg / cover.png 时显示自定义封面，加载失败保持渐变 */}
+                      <img
+                        src={coverURL(volume.id)}
+                        alt=""
+                        aria-hidden="true"
+                        loading="lazy"
+                        onError={(ev) => {
+                          ev.currentTarget.style.display = 'none';
+                        }}
+                        className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-black/10" />
 
                       <div className="absolute bottom-3 inset-x-4 flex items-end justify-between gap-2">

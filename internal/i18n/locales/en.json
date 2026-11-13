@@ -326,5 +326,10 @@
   "err.http_no_volume": "no volume",
   "err.http_not_found": "not found",
   "err.http_too_large": "too large",
-  "err.http_decode_failed": "cannot decode image"
+  "err.http_decode_failed": "cannot decode image",
+  "err.http_method": "method not allowed",
+  "err.config_range": "%s must be between %d and %d (got %d)",
+  "err.config_enum": "%s must be one of %s (got %s)",
+  "err.config_addr": "%s is not a valid address, expected host:port such as 127.0.0.1:8080",
+  "err.config_too_long": "%s must be at most %d characters"
 }

@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -216,6 +217,10 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			}
 		}
 		resp := map[string]any{"volumes": vols}
+		resp["caps"] = map[string]bool{
+			"createVolume": opts.CreateVolume != nil,
+			"deleteVolume": opts.DeleteVolume != nil,
+		}
 		if opts.Status != nil {
 			if st, err := opts.Status(r.Context()); err == nil {
 				resp["status"] = st
@@ -498,51 +503,42 @@ func handleAPIFile(api *filesAPI) http.HandlerFunc {
 }
 
 // handleAPISettings 读写结构化设置。
+//
+// 输入：GET 无参；PUT {"values":{"web.port":8720,...}}
+// 输出：GET {"schema":[{"key","kind"}],"values":{...},"rawConfigText":"..."}
+// 预期：
+//   - schema 直接来自 config.Schema()，面板不需要手写键表
+//   - 缺省键不返回；PUT 只改提交的键，未知键返回 400
 func handleAPISettings(configPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			cfg, err := config.Load(configPath)
-			if err != nil {
+			raw, err := os.ReadFile(configPath)
+			if err != nil && !os.IsNotExist(err) {
 				replyJSONError(w, http.StatusInternalServerError, i18n.T("err.config_read"))
 				return
 			}
-			raw, _ := os.ReadFile(configPath)
+			schema := config.Schema()
+			values := make(map[string]string, len(schema))
+			for _, s := range schema {
+				if v, ok, err := config.GetKey(configPath, s.Key); err == nil && ok {
+					values[s.Key] = v
+				}
+			}
 			replyJSON(w, http.StatusOK, map[string]any{
-				"panelPort":           cfg.Web.ListenPort(),
-				"autoSyncIntervalSec": cfg.Mount.SyncSeconds,
-				"downloadConnections": cfg.Mount.DownloadConnections(),
-				"uploadConcurrency":   cfg.Mount.UploadParallel,
-				"readChunkSizeMb":     cfg.Mount.ReadChunk(),
-				"autoOpenBrowser":     cfg.Web.OpensBrowser(),
-				"pwaOfflineMaxFileMb": cfg.PWA.OfflineLimitMB(),
-				"webdavEnabled":       cfg.WebDAV.Enabled,
-				"rawConfigText":       string(raw),
+				"schema":        schema,
+				"values":        values,
+				"rawConfigText": string(raw),
 			})
 		case http.MethodPut:
 			var in struct {
-				PanelPort           int  `json:"panelPort"`
-				AutoSyncIntervalSec int  `json:"autoSyncIntervalSec"`
-				DownloadConnections int  `json:"downloadConnections"`
-				UploadConcurrency   int  `json:"uploadConcurrency"`
-				ReadChunkSizeMb     int  `json:"readChunkSizeMb"`
-				AutoOpenBrowser     bool `json:"autoOpenBrowser"`
-				PwaOfflineMaxFileMb int  `json:"pwaOfflineMaxFileMb"`
+				Values map[string]any `json:"values"`
 			}
 			if !decodeBody(w, r, &in) {
 				return
 			}
-			pairs := [][2]string{
-				{"web.port", strconv.Itoa(in.PanelPort)},
-				{"mount.sync_seconds", strconv.Itoa(in.AutoSyncIntervalSec)},
-				{"mount.download_parallel", strconv.Itoa(in.DownloadConnections)},
-				{"mount.upload_parallel", strconv.Itoa(in.UploadConcurrency)},
-				{"mount.read_chunk_mb", strconv.Itoa(in.ReadChunkSizeMb)},
-				{"web.auto_open", strconv.FormatBool(in.AutoOpenBrowser)},
-				{"pwa.offline_max_mb", strconv.Itoa(in.PwaOfflineMaxFileMb)},
-			}
-			for _, kv := range pairs {
-				if err := config.SetKey(configPath, kv[0], kv[1]); err != nil {
+			for k, v := range in.Values {
+				if err := config.SetKey(configPath, k, valueString(v)); err != nil {
 					replyJSONError(w, http.StatusBadRequest, err.Error())
 					return
 				}
@@ -551,6 +547,26 @@ func handleAPISettings(configPath string) http.HandlerFunc {
 		default:
 			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
 		}
+	}
+}
+
+// valueString 把 JSON 值转成配置写入需要的字符串。
+//
+// 输入：任意 JSON 标量（string/bool/float64）
+// 输出：字符串形式；float 整数不带小数点
+// 预期：供 config.SetKey 再按类型校验，避免界面传 1 变成 "1.000000"
+func valueString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
 	}
 }
 

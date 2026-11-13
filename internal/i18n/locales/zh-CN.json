@@ -326,5 +326,10 @@
   "err.http_no_volume": "没有可用的卷",
   "err.http_not_found": "找不到内容",
   "err.http_too_large": "文件过大",
-  "err.http_decode_failed": "图片解码失败"
+  "err.http_decode_failed": "图片解码失败",
+  "err.http_method": "不支持该请求方法",
+  "err.config_range": "%s 必须在 %d 到 %d 之间（当前为 %d）",
+  "err.config_enum": "%s 只能是 %s 之一（当前为 %s）",
+  "err.config_addr": "%s 不是合法地址，应为 host:port（例如 127.0.0.1:8080）",
+  "err.config_too_long": "%s 不能超过 %d 个字符"
 }

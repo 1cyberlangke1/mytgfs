@@ -239,7 +239,14 @@
       "INVALID_CHUNK_SIZE": "第 {line} 行：read_chunk_size_mb 必须为 1、2、4、8 或 16 MB",
       "INVALID_BOOL": "第 {line} 行：布尔配置项必须为 true 或 false",
       "INVALID_PWA_LIMIT": "第 {line} 行：pwa_offline_max_file_mb 必须在 10 到 2048 MB 之间"
-    }
+    },
+    "boolOn": "已开启",
+    "boolOff": "已关闭",
+    "invalidNumber": "{field} 必须是整数",
+    "invalidRange": "{field} 必须在 {min} 到 {max} 之间",
+    "invalidOption": "{field} 只能是 {options} 之一",
+    "invalidAddr": "{field} 必须是 host:port，例如 127.0.0.1:8080",
+    "invalidTooLong": "{field} 不能超过 64 个字符"
   },
   "offline": {
     "title": "离线访问",
@@ -257,5 +264,42 @@
     "removedOfflineToast": "已移除离线文件",
     "savedOfflineToast": "已保存为离线可用：{name}",
     "exceededLimitToast": "文件超过离线单文件上限 ({limit} MB)，可在设置中调整。"
+  },
+  "settingSections": {
+    "web": "面板",
+    "webdav": "WebDAV 挂盘",
+    "mount": "传输与同步",
+    "pwa": "离线 / PWA",
+    "log": "日志"
+  },
+  "settingLabels": {
+    "web.port": "面板端口",
+    "web.auto_open": "启动时自动打开浏览器",
+    "webdav.enabled": "启用 WebDAV",
+    "webdav.addr": "监听地址",
+    "webdav.volume": "只暴露这个卷",
+    "mount.sync_seconds": "自动同步间隔（秒）",
+    "mount.download_parallel": "下载连接数",
+    "mount.upload_parallel": "上传并发分片",
+    "mount.read_chunk_mb": "读取分片大小（MB）",
+    "pwa.enabled": "启用 PWA",
+    "pwa.name": "应用名称",
+    "pwa.offline_max_mb": "离线单文件上限（MB）",
+    "log.level": "日志级别"
+  },
+  "settingHints": {
+    "web.port": "0 表示用默认 8720；被占用会自动换端口",
+    "web.auto_open": "仅网页版启动时生效，桌面壳不弹浏览器",
+    "webdav.enabled": "开启后可用资源管理器或 rclone 挂盘",
+    "webdav.addr": "形如 127.0.0.1:8080，只建议绑回环",
+    "webdav.volume": "留空表示第一个启用的卷",
+    "mount.sync_seconds": "0 用默认 15 秒，负数关闭自动同步",
+    "mount.download_parallel": "单条 MTProto 连接吃不满带宽，4 左右最佳",
+    "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",
+    "mount.read_chunk_mb": "越大请求越少，但对慢网络不友好",
+    "pwa.enabled": "关闭后不提供 manifest 与 service worker",
+    "pwa.name": "显示在浏览器安装提示里",
+    "pwa.offline_max_mb": "0 用默认 256MB，负数表示不限",
+    "log.level": "debug 会记录每次回源，排查问题时再开"
   }
 }

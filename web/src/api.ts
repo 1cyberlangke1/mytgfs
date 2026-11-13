@@ -48,14 +48,14 @@ export interface ApiState {
   mount?: ApiMount;
 }
 
+export interface ApiSettingDef {
+  key: string;
+  kind: 'string' | 'int' | 'bool';
+}
+
 export interface ApiSettings {
-  panelPort: number;
-  autoSyncIntervalSec: number;
-  downloadConnections: number;
-  uploadConcurrency: number;
-  readChunkSizeMb: number;
-  pwaOfflineMaxFileMb: number;
-  webdavEnabled: boolean;
+  schema: ApiSettingDef[];
+  values: Record<string, string>;
   rawConfigText: string;
 }
 
@@ -193,12 +193,12 @@ export function getSettings(): Promise<ApiSettings> {
   return request<ApiSettings>('/api/settings');
 }
 
-// saveSettings 写入结构化设置（rawConfigText 仅展示，不回写）。
-export function saveSettings(input: Omit<ApiSettings, 'rawConfigText' | 'webdavEnabled'>): Promise<{ saved: boolean }> {
+// saveSettings 写入结构化设置：只提交要改的键，其它沿用配置文件原值。
+export function saveSettings(values: Record<string, string>): Promise<{ saved: boolean }> {
   return request('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ values }),
   });
 }
 
@@ -232,6 +232,12 @@ export function fileURL(volume: string, path: string, inline = false): string {
 export function thumbURL(volume: string, path: string): string {
   const q = new URLSearchParams({ vol: volume, path });
   return `/api/thumb?${q.toString()}`;
+}
+
+// coverURL 返回卷封面地址；卷根目录有 .cover.jpg / cover.png 时才会命中。
+export function coverURL(volume: string): string {
+  const q = new URLSearchParams({ vol: volume });
+  return `/api/cover?${q.toString()}`;
 }
 
 // ---- 离线缓存（Service Worker 运行时缓存同名 cache）----

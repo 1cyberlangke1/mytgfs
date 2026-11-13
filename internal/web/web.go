@@ -27,12 +27,17 @@ type SyncFunc func(ctx context.Context) (any, error)
 // 预期：重名返回 config.ErrVolumeExists，供 handler 映射成 409
 type CreateVolumeFunc func(ctx context.Context, name, title, point string) (any, error)
 
+// DeleteVolumeFunc 删除一个卷（频道 + 配置 + 本地索引）。
+type DeleteVolumeFunc func(ctx context.Context, name string) error
+
 // Options 是面板的可选能力，零值表示只提供只读状态。
 type Options struct {
 	Status StatusFunc
 	Sync   SyncFunc
 	// CreateVolume 为 nil 时建卷接口返回 501
 	CreateVolume CreateVolumeFunc
+	// DeleteVolume 为 nil 时删卷接口返回 501
+	DeleteVolume DeleteVolumeFunc
 	// Files 返回指定卷的文件管理后端；nil 表示不提供文件管理
 	Files func(volume string) (fm.Files, bool)
 	// Volumes 返回可管理卷名，按配置顺序
@@ -95,6 +100,8 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/files/upload", handleAPIUpload(api))
 	mux.Handle("/api/file", handleAPIFile(api))
 	mux.Handle("/api/thumb", handleFileThumb(api))
+	mux.Handle("/api/cover", handleVolumeCover(api))
+	mux.Handle("/api/volumes", handleAPIVolumes(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
 	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))

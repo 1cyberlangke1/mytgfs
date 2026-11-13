@@ -99,7 +99,7 @@ interface ToastMessage {
   text: string;
 }
 
-// EMPTY_SETTINGS 是服务端设置到达前的占位，字段与 [web]/[mount]/[pwa] 对齐。
+// EMPTY_SETTINGS 是服务端设置到达前的占位，值域与 config.Schema() 一致。
 const EMPTY_SETTINGS: AppSettings = {
   listenHost: '127.0.0.1',
   panelPort: 0,
@@ -110,6 +110,8 @@ const EMPTY_SETTINGS: AppSettings = {
   pwaOfflineMaxFileMb: 256,
   webdavEnabled: false,
   webdavPath: '',
+  schema: [],
+  values: {},
 };
 
 // toFileItem 把服务端条目转成前端展示结构。
@@ -277,15 +279,22 @@ export default function App() {
 
   const reloadSettings = useCallback(async () => {
     const s = await getSettings();
+    const v = s.values ?? {};
+    const num = (key: string, fallback: number) => {
+      const n = Number(v[key]);
+      return Number.isFinite(n) && v[key] !== undefined && v[key] !== '' ? n : fallback;
+    };
     setSettings((prev) => ({
       ...prev,
-      panelPort: s.panelPort,
-      autoSyncIntervalSec: s.autoSyncIntervalSec,
-      downloadConnections: s.downloadConnections,
-      uploadConcurrency: s.uploadConcurrency,
-      readChunkSizeMb: s.readChunkSizeMb,
-      pwaOfflineMaxFileMb: s.pwaOfflineMaxFileMb,
-      webdavEnabled: s.webdavEnabled,
+      schema: s.schema ?? [],
+      values: v,
+      panelPort: num('web.port', prev.panelPort || 8720),
+      autoSyncIntervalSec: num('mount.sync_seconds', 15),
+      downloadConnections: num('mount.download_parallel', 4),
+      uploadConcurrency: num('mount.upload_parallel', 4),
+      readChunkSizeMb: num('mount.read_chunk_mb', 8),
+      pwaOfflineMaxFileMb: num('pwa.offline_max_mb', 256),
+      webdavEnabled: v['webdav.enabled'] === 'true',
     }));
   }, []);
 
@@ -635,19 +644,9 @@ export default function App() {
     pushToast(t.mount.copiedToast, 'success');
   };
 
-  const handleSaveSettings = (nextSettings: AppSettings) => {
-    saveSettings({
-      panelPort: nextSettings.panelPort,
-      autoSyncIntervalSec: nextSettings.autoSyncIntervalSec,
-      downloadConnections: nextSettings.downloadConnections,
-      uploadConcurrency: nextSettings.uploadConcurrency,
-      readChunkSizeMb: nextSettings.readChunkSizeMb,
-      pwaOfflineMaxFileMb: nextSettings.pwaOfflineMaxFileMb,
-    })
-      .then(() => {
-        setSettings(nextSettings);
-        return reloadSettings();
-      })
+  const handleSaveSettings = (values: Record<string, string>) => {
+    saveSettings(values)
+      .then(() => reloadSettings())
       .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };

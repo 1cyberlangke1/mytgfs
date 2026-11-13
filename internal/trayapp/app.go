@@ -24,6 +24,7 @@ import (
 	"mytgfs/internal/app"
 	"mytgfs/internal/autostart"
 	"mytgfs/internal/brand"
+	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
@@ -550,6 +551,44 @@ func Run(opts Options) error {
 					out["mute_error"] = res.MuteErr.Error()
 				}
 				return out, nil
+			},
+			// 删卷：删 Telegram 频道 → 移出配置 → 删本地索引
+			DeleteVolume: func(ctx context.Context, name string) error {
+				cur, cerr := config.Load(cfgPath)
+				if cerr != nil {
+					return cerr
+				}
+				var target config.Volume
+				found := false
+				for _, v := range cur.Volumes {
+					if strings.EqualFold(v.Name, name) {
+						target, found = v, true
+						break
+					}
+				}
+				if !found {
+					return config.ErrVolumeNotFound
+				}
+				uc := tgclient.New(cfg.Telegram.APIID, apiHash,
+					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+					tgclient.Options{})
+				rerr := uc.Run(ctx, func(ctx context.Context) error {
+					res, e := channel.Resolve(ctx, uc.API(), target.ChatID)
+					if e != nil {
+						return e
+					}
+					return channel.Delete(ctx, uc.API(), res)
+				})
+				if rerr != nil {
+					return rerr
+				}
+				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
+					return rerr
+				}
+				for _, suffix := range []string{"", "-wal", "-shm"} {
+					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
+				}
+				return nil
 			},
 			// 文件管理：复用挂载时创建的 WebDAV 后端，不加额外连接
 			Files: func(name string) (fm.Files, bool) {

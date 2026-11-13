@@ -55,6 +55,14 @@ export interface TransferTask {
   category?: FileCategory;
 }
 
+export interface AppSettingDef {
+  key: string;
+  kind: 'string' | 'int' | 'bool';
+  min?: number;
+  max?: number;
+  options?: string[];
+}
+
 export interface AppSettings {
   listenHost: '127.0.0.1';
   panelPort: number;
@@ -65,6 +73,10 @@ export interface AppSettings {
   pwaOfflineMaxFileMb: number;
   webdavEnabled: boolean;
   webdavPath: string;
+  /** 服务端 config.Schema() 返回的可编辑键，面板据此动态渲染 */
+  schema: AppSettingDef[];
+  /** 配置文件里的原始字符串值，键为 section.key */
+  values: Record<string, string>;
 }
 
 export interface OfflineSavedFile {

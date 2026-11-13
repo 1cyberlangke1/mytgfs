@@ -148,6 +148,59 @@ func TestSetKeyBoolNormalization(t *testing.T) {
 	}
 }
 
+// TestSetKeyRangeAndEnum 越界与枚举外的值必须被拒绝且给出原因。
+//
+// 输入：端口 70000、上传并发 99、日志级别 trace、WebDAV 地址缺端口
+// 输出：error，文件保持原样
+// 预期：CLI 与面板共用同一份 validateValue，非法值一条都不落盘
+func TestSetKeyRangeAndEnum(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("[web]\nport = 8720\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][2]string{
+		{"web.port", "70000"},
+		{"mount.upload_parallel", "99"},
+		{"log.level", "trace"},
+		{"webdav.addr", "127.0.0.1"},
+		{"webdav.addr", "127.0.0.1:99999"},
+	}
+	for _, c := range cases {
+		err := SetKey(p, c[0], c[1])
+		if err == nil {
+			t.Errorf("SetKey(%q, %q) 应被拒绝", c[0], c[1])
+			continue
+		}
+		if strings.TrimSpace(err.Error()) == "" {
+			t.Errorf("SetKey(%q, %q) 的错误信息为空，界面无法提示原因", c[0], c[1])
+		}
+	}
+	if got := mustRead(t, p); !strings.Contains(got, "port = 8720") {
+		t.Errorf("非法写入改动了文件：\n%s", got)
+	}
+	// 合法值仍然能写
+	if err := SetKey(p, "webdav.addr", "127.0.0.1:18080"); err != nil {
+		t.Fatalf("合法地址被拒: %v", err)
+	}
+	if err := SetKey(p, "log.level", "debug"); err != nil {
+		t.Fatalf("合法日志级别被拒: %v", err)
+	}
+}
+
+// TestSchemaCarriesLimits 面板拿到的 schema 必须带范围与枚举。
+func TestSchemaCarriesLimits(t *testing.T) {
+	byKey := map[string]SettingInfo{}
+	for _, s := range Schema() {
+		byKey[s.Key] = s
+	}
+	if s := byKey["web.port"]; s.Min != 0 || s.Max != 65535 {
+		t.Errorf("web.port 范围 = %d..%d", s.Min, s.Max)
+	}
+	if s := byKey["log.level"]; len(s.Options) != 4 {
+		t.Errorf("log.level 枚举 = %v", s.Options)
+	}
+}
+
 // TestGetKeyMissing 键不存在时返回 ok=false 且不报错。
 func TestGetKeyMissing(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
