@@ -15,6 +15,7 @@
   "err.volume_create_prefix": "create volume failed",
   "err.volume_exists": "a volume with this name already exists in the config",
   "err.volume_not_found": "no volume named %s in the config",
+  "err.volume_no_channel": "volume %s has no channel id configured",
   "err.volume_delete_prefix": "delete volume failed",
   "err.volume_config_remove_prefix": "removing the volume from the config failed",
   "volume.channel_deleted": "channel deleted: channel_id=%d",

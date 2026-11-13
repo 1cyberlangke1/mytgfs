@@ -15,6 +15,7 @@
   "err.volume_create_prefix": "创建卷失败",
   "err.volume_exists": "配置里已经有同名卷",
   "err.volume_not_found": "配置里没有名为 %s 的卷",
+  "err.volume_no_channel": "卷 %s 没有配置频道 id",
   "err.volume_delete_prefix": "删除卷失败",
   "err.volume_config_remove_prefix": "从配置移除卷失败",
   "volume.channel_deleted": "频道已删除: channel_id=%d",

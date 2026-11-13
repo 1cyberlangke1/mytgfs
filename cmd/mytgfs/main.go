@@ -317,6 +317,21 @@ func runChannelInit(args []string) {
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
+// syncVolumeName 决定同步哪个卷。
+//
+// 输入：cfg 配置；name 命令行 --name（可为空）
+// 输出：卷名
+// 预期：显式 --name 原样返回；留空时取第一个卷，没有卷配置时用默认名 mytgfs
+func syncVolumeName(cfg config.Config, name string) string {
+	if name != "" {
+		return name
+	}
+	if len(cfg.Volumes) > 0 {
+		return cfg.Volumes[0].Name
+	}
+	return "mytgfs"
+}
+
 // runSync 增量拉取频道消息并更新本地索引。
 // runSync 用频道 pts 游标增量同步，或用 user 会话回填历史。
 //
@@ -328,13 +343,22 @@ func runChannelInit(args []string) {
 func runSync(args []string) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	limit := fs.Int("limit", 100, "每轮事件上限 / 回填条数")
-	name := fs.String("name", "mytgfs", "volume name")
+	name := fs.String("name", "", "volume name（空则取第一个卷）")
 	backfill := fs.Bool("backfill", false, "用 user 会话回填历史消息")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
 	if err != nil {
 		fatal(fmt.Sprintf("读取配置: %v", err))
+	}
+	volName := syncVolumeName(cfg, *name)
+	// 同步目标是卷对应的频道；只有完全没有卷配置时才回落到 [telegram].channel_id
+	vol, ok := volumeByName(cfg, volName)
+	if !ok {
+		fatal(i18n.T("err.volume_not_found", volName))
+	}
+	if vol.ChatID == 0 {
+		fatal(i18n.T("err.volume_no_channel", volName))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -344,7 +368,7 @@ func runSync(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
-	idx, err := index.Open(datadir.Path("index-" + *name + ".db"))
+	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
 	if err != nil {
 		fatal(fmt.Sprintf("打开索引: %v", err))
 	}
@@ -358,10 +382,15 @@ func runSync(args []string) {
 			&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
 			tgclient.Options{})
 		err = client.Run(ctx, func(ctx context.Context) error {
+			// access_hash 传 0 也能解析出真实值，避免依赖配置里可能过期的字段
+			ch, rerr := channel.Resolve(ctx, client.API(), vol.ChatID)
+			if rerr != nil {
+				return rerr
+			}
 			f := tgsync.TelegramFetcher{
 				API:        client.API(),
-				ChannelID:  cfg.Telegram.ChannelID,
-				AccessHash: cfg.Telegram.AccessHash,
+				ChannelID:  ch.ChannelID,
+				AccessHash: ch.AccessHash,
 			}
 			return tgsync.Sync(ctx, idx, f, *limit)
 		})
@@ -374,7 +403,7 @@ func runSync(args []string) {
 			tgclient.Options{})
 		var res tgsync.ChannelSyncResult
 		err = client.Run(ctx, func(ctx context.Context) error {
-			d := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: cfg.Telegram.ChannelID}
+			d := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
 			var serr error
 			res, serr = tgsync.SyncChannel(ctx, idx, d, *limit)
 			return serr

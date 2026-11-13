@@ -88,7 +88,7 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]` | 启动 WebDAV 服务 |
 | `mytgfs unmap --addr 127.0.0.1:8080` | 清理指向本服务的网络映射 |
 | `mytgfs umount [--point Y:]` | 安全移除挂载 |
-| `mytgfs sync [--name 卷] [--limit N] [--backfill]` | 增量同步；`--backfill` 用 user 会话回填历史 |
+| `mytgfs sync [--name 卷] [--limit N] [--backfill]` | 增量同步（`--name` 省略时用第一个卷）；`--backfill` 用 user 会话回填历史 |
 | `mytgfs put [--name 卷] [--remote /目录] <路径...>` | 批量上传文件/目录 |
 | `mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>` | 卷内/跨卷复制（同内容复用引用，零重传） |
 | `mytgfs startup enable\|disable\|status` | 开机自启（默认关） |
