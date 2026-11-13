@@ -183,5 +183,6 @@
   "web.upload_queue": "Upload queue",
   "web.state_local": "Local mode",
   "web.files_prev": "Previous",
-  "web.files_next": "Next"
+  "web.files_next": "Next",
+  "err.mount_removed": "Drive-letter mounting was removed: run mytgfs web and enable WebDAV in the panel"
 }

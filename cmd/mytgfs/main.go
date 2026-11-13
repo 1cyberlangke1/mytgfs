@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"mytgfs/internal/auth"
@@ -44,7 +42,6 @@ import (
 	"mytgfs/internal/ui"
 	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/version"
-	"mytgfs/internal/vfs"
 	"mytgfs/internal/web"
 )
 
@@ -402,172 +399,13 @@ func runSync(args []string) {
 	fmt.Printf("OK synced, root entries=%d\n", len(entries))
 }
 
-// runMount 挂载一个或多个卷；每个群组一个盘。
-func runMount(args []string) {
-	fs := flag.NewFlagSet("mount", flag.ExitOnError)
-	point := fs.String("point", "", "mount point")
-	_ = fs.Parse(args)
-
-	cfg, err := config.Load("config.toml")
-	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
-	}
-	if *point == "" {
-		*point = cfg.Mount.Point
-	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-
-	err = client.Run(ctx, func(ctx context.Context) error {
-		var wg sync.WaitGroup
-		defer wg.Wait()
-
-		token, err := newToken()
-		if err != nil {
-			return err
-		}
-		srv, err := ipc.Listen(token)
-		if err != nil {
-			return err
-		}
-		defer srv.Close()
-
-		var ctlMu sync.Mutex
-		cancels := map[string]context.CancelFunc{}
-		srv.SetHandler(func(_ context.Context, action string, data json.RawMessage) (any, error) {
-			if action != "umount" {
-				return nil, fmt.Errorf("未知操作: %s", action)
-			}
-			var req struct {
-				Point string `json:"point"`
-			}
-			if len(data) > 0 {
-				_ = json.Unmarshal(data, &req)
-			}
-			ctlMu.Lock()
-			defer ctlMu.Unlock()
-			if req.Point == "" {
-				for _, c := range cancels {
-					c()
-				}
-				return "all", nil
-			}
-			c, ok := cancels[req.Point]
-			if !ok {
-				return nil, fmt.Errorf("未挂载: %s", req.Point)
-			}
-			delete(cancels, req.Point)
-			c()
-			return req.Point, nil
-		})
-		go func() { _ = srv.Serve(ctx) }()
-
-		mountOne := func(name string, channelID int64, mp string) {
-			if mp == "" {
-				fatal("卷 " + name + " 缺少挂载点")
-			}
-			idx, err := index.Open(datadir.Path("index-" + name + ".db"))
-			if err != nil {
-				fatal(fmt.Sprintf("打开索引 %s: %v", name, err))
-			}
-			// 索引是缓存，丢了用 user 会话按频道历史重建，避免文件全部不可见
-			if rerr := trayapp.RebuildIndexIfEmpty(ctx, cfg, idx, channelID); rerr != nil {
-				fmt.Fprintf(os.Stderr, "重建索引 %s 失败: %v\n", name, rerr)
-			}
-			api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-			if perr != nil {
-				fatal(fmt.Sprintf("创建连接池 %s: %v", name, perr))
-			}
-			store := telegramstore.New(api, channelID)
-			store.SetParallel(cfg.Mount.DownloadConnections())
-			store.SetUploadParallel(cfg.Mount.UploadParallelism())
-			vctx, vcancel := context.WithCancel(ctx)
-			fsys := vfs.New(vctx, idx, store, os.TempDir())
-			ctlMu.Lock()
-			cancels[mp] = vcancel
-			ctlMu.Unlock()
-
-			// 挂载期自动增量同步：别的端写入/删除后，本地挂载点自动跟上
-			if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-					trayapp.AutoSync(vctx, fsys, idx, differ, interval, nil)
-				}()
-			}
-
-			// 崩溃/断网遗留的写入在后台补传，不阻塞挂载
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				fsys.ResumePending()
-			}()
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer idx.Close()
-				defer vcancel()
-				defer closePool()
-				if err := vfs.Mount(vctx, fsys, mp, name); err != nil {
-					fmt.Fprintf(os.Stderr, "挂载 %s 失败: %v\n", mp, err)
-				}
-				ctlMu.Lock()
-				delete(cancels, mp)
-				empty := len(cancels) == 0
-				ctlMu.Unlock()
-				if empty {
-					cancel()
-				}
-			}()
-			fmt.Printf("mounted %s at %s\n", name, mp)
-		}
-
-		if len(cfg.Volumes) == 0 {
-			mountOne("mytgfs", cfg.Telegram.ChannelID, *point)
-		} else {
-			for _, v := range cfg.Volumes {
-				if !v.Enabled {
-					continue
-				}
-				mp := v.Point
-				if mp == "" {
-					mp = *point
-				}
-				mountOne(v.Name, v.ChatID, mp)
-			}
-		}
-		ctlMu.Lock()
-		points := make([]string, 0, len(cancels))
-		for p := range cancels {
-			points = append(points, p)
-		}
-		ctlMu.Unlock()
-		if err := writeMountState(mountState{Addr: srv.Addr(), Token: token, Points: points}); err != nil {
-			return fmt.Errorf("写挂载状态: %w", err)
-		}
-		defer removeMountState()
-
-		<-ctx.Done()
-		return nil
-	})
-	if err != nil {
-		failErr("挂载失败", err)
-	}
+// runMount 已停用：FUSE/WinFsp 挂载层已移除，改用 WebDAV 挂载。
+//
+// 输入：任意参数（忽略）
+// 输出：无；打印提示后以非零码退出
+// 预期：不连接 Telegram、不写挂载状态，避免旧脚本误判挂载成功
+func runMount(_ []string) {
+	fatal(i18n.T("err.mount_removed"))
 }
 
 // runDaemon 管理后台守护进程。

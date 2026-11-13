@@ -183,5 +183,6 @@
   "web.upload_queue": "上传队列",
   "web.state_local": "本地模式",
   "web.files_prev": "上一页",
-  "web.files_next": "下一页"
+  "web.files_next": "下一页",
+  "err.mount_removed": "盘符挂载已下线：请运行 mytgfs web，在面板开启 WebDAV 后映射盘符"
 }
