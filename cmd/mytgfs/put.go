@@ -15,6 +15,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -25,12 +26,12 @@ import (
 	"strings"
 
 	"mytgfs/internal/app"
+	"mytgfs/internal/dav"
+	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
-	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
-	"mytgfs/internal/upload"
 )
 
 // putItem 是一个待上传的本地文件。
@@ -76,7 +77,7 @@ func runPut(args []string) {
 
 		for _, it := range items {
 			if err := q.Do(ctx, it.remote, func(ctx context.Context) error {
-				return putOne(ctx, s.Index, s.Store(), it)
+				return putOne(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), it)
 			}); err != nil {
 				failCount++
 				fmt.Println(i18n.T("put.fail", it.remote, err))
@@ -95,12 +96,12 @@ func runPut(args []string) {
 	}
 }
 
-// putOne 上传单个文件并写索引。
+// putOne 上传单个文件并登记目录项。
 //
-// 输入：ctx；idx 索引；store 存储；it 本地与远程路径
+// 输入：ctx；idx 索引；store 存储；chunk 读块大小；it 本地与远程路径
 // 输出：error
-// 预期：先算内容 sha256（同时作为续传键），再上传，最后写索引
-func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, it putItem) error {
+// 预期：目标父目录按需创建；写入走 dav 的临时文件 + 覆盖语义
+func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, chunk int64, it putItem) error {
 	f, err := os.Open(it.local)
 	if err != nil {
 		return err
@@ -113,36 +114,45 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, i
 	if st.Size() > telegramstore.MaxFileSize {
 		return telegramstore.ErrTooLarge
 	}
-	sha, err := upload.Hash(f, st.Size())
-	if err != nil {
-		return err
-	}
 
-	caption := tgsync.EncodeCaptionHash(it.remote, sha)
-	// 同内容已在索引里就发引用消息，零字节上传；否则正常上传
-	part, _, err := upload.Write(ctx, idx, store, upload.Request{
-		Path:    it.remote,
-		Reader:  f,
-		Size:    st.Size(),
-		SHA:     sha,
-		Caption: caption,
-	})
+	fsys := dav.New(ctx, idx, store, chunk)
+	if err := mkdirAll(ctx, fsys, path.Dir(it.remote)); err != nil {
+		return err
+	}
+	if err := fm.New(fsys).Upload(ctx, it.remote, f); err != nil {
+		return err
+	}
+	n, ok, err := idx.NodeByPath(ctx, it.remote)
 	if err != nil {
 		return err
 	}
-	if err := idx.Put(ctx, index.File{
-		Path:          it.remote,
-		MessageID:     part.MessageID,
-		DocumentID:    part.DocumentID,
-		AccessHash:    part.AccessHash,
-		FileReference: part.FileReference,
-		Size:          part.Size,
-		Mtime:         st.ModTime().Unix(),
-		Sha256:        sha,
-	}); err != nil {
-		return err
+	if !ok {
+		return os.ErrNotExist
 	}
-	fmt.Println(i18n.T("put.ok", it.remote, part.Size, part.MessageID))
+	fmt.Println(i18n.T("put.ok", it.remote, n.Size, n.ID))
+	return nil
+}
+
+// mkdirAll 按需创建远程目录。
+//
+// 输入：ctx；fsys WebDAV 语义；dir 目录路径
+// 输出：error
+// 预期：已存在的层级直接跳过；父目录不存在时按层级顺序创建
+func mkdirAll(ctx context.Context, fsys *dav.FileSystem, dir string) error {
+	dir = volPath(dir)
+	if dir == "/" {
+		return nil
+	}
+	var cur strings.Builder
+	for seg := range strings.SplitSeq(strings.Trim(dir, "/"), "/") {
+		if seg == "" {
+			continue
+		}
+		cur.WriteString("/" + seg)
+		if err := fsys.Mkdir(ctx, cur.String(), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
 	return nil
 }
 

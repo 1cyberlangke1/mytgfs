@@ -3,7 +3,6 @@ package dav
 // 下载进度测试：读取时进度进表，读完或关闭后清空。
 
 import (
-	"context"
 	"os"
 	"testing"
 
@@ -18,11 +17,11 @@ import (
 func TestTransfersTracksRead(t *testing.T) {
 	fsys, _, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
+	ctx := t.Context()
 	const size = 2 << 20
 
-	if err := fsys.idx.Put(ctx, index.File{
-		Path: "/big.bin", MessageID: 1, DocumentID: 2, AccessHash: 3, Size: size,
+	if err := fsys.idx.PutNode(ctx, index.Node{
+		ID: 50, ParentID: 0, Name: "big.bin", Path: "/big.bin", DocumentID: 2, AccessHash: 3, Size: size,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +36,8 @@ func TestTransfersTracksRead(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("进度行数 = %d，期望 1", len(got))
 	}
-	if got[0].Path != "/big.bin" || got[0].Total != size || got[0].Done != firstChunk {
-		t.Fatalf("进度 = %+v，期望 Done=%d Total=%d", got[0], firstChunk, size)
+	if got[0].Path != "/big.bin" || got[0].Total != size || got[0].Done != fsys.chunk {
+		t.Fatalf("进度 = %+v，期望 Done=%d Total=%d", got[0], fsys.chunk, size)
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
@@ -52,10 +51,10 @@ func TestTransfersTracksRead(t *testing.T) {
 func TestTransfersSkipsSmallFile(t *testing.T) {
 	fsys, _, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
+	ctx := t.Context()
 
-	if err := fsys.idx.Put(ctx, index.File{
-		Path: "/small.bin", MessageID: 1, DocumentID: 2, AccessHash: 3, Size: 10,
+	if err := fsys.idx.PutNode(ctx, index.Node{
+		ID: 51, ParentID: 0, Name: "small.bin", Path: "/small.bin", DocumentID: 2, AccessHash: 3, Size: 10,
 	}); err != nil {
 		t.Fatal(err)
 	}

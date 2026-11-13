@@ -109,8 +109,8 @@ func render(size int) (image.Image, error) {
 	strokeW := math.Max(1, s*0.012)
 	innerRadius := math.Max(radius-strokeW, 0)
 	out := image.NewRGBA(image.Rect(0, 0, size, size))
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
+	for y := range size {
+		for x := range size {
 			fx, fy := float64(x)+0.5, float64(y)+0.5
 			cover := roundedCoverage(fx, fy, s, radius)
 			if cover <= 0 {
@@ -138,8 +138,8 @@ func render(size int) (image.Image, error) {
 	}
 
 	// 叠加文件夹（带 alpha）与纸飞机
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
+	for y := range size {
+		for x := range size {
 			if c := plate.RGBAAt(x, y); c.A > 0 {
 				blend(out.RGBAAt(x, y), c, out, x, y)
 			}

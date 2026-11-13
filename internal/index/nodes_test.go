@@ -1,166 +1,252 @@
 package index
 
+// 节点索引单测：写入覆盖、改名/移动、子树删除、防环、内容去重、路径搜索。
+
 import (
 	"context"
 	"testing"
 )
 
-// newNodes 建一个带根的测试索引。
-func newNodes(t *testing.T) (*Index, context.Context) {
+func newTestIndex(t *testing.T) *Index {
 	t.Helper()
 	idx, err := OpenMemory()
 	if err != nil {
 		t.Fatalf("OpenMemory: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
-	ctx := context.Background()
-	if err := idx.SetRoot(ctx, 1); err != nil {
-		t.Fatalf("SetRoot: %v", err)
-	}
-	return idx, ctx
+	return idx
 }
 
-// Test 根节点与子节点路径派生。
-func TestNodesRootAndChild(t *testing.T) {
-	idx, ctx := newNodes(t)
-
-	root, ok, err := idx.Root(ctx)
-	if err != nil || !ok {
-		t.Fatalf("Root=(%+v,%v,%v)", root, ok, err)
-	}
-	if root.Path != "/" || !root.IsDir || root.ParentID != 0 {
-		t.Fatalf("根节点=%+v", root)
-	}
-
-	if err := idx.PutNode(ctx, Node{ID: 10, ParentID: 1, Name: "a.txt", Size: 5, Mtime: 100}); err != nil {
+// TestNodeRoundTrip 写入后按 id / path / 父目录 + 名字都能取回。
+func TestNodeRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	n := Node{ID: 7, ParentID: 0, Name: "a.txt", Path: "/a.txt", Size: 10, Sha256: "ab"}
+	if err := idx.PutNode(ctx, n); err != nil {
 		t.Fatalf("PutNode: %v", err)
 	}
-	if err := idx.PutNode(ctx, Node{ID: 11, ParentID: 1, Name: "sub", IsDir: true}); err != nil {
-		t.Fatalf("PutNode dir: %v", err)
+	got, ok, err := idx.NodeByID(ctx, 7)
+	if err != nil || !ok || got.Sha256 != "ab" || got.Size != 10 {
+		t.Fatalf("NodeByID=(%+v,%v,%v)", got, ok, err)
 	}
-	if err := idx.PutNode(ctx, Node{ID: 12, ParentID: 11, Name: "b.txt", Size: 7}); err != nil {
-		t.Fatalf("PutNode nested: %v", err)
+	if _, ok, _ := idx.NodeByPath(ctx, "/a.txt"); !ok {
+		t.Fatal("NodeByPath 没找到")
 	}
-
-	n, ok, err := idx.NodeByPath(ctx, "/a.txt")
-	if err != nil || !ok || n.ID != 10 || n.Size != 5 {
-		t.Fatalf("NodeByPath=(%+v,%v,%v)", n, ok, err)
-	}
-	n, ok, err = idx.NodeByPath(ctx, "sub/b.txt")
-	if err != nil || !ok || n.ID != 12 || n.Path != "/sub/b.txt" {
-		t.Fatalf("NodeByPath nested=(%+v,%v,%v)", n, ok, err)
-	}
-
-	kids, err := idx.Children(ctx, 1)
-	if err != nil {
-		t.Fatalf("Children: %v", err)
-	}
-	if len(kids) != 2 || !kids[0].IsDir || kids[0].Name != "sub" || kids[1].Name != "a.txt" {
-		t.Fatalf("Children=%+v", kids)
+	if _, ok, _ := idx.Child(ctx, 0, "a.txt"); !ok {
+		t.Fatal("Child 没找到")
 	}
 }
 
-// Test 改名只动一条，但子树路径整体跟随。
-func TestNodesMoveSubtree(t *testing.T) {
-	idx, ctx := newNodes(t)
-	_ = idx.PutNode(ctx, Node{ID: 11, ParentID: 1, Name: "sub", IsDir: true})
-	_ = idx.PutNode(ctx, Node{ID: 12, ParentID: 11, Name: "b.txt", Size: 7})
-	_ = idx.PutNode(ctx, Node{ID: 13, ParentID: 12, Name: "c", IsDir: true})
-	_ = idx.PutNode(ctx, Node{ID: 14, ParentID: 13, Name: "d.txt"})
+// TestPutNodeSameNameReplaces 同 (parent,name) 用新消息号顶掉旧行。
+func TestPutNodeSameNameReplaces(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "a.txt"})
+	_ = idx.PutNode(ctx, Node{ID: 2, Name: "a.txt", Size: 5})
+	got, ok, _ := idx.NodeByPath(ctx, "/a.txt")
+	if !ok || got.ID != 2 || got.Size != 5 {
+		t.Fatalf("覆盖结果=(%+v,%v)", got, ok)
+	}
+}
 
-	oldPath, newPath, err := idx.MoveNode(ctx, 11, 1, "sub2")
-	if err != nil {
+// TestChildrenOrder 目录优先、名字升序。
+func TestChildrenOrder(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 3, Name: "z.txt"})
+	_ = idx.PutNode(ctx, Node{ID: 2, Name: "sub", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "a.txt"})
+	children, err := idx.Children(ctx, 0)
+	if err != nil || len(children) != 3 {
+		t.Fatalf("Children=(%v,%v)", children, err)
+	}
+	if children[0].Name != "sub" || children[1].Name != "a.txt" || children[2].Name != "z.txt" {
+		t.Fatalf("顺序=%v", children)
+	}
+}
+
+// TestMoveNodeUpdatesSubtree 改名/换父时整棵子树路径一次更新。
+func TestMoveNodeUpdatesSubtree(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "dir", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "f.txt", Path: "/dir/f.txt"})
+	_ = idx.PutNode(ctx, Node{ID: 3, Name: "dst", IsDir: true})
+	if _, _, err := idx.MoveNode(ctx, 1, 3, "renamed"); err != nil {
 		t.Fatalf("MoveNode: %v", err)
 	}
-	if oldPath != "/sub" || newPath != "/sub2" {
-		t.Fatalf("old=%q new=%q", oldPath, newPath)
-	}
-	for id, want := range map[int]string{11: "/sub2", 12: "/sub2/b.txt", 13: "/sub2/b.txt/c", 14: "/sub2/b.txt/c/d.txt"} {
-		n, ok, err := idx.NodeByID(ctx, id)
-		if err != nil || !ok || n.Path != want {
-			t.Fatalf("node %d path=%q want %q (err=%v ok=%v)", id, n.Path, want, err, ok)
-		}
-	}
-
-	if _, _, err := idx.MoveNode(ctx, 1, 11, "x"); err == nil {
-		t.Fatal("把目录移进自己的子树应报错")
-	}
-	if _, _, err := idx.MoveNode(ctx, 12, 1, "sub2"); err == nil {
-		t.Fatal("目标名字已被占用应报错")
+	n, ok, _ := idx.NodeByID(ctx, 2)
+	if !ok || n.Path != "/dst/renamed/f.txt" {
+		t.Fatalf("子树路径=%+v ok=%v", n, ok)
 	}
 }
 
-// Test 删除子树返回全部消息号，且不留续块登记。
-func TestNodesDeleteSubtree(t *testing.T) {
-	idx, ctx := newNodes(t)
-	_ = idx.PutNode(ctx, Node{ID: 11, ParentID: 1, Name: "sub", IsDir: true})
-	_ = idx.PutNode(ctx, Node{ID: 12, ParentID: 11, Name: "b.txt"})
-	_ = idx.PutChunk(ctx, 11, 90)
-	_ = idx.PutNode(ctx, Node{ID: 20, ParentID: 1, Name: "keep.txt"})
-
-	ids, err := idx.DeleteSubtree(ctx, 11)
-	if err != nil {
-		t.Fatalf("DeleteSubtree: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("删了 %v，期望 2 个节点", ids)
-	}
-	if _, ok, _ := idx.NodeByID(ctx, 11); ok {
-		t.Fatal("目录节点应已删除")
-	}
-	if _, ok, _ := idx.ChunkOwner(ctx, 90); ok {
-		t.Fatal("续块登记应已清除")
-	}
-	if _, ok, _ := idx.NodeByID(ctx, 20); !ok {
-		t.Fatal("兄弟节点不应被删")
+// TestMoveNodeRejectsCycle 目录不能移进自己的子树。
+func TestMoveNodeRejectsCycle(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "a", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "b", IsDir: true, Path: "/a/b"})
+	if _, _, err := idx.MoveNode(ctx, 1, 2, "a"); err == nil {
+		t.Fatal("移进自己子树应该报错")
 	}
 }
 
-// Test 续块登记与清理。
-func TestNodesChunks(t *testing.T) {
-	idx, ctx := newNodes(t)
-	if err := idx.PutChunk(ctx, 5, 60); err != nil {
-		t.Fatalf("PutChunk: %v", err)
+// TestIsDescendant 沿 parent 链判定，成环时安全停下。
+func TestIsDescendant(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "a", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "b"})
+	_ = idx.PutNode(ctx, Node{ID: 3, ParentID: 2, Name: "c"})
+	if ok, _ := idx.IsDescendant(ctx, 1, 3); !ok {
+		t.Fatal("3 应该是 1 的后代")
 	}
-	if err := idx.PutChunk(ctx, 5, 61); err != nil {
-		t.Fatalf("PutChunk: %v", err)
+	if ok, _ := idx.IsDescendant(ctx, 3, 1); ok {
+		t.Fatal("1 不是 3 的后代")
 	}
-	if dir, ok, err := idx.ChunkOwner(ctx, 61); err != nil || !ok || dir != 5 {
-		t.Fatalf("ChunkOwner=(%d,%v,%v)", dir, ok, err)
-	}
-	drop, err := idx.DeleteChunks(ctx, 5, map[int]bool{60: true})
-	if err != nil {
-		t.Fatalf("DeleteChunks: %v", err)
-	}
-	if len(drop) != 1 || drop[0] != 61 {
-		t.Fatalf("DeleteChunks=%v", drop)
-	}
-	if _, ok, _ := idx.ChunkOwner(ctx, 60); !ok {
-		t.Fatal("保留的续块不应被删")
+	// 人为成环：2 的父指向 3
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 3, Name: "b", Path: "/a/b"})
+	if ok, _ := idx.IsDescendant(ctx, 1, 3); ok {
+		t.Fatal("成环时不应误判")
 	}
 }
 
-// Test 文件节点查询与路径前缀边界。
-func TestNodesFileNodes(t *testing.T) {
-	idx, ctx := newNodes(t)
-	_ = idx.PutNode(ctx, Node{ID: 11, ParentID: 1, Name: "sub", IsDir: true})
-	_ = idx.PutNode(ctx, Node{ID: 12, ParentID: 1, Name: "a.txt", Size: 1})
-	_ = idx.PutNode(ctx, Node{ID: 13, ParentID: 11, Name: "b.txt", Size: 2})
-	_ = idx.PutNode(ctx, Node{ID: 14, ParentID: 1, Name: "subway.txt", Size: 3})
+// TestDeleteSubtree 删目录连后代一起删，返回全部消息号。
+func TestDeleteSubtree(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "dir", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "f.txt", Path: "/dir/f.txt"})
+	ids, err := idx.DeleteSubtree(ctx, 1)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("DeleteSubtree=(%v,%v)", ids, err)
+	}
+	if _, ok, _ := idx.NodeByID(ctx, 2); ok {
+		t.Fatal("后代没删干净")
+	}
+}
 
-	files, err := idx.FileNodes(ctx, "/sub")
-	if err != nil {
-		t.Fatalf("FileNodes: %v", err)
+// TestFindContent 同内容命中；sha 为空不命中。
+func TestFindContent(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 5, Name: "a.bin", Size: 3, Sha256: "abc"})
+	if _, ok, _ := idx.FindContent(ctx, "/", 3, "abc"); !ok {
+		t.Fatal("同摘要同大小应命中")
 	}
-	if len(files) != 1 || files[0].ID != 13 {
-		t.Fatalf("FileNodes=%+v（/subway.txt 不应算进 /sub）", files)
+	if _, ok, _ := idx.FindContent(ctx, "/", 3, ""); ok {
+		t.Fatal("空摘要不该命中")
 	}
+	if _, ok, _ := idx.FindContent(ctx, "/", 4, "abc"); ok {
+		t.Fatal("大小不符不该命中")
+	}
+}
 
-	all, err := idx.FileNodes(ctx, "/")
-	if err != nil {
-		t.Fatalf("FileNodes root: %v", err)
+// TestCountRefs 同一 document 有多条路径引用。
+func TestCountRefs(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "a.bin", DocumentID: 99})
+	_ = idx.PutNode(ctx, Node{ID: 2, Name: "b.bin", DocumentID: 99})
+	n, _ := idx.CountRefs(ctx, 99)
+	if n != 2 {
+		t.Fatalf("CountRefs=%d", n)
 	}
-	if len(all) != 3 {
-		t.Fatalf("根下应有 3 个文件，实际 %d", len(all))
+}
+
+// TestUsedCountsFiles 已用空间只统计文件，不算目录。
+func TestUsedCountsFiles(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "dir", IsDir: true, Size: 999})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "a.bin", Size: 100, Path: "/dir/a.bin"})
+	_ = idx.PutNode(ctx, Node{ID: 3, ParentID: 1, Name: "b.bin", Size: 22, Path: "/dir/b.bin"})
+	used, err := idx.Used(ctx)
+	if err != nil || used != 122 {
+		t.Fatalf("Used=(%d,%v)", used, err)
+	}
+	if n, _ := idx.CountFiles(ctx); n != 2 {
+		t.Fatalf("CountFiles=%d", n)
+	}
+}
+
+// TestSearchMatchesBaseName 只匹配最后一段名字，跨目录命中带全路径。
+func TestSearchMatchesBaseName(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "sub", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "report.txt", Path: "/sub/report.txt"})
+	hits, err := idx.Search(ctx, "/", "REPORT", 0)
+	if err != nil || len(hits) != 1 || hits[0].Path != "/sub/report.txt" {
+		t.Fatalf("Search=(%v,%v)", hits, err)
+	}
+	if got, _ := idx.Search(ctx, "/", "", 0); len(got) != 0 {
+		t.Fatal("空 query 不该返回命中")
+	}
+}
+
+// TestListPrefixRootBoundaries /sub 不该把 /subway.txt 算进来。
+func TestListPrefixRootBoundaries(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 1, Name: "sub", IsDir: true})
+	_ = idx.PutNode(ctx, Node{ID: 2, ParentID: 1, Name: "f.txt", Path: "/sub/f.txt"})
+	_ = idx.PutNode(ctx, Node{ID: 3, Name: "subway.txt"})
+	got, err := idx.ListPrefix(ctx, "/sub")
+	if err != nil || len(got) != 1 || got[0].ID != 2 {
+		t.Fatalf("ListPrefix=(%v,%v)", got, err)
+	}
+}
+
+// TestPathByMessageID 按消息号反查路径。
+func TestPathByMessageID(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, Node{ID: 9, Name: "a.txt"})
+	if p, ok, _ := idx.PathByMessageID(ctx, 9); !ok || p != "/a.txt" {
+		t.Fatalf("PathByMessageID=(%q,%v)", p, ok)
+	}
+	if _, ok, _ := idx.PathByMessageID(ctx, 999); ok {
+		t.Fatal("不存在的消息号不该命中")
+	}
+}
+
+// TestMetaCursor pts 游标读写。
+func TestMetaCursor(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	if _, ok, _ := idx.GetMeta(ctx, MetaKeyChannelPts); ok {
+		t.Fatal("初始不该有游标")
+	}
+	_ = idx.PutMeta(ctx, MetaKeyChannelPts, 55)
+	if v, ok, _ := idx.GetMeta(ctx, MetaKeyChannelPts); !ok || v != 55 {
+		t.Fatalf("GetMeta=(%d,%v)", v, ok)
+	}
+}
+
+// TestPendingDone 已上传待索引记录的往返与删除。
+func TestPendingDone(t *testing.T) {
+	ctx := context.Background()
+	idx := newTestIndex(t)
+	_ = idx.PutPendingDone(ctx, PendingDone{Path: "/a.bin", MessageID: 4, Size: 3})
+	p, ok, _ := idx.GetPendingDone(ctx, "/a.bin")
+	if !ok || p.MessageID != 4 {
+		t.Fatalf("GetPendingDone=(%+v,%v)", p, ok)
+	}
+	_ = idx.DeletePendingDone(ctx, "/a.bin")
+	if _, ok, _ := idx.GetPendingDone(ctx, "/a.bin"); ok {
+		t.Fatal("删除后不该还在")
+	}
+}
+
+// TestDeleteNodeIdempotent 不存在的 id 删除不算错误。
+func TestDeleteNodeIdempotent(t *testing.T) {
+	idx := newTestIndex(t)
+	if err := idx.DeleteNode(context.Background(), 0); err != nil {
+		t.Fatalf("DeleteNode(0): %v", err)
+	}
+	if err := idx.DeleteNode(context.Background(), 999); err != nil {
+		t.Fatalf("DeleteNode(999): %v", err)
 	}
 }

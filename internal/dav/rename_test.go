@@ -1,76 +1,121 @@
 package dav
 
-// 目录改名测试：映射盘里重命名文件夹要真正迁移整棵子树，而不是直接报不支持。
+// 改名测试：只编辑节点自己那条消息，子树里的文件消息一条都不动。
 
 import (
-	"context"
 	"errors"
 	"os"
-	"strings"
 	"testing"
 
-	"mytgfs/internal/index"
+	"mytgfs/internal/dirent"
 )
 
-// renameCalls 记录一次改名调用的消息号与 caption。
-type renameCall struct {
-	id      int
-	caption string
-}
-
-// TestRenameDirectoryMovesSubtree 目录改名后所有子文件的消息说明与索引一起迁移。
-func TestRenameDirectoryMovesSubtree(t *testing.T) {
+// TestRenameDirectoryOnlyEditsOwnMessage 目录改名后节点正文换名，子树消息号不变。
+func TestRenameDirectoryOnlyEditsOwnMessage(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
-	putRenameFixture(t, fsys, ctx)
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	uploads, copies, deletes := len(st.uploadKeys), len(st.copiedSrc), len(st.deleted)
+	dirID := nodeID(t, fsys, "/d")
+
+	before := map[string]int{}
+	for _, p := range []string{"/d/f1.bin", "/d/sub/f2.bin"} {
+		n, ok, _ := fsys.idx.NodeByPath(ctx, p)
+		if !ok {
+			t.Fatalf("%s 预置失败", p)
+		}
+		before[p] = n.ID
+	}
 
 	if err := fsys.Rename(ctx, "/d", "/e"); err != nil {
 		t.Fatalf("目录改名应成功: %v", err)
 	}
 
-	if len(st.renames) != 2 {
-		t.Fatalf("两个文件都要改说明，实际 %+v", st.renames)
+	if len(st.uploadKeys) != uploads || len(st.copiedSrc) != copies || len(st.deleted) != deletes {
+		t.Fatalf("改名不应产生上传/引用/删除: keys=%v copy=%v del=%v", st.uploadKeys, st.copiedSrc, st.deleted)
 	}
-	for _, rc := range st.renames {
-		if !strings.Contains(rc.caption, `"path":"/e/`) {
-			t.Fatalf("caption 应带新路径，实际 %s", rc.caption)
-		}
+	// 只编辑了目录自己那条消息
+	if len(st.edits) != 1 {
+		t.Fatalf("应只编辑 1 条消息，实际 %v", st.edits)
+	}
+	edited, exists := st.edits[dirID]
+	if !exists {
+		t.Fatalf("应编辑目录消息 %d，实际 %v", dirID, st.edits)
+	}
+	node, ok := dirent.Parse(edited)
+	if !ok || node.Name != "e" || !node.Dir || node.Parent != 0 {
+		t.Fatalf("改名后的正文不符: %+v (%s)", node, edited)
 	}
 	for _, p := range []string{"/e/f1.bin", "/e/sub/f2.bin"} {
-		if _, ok, err := fsys.idx.Get(ctx, p); err != nil || !ok {
-			t.Fatalf("改名后应存在 %s: ok=%v err=%v", p, ok, err)
+		n, ok, _ := fsys.idx.NodeByPath(ctx, p)
+		if !ok {
+			t.Fatalf("改名后应存在 %s", p)
+		}
+		old := "/d/" + p[3:]
+		if want := before[old]; want != 0 && n.ID != want {
+			t.Fatalf("%s 消息号应保持 %d，实际 %d", p, want, n.ID)
+		}
+		// 子节点的正文没被编辑（名字/父号仍是原值）
+		if _, touched := st.edits[n.ID]; touched {
+			t.Fatalf("子节点 %d 不该被编辑", n.ID)
 		}
 	}
-	for _, p := range []string{"/d/f1.bin", "/d/sub/f2.bin"} {
-		if _, ok, _ := fsys.idx.Get(ctx, p); ok {
+	for _, p := range []string{"/d", "/d/f1.bin", "/d/sub/f2.bin"} {
+		if _, ok, _ := fsys.idx.NodeByPath(ctx, p); ok {
 			t.Fatalf("旧路径应消失: %s", p)
 		}
 	}
-	if dirs, err := fsys.idx.Dirs(ctx, "/e"); err != nil || len(dirs) != 2 {
-		t.Fatalf("目录记录应迁到 /e 下: dirs=%v err=%v", dirs, err)
-	}
-	if dirs, err := fsys.idx.Dirs(ctx, "/d"); err != nil || len(dirs) != 0 {
-		t.Fatalf("旧目录记录应清空: dirs=%v err=%v", dirs, err)
-	}
 }
 
-// TestRenameEmptyDirectory 空目录（只有 dirs 记录）也能改名。
+// TestRenameEmptyDirectory 空目录同样只改自己那条消息。
 func TestRenameEmptyDirectory(t *testing.T) {
-	fsys, _, done := newTestFS(t)
+	fsys, st, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
-	if err := fsys.idx.PutDir(ctx, "/empty"); err != nil {
-		t.Fatal(err)
-	}
+	ctx := t.Context()
+	id := mkdir(t, fsys, "/empty")
+
 	if err := fsys.Rename(ctx, "/empty", "/empty2"); err != nil {
 		t.Fatalf("空目录改名应成功: %v", err)
 	}
-	if ok, err := fsys.idx.IsDir(ctx, "/empty2"); err != nil || !ok {
-		t.Fatalf("新目录应存在: ok=%v err=%v", ok, err)
+	if len(st.edits) != 1 {
+		t.Fatalf("应只编辑 1 条消息，实际 %v", st.edits)
 	}
-	if ok, _ := fsys.idx.IsDir(ctx, "/empty"); ok {
-		t.Fatal("旧目录记录应删除")
+	node, ok := dirent.Parse(st.edits[id])
+	if !ok || node.Name != "empty2" || !node.Dir {
+		t.Fatalf("目录正文应改名: %+v", node)
+	}
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/empty2"); !ok {
+		t.Fatal("新目录应存在")
+	}
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/empty"); ok {
+		t.Fatal("旧目录应消失")
+	}
+}
+
+// TestRenameMovesAcrossParents 跨父移动只编辑节点自己一条消息并改 parent。
+func TestRenameMovesAcrossParents(t *testing.T) {
+	fsys, st, done := newTestFS(t)
+	defer done()
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	mkdir(t, fsys, "/target")
+	targetID := nodeID(t, fsys, "/target")
+	fileID := nodeID(t, fsys, "/d/f1.bin")
+
+	if err := fsys.Rename(ctx, "/d/f1.bin", "/target/moved.bin"); err != nil {
+		t.Fatalf("跨父移动应成功: %v", err)
+	}
+	if len(st.edits) != 1 {
+		t.Fatalf("应只编辑 1 条消息，实际 %v", st.edits)
+	}
+	node, ok := dirent.Parse(st.edits[fileID])
+	if !ok || node.Name != "moved.bin" || node.Parent != targetID {
+		t.Fatalf("移动后的正文不符: %+v", node)
+	}
+	n, ok, _ := fsys.idx.NodeByPath(ctx, "/target/moved.bin")
+	if !ok || n.ID != fileID || n.ParentID != targetID {
+		t.Fatalf("索引不符: %+v", n)
 	}
 }
 
@@ -78,16 +123,16 @@ func TestRenameEmptyDirectory(t *testing.T) {
 func TestRenameDirectoryRejectsOwnSubtree(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
-	putRenameFixture(t, fsys, ctx)
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
 
 	if err := fsys.Rename(ctx, "/d", "/d/sub/d2"); err == nil {
 		t.Fatal("移进自身子树应报错")
 	}
-	if len(st.renames) != 0 {
-		t.Fatalf("被拒绝时不应改任何消息，实际 %+v", st.renames)
+	if len(st.edits) != 0 {
+		t.Fatalf("被拒绝时不该编辑消息: %v", st.edits)
 	}
-	if _, ok, _ := fsys.idx.Get(ctx, "/d/f1.bin"); !ok {
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/d/f1.bin"); !ok {
 		t.Fatal("被拒绝时索引不应变动")
 	}
 }
@@ -96,44 +141,89 @@ func TestRenameDirectoryRejectsOwnSubtree(t *testing.T) {
 func TestRenameDirectoryRejectsExistingTarget(t *testing.T) {
 	fsys, _, done := newTestFS(t)
 	defer done()
-	ctx := context.Background()
-	putRenameFixture(t, fsys, ctx)
-	if err := fsys.idx.Put(ctx, index.File{Path: "/other/x.bin", MessageID: 9, Size: 1}); err != nil {
-		t.Fatal(err)
-	}
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	mkdir(t, fsys, "/other")
 
 	err := fsys.Rename(ctx, "/d", "/other")
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("目标存在时应返回 ErrExist，实际 %v", err)
 	}
-	if _, ok, _ := fsys.idx.Get(ctx, "/d/f1.bin"); !ok {
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/d/f1.bin"); !ok {
 		t.Fatal("被拒绝时索引不应变动")
 	}
 }
 
-// TestRenameRootRejected 根目录不能改名。
+// TestRenameRootRejected 虚拟卷根不能改名。
 func TestRenameRootRejected(t *testing.T) {
 	fsys, _, done := newTestFS(t)
 	defer done()
-	if err := fsys.Rename(context.Background(), "/", "/x"); err == nil {
+	if err := fsys.Rename(t.Context(), "/", "/x"); err == nil {
 		t.Fatal("根目录改名应报错")
 	}
 }
 
-// putRenameFixture 造一棵 /d 子树：/d/f1.bin 与 /d/sub/f2.bin。
-func putRenameFixture(t *testing.T, fsys *FileSystem, ctx context.Context) {
-	t.Helper()
-	for _, f := range []index.File{
-		{Path: "/d/f1.bin", MessageID: 1, DocumentID: 11, Size: 3, Sha256: "aa"},
-		{Path: "/d/sub/f2.bin", MessageID: 2, DocumentID: 12, Size: 4, Sha256: "bb"},
-	} {
-		if err := fsys.idx.Put(ctx, f); err != nil {
-			t.Fatal(err)
-		}
+// TestRenameEditFailureLeavesLocalUntouched 远端编辑失败时本地节点与正文都不变。
+func TestRenameEditFailureLeavesLocalUntouched(t *testing.T) {
+	fsys, st, done := newTestFS(t)
+	defer done()
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	st.editErr = errors.New("network down")
+	id := nodeID(t, fsys, "/d")
+
+	if err := fsys.Rename(ctx, "/d", "/e"); err == nil {
+		t.Fatal("远端编辑失败应返回错误")
 	}
-	for _, p := range []string{"/d", "/d/sub"} {
-		if err := fsys.idx.PutDir(ctx, p); err != nil {
-			t.Fatal(err)
-		}
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/d"); !ok {
+		t.Fatal("本地旧路径不应消失")
+	}
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/e"); ok {
+		t.Fatal("本地不该出现新路径")
+	}
+	node, _ := dirent.Parse(st.msgs[id].body)
+	if node.Name != "d" {
+		t.Fatalf("远端正文不该被改: %+v", node)
+	}
+}
+
+// TestReconcileNodeFromRemote 本地与远端分叉时按远端正文纠正回来。
+func TestReconcileNodeFromRemote(t *testing.T) {
+	fsys, st, done := newTestFS(t)
+	defer done()
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	id := nodeID(t, fsys, "/d")
+
+	// 远端已改名（模拟 EditNode 成功、本地 MoveNode 失败后的状态）
+	newBody, _ := dirent.Encode(dirent.Node{Name: "remote-name", Parent: 0, Dir: true})
+	st.msgs[id] = nodeMsg{body: newBody}
+
+	if err := fsys.reconcileNode(ctx, id); err != nil {
+		t.Fatalf("reconcileNode: %v", err)
+	}
+	n, ok, _ := fsys.idx.NodeByPath(ctx, "/remote-name")
+	if !ok || n.ID != id {
+		t.Fatalf("应按远端名字恢复: %+v ok=%v", n, ok)
+	}
+	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/d"); ok {
+		t.Fatal("旧名字应消失")
+	}
+}
+
+// TestReconcileNodeDeletesMissingRemote 远端消息已删时本地节点被清掉。
+func TestReconcileNodeDeletesMissingRemote(t *testing.T) {
+	fsys, st, done := newTestFS(t)
+	defer done()
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	id := nodeID(t, fsys, "/d/f1.bin")
+	delete(st.msgs, id)
+
+	if err := fsys.reconcileNode(ctx, id); err != nil {
+		t.Fatalf("reconcileNode: %v", err)
+	}
+	if _, ok, _ := fsys.idx.NodeByID(ctx, id); ok {
+		t.Fatal("远端没有的消息不该留在本地")
 	}
 }

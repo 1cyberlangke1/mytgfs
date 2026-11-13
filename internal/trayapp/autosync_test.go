@@ -1,10 +1,6 @@
 package trayapp
 
-// 自动增量同步的单测：用假差异源，不连 Telegram。
-//
-// 覆盖两件事：
-//  1. 首轮差异里的新消息会写进索引，并触发一次变更回调
-//  2. 回调为 nil 时（纯面板模式）不 panic，取消后能及时退出
+// 自动增量同步的单测：用假差异源 + 假节点源，不连 Telegram。
 
 import (
 	"context"
@@ -14,9 +10,10 @@ import (
 
 	"mytgfs/internal/index"
 	tgsync "mytgfs/internal/sync"
+	"mytgfs/internal/telegramstore"
 )
 
-// fakeDiffer 首轮返回一条文件消息，之后返回空差异。
+// fakeDiffer 首轮返回一条节点变更事件，之后返回空差异。
 type fakeDiffer struct {
 	mu    sync.Mutex
 	calls int
@@ -27,31 +24,41 @@ func (f *fakeDiffer) ChannelDifference(_ context.Context, _, _ int) (tgsync.Diff
 	defer f.mu.Unlock()
 	f.calls++
 	if f.calls == 1 {
-		return tgsync.Difference{
-			Pts:   10,
-			Final: true,
-			Messages: []tgsync.Message{{
-				ID:            1,
-				Caption:       tgsync.EncodeCaptionHash("/a.txt", ""),
-				DocumentID:    7,
-				AccessHash:    8,
-				FileReference: []byte{1},
-				Size:          3,
-				Date:          time.Unix(1700000000, 0),
-			}},
-		}, nil
+		return tgsync.Difference{Pts: 10, Final: true, Changed: []int{2}}, nil
 	}
 	return tgsync.Difference{Pts: 10, Final: true}, nil
 }
 
-// TestAutoSyncAppliesAndNotifies 首轮写入索引并回调变更路径。
-func TestAutoSyncAppliesAndNotifies(t *testing.T) {
+// fakeNodes 是内存里的远端节点源：消息 2 是 /a.txt。
+type fakeNodes struct{}
+
+func (fakeNodes) FetchNodes(_ context.Context, ids []int) (map[int]telegramstore.NodeInfo, error) {
+	out := map[int]telegramstore.NodeInfo{}
+	for _, id := range ids {
+		if id == 2 {
+			out[id] = telegramstore.NodeInfo{
+				MessageID: 2, Name: "a.txt", Parent: 0,
+				DocumentID: 7, AccessHash: 8, Size: 3, Sha: "aa",
+			}
+		}
+	}
+	return out, nil
+}
+
+// newTestIndex 建空的内存索引；卷根是虚拟的，不需要根消息。
+func newTestIndex(t *testing.T) *index.Index {
+	t.Helper()
 	idx, err := index.OpenMemory()
 	if err != nil {
-		t.Fatalf("打开索引失败: %v", err)
+		t.Fatalf("OpenMemory: %v", err)
 	}
-	defer idx.Close()
+	t.Cleanup(func() { _ = idx.Close() })
+	return idx
+}
 
+// TestAutoSyncAppliesAndNotifies 首轮写入索引并回调变更路径。
+func TestAutoSyncAppliesAndNotifies(t *testing.T) {
+	idx := newTestIndex(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -66,7 +73,7 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 			case notified <- struct{}{}:
 			default:
 			}
-		}, idx, &fakeDiffer{}, 20*time.Millisecond, nil)
+		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil)
 	}()
 
 	select {
@@ -81,85 +88,61 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 		t.Fatal("取消后 AutoSync 没有退出")
 	}
 
-	f, ok, err := idx.Get(context.Background(), "/a.txt")
+	n, ok, err := idx.NodeByPath(context.Background(), "/a.txt")
 	if err != nil || !ok {
 		t.Fatalf("索引里没有 /a.txt: ok=%v err=%v", ok, err)
 	}
-	if f.MessageID != 1 || f.Size != 3 {
-		t.Fatalf("索引内容不符: %+v", f)
+	if n.ID != 2 || n.Size != 3 {
+		t.Fatalf("索引内容不符: %+v", n)
 	}
 	if len(paths) != 1 || paths[0] != "/a.txt" {
 		t.Fatalf("回调路径不符: %v", paths)
 	}
 }
 
-// TestAutoSyncNilNotify 没有挂载点时回调可省略。
+// TestAutoSyncNilNotify 回调可省略。
 func TestAutoSyncNilNotify(t *testing.T) {
-	idx, err := index.OpenMemory()
-	if err != nil {
-		t.Fatalf("打开索引失败: %v", err)
-	}
-	defer idx.Close()
-
+	idx := newTestIndex(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		AutoSync(ctx, nil, idx, &fakeDiffer{}, 20*time.Millisecond, nil)
+		AutoSync(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil)
 	}()
-
-	// 等首轮同步落库，再取消
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok, _ := idx.Get(context.Background(), "/a.txt"); ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	time.Sleep(60 * time.Millisecond)
 	cancel()
 	select {
 	case <-finished:
 	case <-time.After(3 * time.Second):
 		t.Fatal("取消后 AutoSync 没有退出")
 	}
-	if _, ok, _ := idx.Get(context.Background(), "/a.txt"); !ok {
-		t.Fatal("首轮同步没有写入索引")
-	}
 }
 
 // TestAutoSyncWhileHonorsSwitch 关闭时不同步，打开后立即同步。
-//
-// 输入：SyncSwitch 初始 false，100ms 后置 true
-// 输出：首次同步发生在打开之后
-// 预期：关闭期间差异源一次都没被调用；打开后索引里出现 /a.txt
 func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
-	idx, err := index.OpenMemory()
-	if err != nil {
-		t.Fatalf("打开索引失败: %v", err)
-	}
-	defer idx.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	idx := newTestIndex(t)
+	ctx := t.Context()
 	sw := NewSyncSwitch(false)
 	d := &fakeDiffer{}
-	go AutoSyncWhile(ctx, nil, idx, d, 20*time.Millisecond, nil, sw.On)
+	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, sw.On)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
 	d.mu.Lock()
-	before := d.calls
+	closed := d.calls
 	d.mu.Unlock()
-	if before != 0 {
-		t.Fatalf("关闭期间同步了 %d 次", before)
+	if closed != 0 {
+		t.Fatalf("关闭时不该同步，实际 %d 轮", closed)
 	}
-
 	sw.Set(true)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok, _ := idx.Get(context.Background(), "/a.txt"); ok {
+		d.mu.Lock()
+		opened := d.calls
+		d.mu.Unlock()
+		if opened > 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("打开开关后没有同步")
+	t.Fatal("打开后没有同步")
 }

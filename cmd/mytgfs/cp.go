@@ -27,10 +27,10 @@ import (
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/config"
+	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	tgsync "mytgfs/internal/sync"
-	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/upload"
 )
 
 // runCopy 处理频道内复制。
@@ -84,14 +84,14 @@ func runCopy(args []string) {
 			dstIdx = d
 		}
 
-		source, found, gerr := idx.Get(ctx, src)
+		source, found, gerr := idx.NodeByPath(ctx, src)
 		if gerr != nil {
 			return gerr
 		}
 		if !found {
 			fatal(i18n.T("err.cp_src_missing", src))
 		}
-		old, hadOld, gerr := dstIdx.Get(ctx, dst)
+		old, hadOld, gerr := dstIdx.NodeByPath(ctx, dst)
 		if gerr != nil {
 			return gerr
 		}
@@ -107,50 +107,30 @@ func runCopy(args []string) {
 
 		srcStore := s.Store()
 		dstStore := s.StoreFor(dstVolume.ChatID)
-		srcPart := &telegramstore.Part{
-			MessageID:     source.MessageID,
-			DocumentID:    source.DocumentID,
-			AccessHash:    source.AccessHash,
-			FileReference: source.FileReference,
-			Size:          source.Size,
+		dstFS := dav.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk())
+		srcPart := upload.Part(source)
+		body, cerr := dstFS.NodeBody(ctx, dst, source.Sha256)
+		if cerr != nil {
+			return cerr
 		}
-		caption := tgsync.EncodeCaptionHash(dst, source.Sha256)
 		part, refreshed, cerr := dstStore.CopyFrom(ctx, srcStore, srcPart,
-			path.Base(dst), "application/octet-stream", caption)
+			path.Base(dst), "application/octet-stream", body)
 		if cerr != nil {
 			return cerr
 		}
 		// 源 file_reference 被刷新时写回源索引，否则下次还要再刷一次
 		if refreshed != nil && dstIdx != idx {
-			if err := idx.Replace(ctx, index.File{
-				Path:          src,
-				MessageID:     refreshed.MessageID,
-				DocumentID:    refreshed.DocumentID,
-				AccessHash:    refreshed.AccessHash,
-				FileReference: refreshed.FileReference,
-				Size:          refreshed.Size,
-				Mtime:         source.Mtime,
-				Sha256:        source.Sha256,
-			}); err != nil {
-				fmt.Fprintln(os.Stderr, i18n.T("err.index_read", err))
+			updated := source
+			updated.DocumentID = refreshed.DocumentID
+			updated.AccessHash = refreshed.AccessHash
+			updated.FileReference = refreshed.FileReference
+			updated.Size = refreshed.Size
+			if perr := idx.PutNode(ctx, updated); perr != nil {
+				fmt.Fprintln(os.Stderr, i18n.T("err.index_read", perr))
 			}
 		}
-		if err := dstIdx.Put(ctx, index.File{
-			Path:          dst,
-			MessageID:     part.MessageID,
-			DocumentID:    part.DocumentID,
-			AccessHash:    part.AccessHash,
-			FileReference: part.FileReference,
-			Size:          part.Size,
-			Mtime:         source.Mtime,
-			Sha256:        source.Sha256,
-		}); err != nil {
-			return err
-		}
-		if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
-			if err := dstStore.Delete(ctx, old.MessageID); err != nil {
-				fmt.Fprintln(os.Stderr, i18n.T("err.cp_delete_old", old.MessageID, err))
-			}
+		if ierr := dstFS.Import(ctx, dst, part, source.Sha256, source.Mtime, true); ierr != nil {
+			return ierr
 		}
 		fmt.Printf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
 			volName, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
@@ -166,7 +146,7 @@ func runCopy(args []string) {
 // 输入：dst 目标路径已有记录；src 源记录
 // 输出：true 表示大小一致且 sha256 非空并相同
 // 预期：重建索引后的旧记录 sha256 可能为空，无法证明相同，一律按不同处理
-func sameContent(dst, src index.File) bool {
+func sameContent(dst, src index.Node) bool {
 	return src.Sha256 != "" && dst.Sha256 == src.Sha256 && dst.Size == src.Size
 }
 

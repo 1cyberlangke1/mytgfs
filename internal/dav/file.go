@@ -1,5 +1,11 @@
 package dav
 
+// WebDAV 文件句柄：读、写、提交、列目录。
+//
+// 输入：webdav.File 接口调用
+// 输出：字节流、FileInfo、提交结果
+// 预期：写入落临时文件，Close 时整份上传，节点消息自述名字与父消息号
+
 import (
 	"context"
 	"encoding/hex"
@@ -14,16 +20,9 @@ import (
 
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/upload"
 )
-
-// WebDAV 文件句柄：读、写、提交、列目录。
-//
-// 输入：webdav.File 接口调用
-// 输出：字节流、FileInfo、提交结果
-// 预期：写入落临时文件，Close 时提交到频道并写索引
 
 type file struct {
 	d     *FileSystem
@@ -32,7 +31,8 @@ type file struct {
 	write bool
 	dir   bool
 	perm  os.FileMode
-	entry *index.File
+	// node 是读模式下打开的文件或目录节点
+	node *index.Node
 
 	off  int64
 	buf  []byte
@@ -58,11 +58,11 @@ func (f *file) Abort() error {
 	return nil
 }
 
-// commit 把一份完整内容上传到频道并登记索引。
+// commit 把一份完整内容上传到频道。
 //
 // 输入：ctx；tmp 已写完的临时文件；name 卷内路径；sha 内容摘要
 // 输出：error
-// 预期：上传或索引登记失败时保留临时文件与 pending 记录，供重启补传；
+// 预期：上传或登记失败时保留临时文件与 pending 记录，供重启补传；
 //
 //	只处理本程序记下的文件，不触碰频道里任何别的消息。
 func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error {
@@ -73,13 +73,24 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	caption := tgsync.EncodeCaptionHash(name, sha)
+	parent, base, ok, err := f.d.parentOf(ctx, name)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return os.ErrNotExist
+	}
+	// 节点消息正文在上传时就写死 name+parent：文件消息自己描述自己。
+	body, err := nodeBody(base, parent.ID, false, sha)
+	if err != nil {
+		return err
+	}
 	req := upload.Request{
 		Path:    name,
 		Reader:  tmp,
 		Size:    st.Size(),
 		SHA:     sha,
-		Caption: caption,
+		Caption: body,
 	}
 	// 有队列时串行上传：批量写入不会互相抢限流额度
 	if f.d.q != nil {
@@ -95,14 +106,22 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 	return f.record(ctx, name, sha, part)
 }
 
-// record 把上传结果登记到索引，并清理被覆盖的旧消息。
+// record 把上传结果登记到本地节点表，并清理被覆盖的旧消息。
 //
 // 输入：ctx；name 卷内路径；sha 内容摘要；part 已上传成功的消息
 // 输出：error
-// 预期：先写 pending_done 记账再写 files，索引失败时记账仍在，
-// 重启 ResumePending 只需补一次索引而不重传整份内容；
-// 索引写成后清掉记账，清账失败只记日志（数据已可用，不能因此再传一遍）。
+// 预期：
+//   - 先记账再写本地节点；中途失败由 pending 账本补
+//   - 覆盖写时删掉旧节点的消息，避免频道里堆同一路径的旧内容
 func (f *file) record(ctx context.Context, name, sha string, part *telegramstore.Part) error {
+	name = clean(name)
+	parent, base, ok, err := f.d.parentOf(ctx, name)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return os.ErrNotExist
+	}
 	if err := f.d.idx.PutPendingDone(ctx, index.PendingDone{
 		Path:          name,
 		MessageID:     part.MessageID,
@@ -111,30 +130,39 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 		FileReference: part.FileReference,
 		Size:          part.Size,
 		Sha256:        sha,
-		Mtime:         time.Now().Unix(),
+		Mtime:         nowUnix(),
 	}); err != nil {
 		return err
 	}
-	// 覆盖写：旧消息要删掉，否则频道里会堆同路径的旧文件消息
-	old, hadOld, gerr := f.d.idx.Get(ctx, name)
+	old, hadOld, gerr := f.d.idx.NodeByPath(ctx, name)
 	if gerr != nil {
 		return gerr
 	}
-	if err := f.d.idx.Put(ctx, index.File{
+	// 先删旧的本地节点，再写新的：nodes 表对 (parent_id, name) 唯一，
+	// 同路径覆盖写若先插新行会撞约束。
+	if hadOld && old.ID > 0 && old.ID != part.MessageID {
+		if derr := f.d.idx.DeleteNode(ctx, old.ID); derr != nil {
+			return derr
+		}
+	}
+	if err := f.d.idx.PutNode(ctx, index.Node{
+		ID:            part.MessageID,
+		ParentID:      parent.ID,
+		Name:          base,
 		Path:          name,
-		MessageID:     part.MessageID,
 		DocumentID:    part.DocumentID,
 		AccessHash:    part.AccessHash,
 		FileReference: part.FileReference,
 		Size:          part.Size,
-		Mtime:         time.Now().Unix(),
+		Mtime:         nowUnix(),
 		Sha256:        sha,
 	}); err != nil {
 		return err
 	}
-	if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
-		if derr := f.d.store.Delete(ctx, old.MessageID); derr != nil {
-			slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.MessageID, "err", derr)
+	// 远端旧消息最后删：删失败只留下孤儿消息，本地视图已经正确
+	if hadOld && old.ID > 0 && old.ID != part.MessageID {
+		if derr := f.d.store.Delete(ctx, old.ID); derr != nil {
+			slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.ID, "err", derr)
 		}
 	}
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
@@ -166,7 +194,7 @@ func (f *file) Close() error {
 	}
 	// 提交前先记一笔：上传/登记阶段崩溃也能按账恢复
 	if err := f.d.idx.PutPending(f.d.ctx, index.PendingUpload{
-		Path: f.name, Temp: tmp.Name(), Size: st.Size(), Mtime: time.Now().Unix(),
+		Path: f.name, Temp: tmp.Name(), Size: st.Size(), Mtime: nowUnix(),
 	}); err != nil {
 		_ = tmp.Close()
 		return err
@@ -185,27 +213,27 @@ func (f *file) Close() error {
 
 // Read 按需拉取一块再返回。
 func (f *file) Read(p []byte) (int, error) {
-	if f.dir || f.entry == nil {
+	if f.dir || f.node == nil {
 		return 0, io.EOF
 	}
-	if f.off >= f.entry.Size {
+	if f.off >= f.node.Size {
 		f.d.untrack(f.name)
 		return 0, io.EOF
 	}
 	if f.buf == nil || f.off < f.base || f.off >= f.base+int64(len(f.buf)) {
 		length := f.d.chunk
 		if length <= 0 {
-			length = firstChunk
+			length = 1 << 20
 		}
-		if f.off+length > f.entry.Size {
-			length = f.entry.Size - f.off
+		if f.off+length > f.node.Size {
+			length = f.node.Size - f.off
 		}
 		data, err := f.readRange(f.off, int(length))
 		if err != nil {
-			// 消息在 Telegram 侧被删了：索引里这条已经没有意义，删掉并按文件不存在处理
+			// 消息在 Telegram 侧被删了：本地这条已经没有意义，删掉并按文件不存在处理
 			if telegramstore.IsMessageGone(err) {
-				slog.Debug(i18n.T("log.remote_gone"), "path", f.name, "msg", f.entry.MessageID)
-				_ = f.d.idx.Delete(f.d.ctx, f.name)
+				slog.Debug(i18n.T("log.remote_gone"), "path", f.name, "msg", f.node.ID)
+				_ = f.d.idx.DeleteNode(f.d.ctx, f.node.ID)
 				return 0, os.ErrNotExist
 			}
 			return 0, err
@@ -221,31 +249,31 @@ func (f *file) Read(p []byte) (int, error) {
 //
 // 输入：ofst 卷内偏移；length 字节数
 // 输出：数据、error
-// 预期：刷新成功时把新引用写回索引（Replace 无条件覆盖，绕过 message_id 大小比较），
+// 预期：刷新成功时把新引用写回本地节点，
 //
 //	刷新失败或二次读取仍失败则原样返回错误；不改动其它消息。
 func (f *file) readRange(ofst int64, length int) ([]byte, error) {
-	prog := func(done int64) { f.d.track(f.name, done, f.entry.Size) }
-	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.entry), ofst, length, prog)
+	prog := func(done int64) { f.d.track(f.name, done, f.node.Size) }
+	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.node), ofst, length, prog)
 	if err == nil {
 		return data, nil
 	}
 	if !telegramstore.IsFileReferenceError(err) {
 		return nil, err
 	}
-	part, rerr := f.d.store.Refresh(f.d.ctx, f.entry.MessageID)
+	part, rerr := f.d.store.Refresh(f.d.ctx, f.node.ID)
 	if rerr != nil {
 		return nil, rerr
 	}
-	updated := *f.entry
+	updated := *f.node
 	updated.DocumentID = part.DocumentID
 	updated.AccessHash = part.AccessHash
 	updated.FileReference = part.FileReference
 	updated.Size = part.Size
-	if perr := f.d.idx.Replace(f.d.ctx, updated); perr != nil {
+	if perr := f.d.idx.PutNode(f.d.ctx, updated); perr != nil {
 		return nil, perr
 	}
-	f.entry = &updated
+	f.node = &updated
 	return f.d.store.ReadRange(f.d.ctx, partOf(updated), ofst, length, prog)
 }
 
@@ -256,10 +284,10 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		offset += f.off
 	case io.SeekEnd:
-		if f.entry == nil {
+		if f.node == nil {
 			return 0, errors.New(i18n.T("err.dav_unknown_size"))
 		}
-		offset += f.entry.Size
+		offset += f.node.Size
 	default:
 		return 0, errors.New(i18n.T("err.dav_whence"))
 	}
@@ -285,35 +313,33 @@ func (f *file) Write(p []byte) (int, error) {
 
 // Readdir 列出目录项。
 func (f *file) Readdir(count int) ([]fs.FileInfo, error) {
-	if !f.dir {
+	if !f.dir || f.node == nil {
 		return nil, errors.New(i18n.T("err.dav_not_dir"))
 	}
-	entries, err := f.d.idx.List(f.d.ctx, f.name)
+	children, err := f.d.idx.Children(f.d.ctx, f.node.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]fs.FileInfo, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir {
-			out = append(out, info{name: e.Name, dir: true, mod: time.Now()})
+	out := make([]fs.FileInfo, 0, len(children))
+	for _, c := range children {
+		if c.IsDir {
+			out = append(out, info{name: c.Name, dir: true, mod: unixTime(c.Mtime)})
 			continue
 		}
-		if e.File != nil {
-			out = append(out, info{name: e.Name, size: e.File.Size, mod: time.Unix(e.File.Mtime, 0)})
-		}
+		out = append(out, info{name: c.Name, size: c.Size, mod: unixTime(c.Mtime)})
 	}
 	return out, nil
 }
 
 // Stat 返回自身信息。
 func (f *file) Stat() (fs.FileInfo, error) {
-	if f.dir {
-		return info{name: path.Base(f.name), dir: true, mod: time.Now()}, nil
+	if f.node == nil {
+		return f.tmp.Stat()
 	}
-	if f.entry != nil {
-		return info{name: path.Base(f.name), size: f.entry.Size, mod: time.Unix(f.entry.Mtime, 0)}, nil
+	if f.node.IsDir {
+		return info{name: path.Base(f.name), dir: true, mod: unixTime(f.node.Mtime)}, nil
 	}
-	return f.tmp.Stat()
+	return info{name: path.Base(f.name), size: f.node.Size, mod: unixTime(f.node.Mtime)}, nil
 }
 
 // info 是 fs.FileInfo 的最小实现。
@@ -335,5 +361,3 @@ func (i info) Mode() fs.FileMode {
 func (i info) ModTime() time.Time { return i.mod }
 func (i info) IsDir() bool        { return i.dir }
 func (i info) Sys() any           { return nil }
-
-// clean 规范化路径。

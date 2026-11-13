@@ -35,7 +35,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	vol, volName, ok := a.Volume(name)
+	_, volName, ok := a.Volume(name)
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
@@ -45,7 +45,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		// 索引是缓存：空了就重建，否则 ls/search 会给出空白结果
-		if rerr := a.RebuildIndexIfEmpty(ctx, s.Index, vol.ChatID); rerr != nil {
+		if rerr := a.RebuildIndexIfEmpty(ctx, s.Index, s.Volume.ChatID); rerr != nil {
 			fmt.Fprintln(os.Stderr, i18n.T("err.fs_rebuild", rerr))
 		}
 		davfs := dav.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())

@@ -68,25 +68,32 @@ func TestSuccessfulUploadClearsPending(t *testing.T) {
 	}
 }
 
-// TestResumePendingUploadsAndIndexes 重启后按账本把未提交文件补传并登记索引。
-func TestResumePendingUploadsAndIndexes(t *testing.T) {
+// newResumeIndex 建一个空的临时索引；卷根是虚拟的，不需要根消息。
+func newResumeIndex(t *testing.T) *index.Index {
+	t.Helper()
 	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer idx.Close()
+	t.Cleanup(func() { _ = idx.Close() })
+	return idx
+}
+
+// TestResumePendingUploadsAndIndexes 重启后按账本把未提交文件补传并登记索引。
+func TestResumePendingUploadsAndIndexes(t *testing.T) {
+	idx := newResumeIndex(t)
+	ctx := context.Background()
 
 	// 模拟上次崩溃：临时文件完整、账本有一笔，但没上传、没索引
 	tmp := filepath.Join(t.TempDir(), ".mytgfs-dav-crash")
 	if err := os.WriteFile(tmp, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
 	if err := idx.PutPending(ctx, index.PendingUpload{Path: "/a.bin", Temp: tmp, Size: 5, Mtime: 1}); err != nil {
 		t.Fatal(err)
 	}
 
-	st := &fakeStore{}
+	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
@@ -95,9 +102,12 @@ func TestResumePendingUploadsAndIndexes(t *testing.T) {
 	if len(st.uploadKeys) != 1 || st.uploadKeys[0] != helloSHA {
 		t.Fatalf("应按内容 sha 补传，实际 %v", st.uploadKeys)
 	}
-	entry, ok, err := idx.Get(ctx, "/a.bin")
-	if err != nil || !ok || entry.Size != 5 || entry.Sha256 != helloSHA {
-		t.Fatalf("补传后应登记索引: ok=%v err=%v entry=%+v", ok, err, entry)
+	n, ok, err := idx.NodeByPath(ctx, "/a.bin")
+	if err != nil || !ok || n.Size != 5 || n.Sha256 != helloSHA {
+		t.Fatalf("补传后应登记索引: ok=%v err=%v node=%+v", ok, err, n)
+	}
+	if len(st.msgs) == 0 {
+		t.Fatalf("补传后应产生一条节点消息")
 	}
 	rows, _ := idx.ListPending(ctx)
 	if len(rows) != 0 {
@@ -131,14 +141,9 @@ func TestSuccessfulUploadClearsPendingDone(t *testing.T) {
 
 // TestResumePendingReusesUploadedPart 上传已成功但索引没写成时，重启只补索引、不重传字节。
 func TestResumePendingReusesUploadedPart(t *testing.T) {
-	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idx.Close()
+	idx := newResumeIndex(t)
 	ctx := context.Background()
 
-	// 模拟上次崩溃：临时文件在、账本在，且上传已成功（消息号已记下）
 	tmp := filepath.Join(t.TempDir(), ".mytgfs-dav-crash")
 	if err := os.WriteFile(tmp, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
@@ -153,7 +158,7 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st := &fakeStore{}
+	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
@@ -162,9 +167,9 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 	if len(st.uploadKeys) != 0 {
 		t.Fatalf("已上传过的不应重传，实际 %v", st.uploadKeys)
 	}
-	entry, ok, err := idx.Get(ctx, "/a.bin")
-	if err != nil || !ok || entry.MessageID != 55 || entry.DocumentID != 900 || entry.Sha256 != helloSHA {
-		t.Fatalf("应按已上传记账补索引: ok=%v err=%v entry=%+v", ok, err, entry)
+	n, ok, err := idx.NodeByPath(ctx, "/a.bin")
+	if err != nil || !ok || n.ID != 55 || n.DocumentID != 900 || n.Sha256 != helloSHA {
+		t.Fatalf("应按已上传记账补索引: ok=%v err=%v node=%+v", ok, err, n)
 	}
 	if rows, _ := idx.ListPending(ctx); len(rows) != 0 {
 		t.Fatalf("账本应清空，实际 %+v", rows)
@@ -179,19 +184,15 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 
 // TestResumePendingDropsMissingTemp 临时文件已不存在（被清扫/损坏）时只清账，不上传。
 func TestResumePendingDropsMissingTemp(t *testing.T) {
-	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idx.Close()
-
+	idx := newResumeIndex(t)
 	ctx := context.Background()
+
 	gone := filepath.Join(t.TempDir(), "no-such-temp")
 	if err := idx.PutPending(ctx, index.PendingUpload{Path: "/gone.bin", Temp: gone, Size: 5, Mtime: 1}); err != nil {
 		t.Fatal(err)
 	}
 
-	st := &fakeStore{}
+	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)

@@ -13,12 +13,12 @@ import (
 
 // fakeIndex 只回答一位命中结果。
 type fakeIndex struct {
-	hit index.File
+	hit index.Node
 	ok  bool
 	err error
 }
 
-func (f fakeIndex) FindContent(context.Context, string, int64, string) (index.File, bool, error) {
+func (f fakeIndex) FindContent(context.Context, string, int64, string) (index.Node, bool, error) {
 	return f.hit, f.ok, f.err
 }
 
@@ -68,7 +68,7 @@ func TestHash(t *testing.T) {
 
 // TestWriteReusesExistingContent 命中同内容时只发引用消息，不占用队列。
 func TestWriteReusesExistingContent(t *testing.T) {
-	idx := fakeIndex{hit: index.File{Path: "/a.bin", DocumentID: 9}, ok: true}
+	idx := fakeIndex{hit: index.Node{Path: "/a.bin", DocumentID: 9}, ok: true}
 	st := &fakeStore{}
 	q := &countingQueue{}
 	part, reused, err := Write(context.Background(), idx, st, Request{
@@ -87,7 +87,7 @@ func TestWriteReusesExistingContent(t *testing.T) {
 
 // TestWriteSkipsSelfHit 同路径命中不复用，避免自己引用自己。
 func TestWriteSkipsSelfHit(t *testing.T) {
-	idx := fakeIndex{hit: index.File{Path: "/b.bin", DocumentID: 9}, ok: true}
+	idx := fakeIndex{hit: index.Node{Path: "/b.bin", DocumentID: 9}, ok: true}
 	st := &fakeStore{}
 	_, reused, err := Write(context.Background(), idx, st, Request{
 		Path: "/b.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h",
@@ -116,7 +116,7 @@ func TestQueueWrapsUpload(t *testing.T) {
 
 // TestCopyFailureFallsBack 引用失败必须回退成上传而不是报错。
 func TestCopyFailureFallsBack(t *testing.T) {
-	idx := fakeIndex{hit: index.File{Path: "/a.bin", DocumentID: 9}, ok: true}
+	idx := fakeIndex{hit: index.Node{Path: "/a.bin", DocumentID: 9}, ok: true}
 	st := &fakeStore{copyErr: errors.New("FILE_REFERENCE_EXPIRED")}
 	part, reused, err := Write(context.Background(), idx, st, Request{
 		Path: "/d.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h",

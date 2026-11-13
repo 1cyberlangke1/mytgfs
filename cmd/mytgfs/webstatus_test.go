@@ -3,7 +3,6 @@ package main
 // web 模式状态负载的单测：卷统计、缺卷跳过、索引出错只影响该卷。
 
 import (
-	"context"
 	"testing"
 
 	"mytgfs/internal/config"
@@ -12,17 +11,17 @@ import (
 
 // TestWebStatusSummarizesVolumes 每个已打开的卷都给出条目数与占用。
 func TestWebStatusSummarizesVolumes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	idx, err := index.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	if err := idx.Put(ctx, index.File{Path: "/a.txt", MessageID: 1, Size: 100}); err != nil {
+	if err := idx.PutNode(ctx, index.Node{ID: 1, Name: "a.txt", Size: 100}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Put(ctx, index.File{Path: "/b.txt", MessageID: 2, Size: 200}); err != nil {
+	if err := idx.PutNode(ctx, index.Node{ID: 2, Name: "b.txt", Size: 200}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -51,7 +50,7 @@ func TestWebStatusSummarizesVolumes(t *testing.T) {
 
 // TestWebStatusReportsIndexError 索引读失败时该卷带 error，其余字段仍存在。
 func TestWebStatusReportsIndexError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	idx, err := index.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +69,7 @@ func TestWebStatusReportsIndexError(t *testing.T) {
 
 // TestWebStatusEmpty 没有任何卷时返回空列表而不是 nil。
 func TestWebStatusEmpty(t *testing.T) {
-	got := webStatus(context.Background(), config.Config{}, nil)
+	got := webStatus(t.Context(), config.Config{}, nil)
 	m := got.(map[string]any)
 	list, ok := m["volumes"].([]map[string]any)
 	if !ok || len(list) != 0 {

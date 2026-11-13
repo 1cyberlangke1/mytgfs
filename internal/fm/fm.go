@@ -1,12 +1,8 @@
 package fm
 
-// 面板文件管理门面：在 webdav.FileSystem 之上补齐列出、递归删除、跨目录移动。
+// 面板文件管理门面：在 webdav.FileSystem 之上补齐路径规范、递归搜索、串行化变更。
 //
-// 为什么单独一层：webdav.FileSystem 是按 WebDAV 语义设计的
-//   - RemoveAll 对目录只删一条目录记录，不会删内容
-//   - Rename 只支持文件，拒绝目录
-// 面板需要「删目录连内容一起删」「文件/目录移到任意目录」，所以在这里补。
-//
+// 删除与移动由底层按节点子树一次完成，这里不重复实现存储逻辑。
 // 所有路径都是卷内绝对路径（以 / 开头），越界（含 ..）一律拒绝。
 
 import (
@@ -231,27 +227,11 @@ func (m *Manager) Upload(ctx context.Context, p string, r io.Reader) error {
 	return f.Close()
 }
 
-// dirRemover 是「删目录记录」的可选能力。
-//
-// dav.FileSystem 在子项删光后无法再把路径推断成目录，
-// 需要直接删 dirs 表的实现；没有实现时退回 RemoveAll。
-type dirRemover interface {
-	RemoveDir(ctx context.Context, p string) error
-}
-
-// removeDir 删除目录记录，优先用底层的 RemoveDir。
-func (m *Manager) removeDir(ctx context.Context, p string) error {
-	if dr, ok := m.fs.(dirRemover); ok {
-		return dr.RemoveDir(ctx, p)
-	}
-	return m.fs.RemoveAll(ctx, p)
-}
-
 // Remove 删除文件或目录。
 //
 // 输入：p 路径
 // 输出：error
-// 预期：目录递归删除（先文件、再深层目录），卷根拒绝
+// 预期：目录整棵子树一次删掉（远端批量删消息），卷根拒绝
 func (m *Manager) Remove(ctx context.Context, p string) error {
 	c, err := clean(p)
 	if err != nil {
@@ -262,43 +242,14 @@ func (m *Manager) Remove(ctx context.Context, p string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fi, err := m.fs.Stat(ctx, c)
-	if err != nil {
-		return err
-	}
-	if !fi.IsDir() {
-		return m.fs.RemoveAll(ctx, c)
-	}
-	dirs, files, err := m.walk(ctx, c)
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		if err := m.fs.RemoveAll(ctx, f); err != nil {
-			return err
-		}
-	}
-	// 先删深的目录记录，最后删目标自身（walk 已把目标放进 dirs，这里跳过）
-	slices.SortFunc(dirs, func(a, b string) int { return cmp.Compare(b, a) })
-	for _, d := range dirs {
-		if d == c {
-			continue
-		}
-		if err := m.removeDir(ctx, d); err != nil {
-			return err
-		}
-	}
-	return m.removeDir(ctx, c)
+	return m.fs.RemoveAll(ctx, c)
 }
 
 // Move 移动/改名，文件和目录都支持。
 //
 // 输入：from 源；to 目标（包含新名字的完整路径）
 // 输出：error；目标已存在返回 ErrExists
-// 预期：
-//   - 文件：改 caption + 迁索引
-//   - 目录：逐个文件改名后迁移目录记录（每个文件一次 API 调用）
-//   - 中途失败会留下部分已移动的文件，错误原样返回
+// 预期：只编辑节点自己那条消息，不重传内容
 func (m *Manager) Move(ctx context.Context, from, to string) error {
 	src, err := clean(from)
 	if err != nil {
@@ -314,58 +265,15 @@ func (m *Manager) Move(ctx context.Context, from, to string) error {
 	if src == dst {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	fi, err := m.fs.Stat(ctx, src)
-	if err != nil {
-		return err
-	}
-	if _, serr := m.fs.Stat(ctx, dst); serr == nil {
-		return ErrExists
-	}
-	if !fi.IsDir() {
-		return m.fs.Rename(ctx, src, dst)
-	}
-	// 目录：不能把一个目录移进它自己的子目录
 	if strings.HasPrefix(dst+"/", src+"/") {
 		return ErrBadPath
 	}
-	dirs, files, err := m.walk(ctx, src)
-	if err != nil {
-		return err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, serr := m.fs.Stat(ctx, dst); serr == nil {
+		return ErrExists
 	}
-	if err := m.fs.Mkdir(ctx, dst, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	for _, f := range files {
-		rel, rerr := relPath(src, f)
-		if rerr != nil {
-			return rerr
-		}
-		if err := m.fs.Rename(ctx, f, path.Join(dst, rel)); err != nil {
-			return err
-		}
-	}
-	// 目录记录：先建新树，再删旧树（旧树此时已空）
-	for _, d := range dirs {
-		rel, rerr := relPath(src, d)
-		if rerr != nil {
-			return rerr
-		}
-		if err := m.fs.Mkdir(ctx, path.Join(dst, rel), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
-		}
-	}
-	slices.SortFunc(dirs, func(a, b string) int { return cmp.Compare(b, a) })
-	for _, d := range dirs {
-		if d == src {
-			continue
-		}
-		if err := m.removeDir(ctx, d); err != nil {
-			return err
-		}
-	}
-	return m.removeDir(ctx, src)
+	return m.fs.Rename(ctx, src, dst)
 }
 
 // Open 以只读方式打开文件，供下载流式读取。
@@ -375,52 +283,6 @@ func (m *Manager) Open(ctx context.Context, p string) (webdav.File, error) {
 		return nil, err
 	}
 	return m.fs.OpenFile(ctx, c, os.O_RDONLY, 0)
-}
-
-// walk 递归收集目录下的所有子目录与文件（绝对路径）。
-//
-// 输入：dir 起始目录
-// 输出：dirs 含起始目录自身；files 全文件路径
-// 预期：只读遍历，不改变任何状态
-func (m *Manager) walk(ctx context.Context, dir string) (dirs, files []string, err error) {
-	entries, err := m.List(ctx, dir)
-	if err != nil {
-		return nil, nil, err
-	}
-	dirs = append(dirs, dir)
-	for _, e := range entries {
-		p := path.Join(dir, e.Name)
-		if e.Dir {
-			sub, subFiles, werr := m.walk(ctx, p)
-			if werr != nil {
-				return nil, nil, werr
-			}
-			dirs = append(dirs, sub...)
-			files = append(files, subFiles...)
-			continue
-		}
-		files = append(files, p)
-	}
-	return dirs, files, nil
-}
-
-// relPath 求 p 相对 base 的路径。
-//
-// 输入：base 目录；p 其下某个路径（都已规范化）
-// 输出：相对路径；不在 base 之下返回 ErrBadPath
-// 预期：只处理斜杠路径，不用 filepath（Windows 反斜杠不参与）
-func relPath(base, p string) (string, error) {
-	if p == base {
-		return "", nil
-	}
-	prefix := base
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	if !strings.HasPrefix(p, prefix) {
-		return "", ErrBadPath
-	}
-	return strings.TrimPrefix(p, prefix), nil
 }
 
 // clean 规范化卷内路径。

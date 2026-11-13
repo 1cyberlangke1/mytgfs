@@ -360,84 +360,50 @@ func runSync(args []string) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	limit := fs.Int("limit", 100, i18n.T("cli.flag.limit_sync"))
 	name := fs.String("name", "", i18n.T("cli.flag.volume"))
-	backfill := fs.Bool("backfill", false, i18n.T("cli.flag.backfill"))
+	rebuild := fs.Bool("rebuild", false, i18n.T("cli.flag.rebuild"))
 	_ = fs.Parse(args)
 
-	cfg, err := config.Load("config.toml")
+	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
-	volName := resolveVolumeName(cfg, *name)
-	// 同步目标是卷对应的频道；只有完全没有卷配置时才回落到 [telegram].channel_id
-	vol, ok := volumeByName(cfg, volName)
-	if !ok {
-		fatal(i18n.T("err.volume_not_found", volName))
-	}
-	if vol.ChatID == 0 {
-		fatal(i18n.T("err.volume_no_channel", volName))
-	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
-	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
-	}
-	defer idx.Close()
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	if *backfill {
-		client := tgclient.New(cfg.Telegram.APIID, apiHash,
-			&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-			tgclient.Options{})
-		err = client.Run(ctx, func(ctx context.Context) error {
-			// access_hash 传 0 也能解析出真实值，避免依赖配置里可能过期的字段
-			ch, rerr := channel.Resolve(ctx, client.API(), vol.ChatID)
+	entries := 0
+	err = a.Run(ctx, *name, func(ctx context.Context, s *app.Session) error {
+		if *rebuild {
+			nodes, rerr := a.AllNodes(ctx, s.Volume.ChatID)
 			if rerr != nil {
 				return rerr
 			}
-			f := tgsync.TelegramFetcher{
-				API:        client.API(),
-				ChannelID:  ch.ChannelID,
-				AccessHash: ch.AccessHash,
+			n, rerr := tgsync.Rebuild(ctx, s.Index, nodes)
+			if rerr != nil {
+				return rerr
 			}
-			return tgsync.Sync(ctx, idx, f, *limit)
-		})
-		if err != nil {
-			failErr(i18n.T("err.backfill"), err)
+			fmt.Println(i18n.T("cli.rebuild_stats", n))
+		} else {
+			d := &tgsync.TelegramChannelDiffer{API: s.Client.API(), ChannelID: s.Volume.ChatID}
+			res, serr := tgsync.SyncChannel(ctx, s.Index, d, s.Store(), *limit)
+			if serr != nil {
+				return serr
+			}
+			if res.Truncated {
+				fmt.Println(i18n.T("warn.diff_too_long"))
+			}
+			fmt.Println(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
 		}
-	} else {
-		client := tgclient.New(cfg.Telegram.APIID, apiHash,
-			&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-			tgclient.Options{})
-		var res tgsync.ChannelSyncResult
-		err = client.Run(ctx, func(ctx context.Context) error {
-			d := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
-			var serr error
-			res, serr = tgsync.SyncChannel(ctx, idx, d, *limit)
-			return serr
-		})
-		if err != nil {
-			failErr(i18n.T("err.sync"), err)
+		children, cerr := s.Index.Children(ctx, 0)
+		if cerr != nil {
+			return cerr
 		}
-		if res.Truncated {
-			fmt.Println(i18n.T("warn.diff_too_long"))
-		}
-		fmt.Println(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
-	}
-
-	entries, err := idx.List(ctx, "/")
+		entries = len(children)
+		return nil
+	})
 	if err != nil {
-		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
+		failErr(i18n.T("err.sync"), err)
 	}
-	fmt.Println(i18n.T("cli.sync_ok", len(entries)))
+	fmt.Println(i18n.T("cli.sync_ok", entries))
 }
 
 // runMount 已停用：FUSE/WinFsp 挂载层已移除，改用 WebDAV 挂载。
@@ -536,7 +502,7 @@ func runWeb(args []string) {
 				}
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
 				vwg.Go(func() {
-					trayapp.AutoSync(vsync, trayapp.StatusNotifier(bus), wv.idx, differ, interval, nil)
+					trayapp.AutoSync(vsync, trayapp.StatusNotifier(bus), wv.idx, differ, wv.store, interval, nil)
 				})
 			}
 		}
@@ -703,6 +669,7 @@ type webVolume struct {
 	mgr   *fm.Manager
 	davfs *dav.FileSystem
 	idx   *index.Index
+	store *telegramstore.Store
 }
 
 // openWebVolumes 为每个启用的卷打开文件系统后端。
@@ -721,7 +688,7 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 			fmt.Fprintln(os.Stderr, i18n.T("tray.mount.failed", v.Name, err))
 			continue
 		}
-		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index}
+		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
 	}
 	return out
 }

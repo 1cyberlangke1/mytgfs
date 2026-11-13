@@ -94,10 +94,8 @@ func validateValue(key, raw string) error {
 		return nil
 	}
 	if opts, ok := settingOptions[key]; ok {
-		for _, o := range opts {
-			if v == o {
-				return nil
-			}
+		if slices.Contains(opts, v) {
+			return nil
 		}
 		return fmt.Errorf(i18n.T("err.config_enum"), key, strings.Join(opts, " / "), v)
 	}

@@ -1,5 +1,7 @@
 package sync
 
+// Telegram 侧的差异拉取：只取消息号，节点语义由本地索引解释。
+
 import (
 	"context"
 	"fmt"
@@ -12,13 +14,12 @@ import (
 
 // ChannelDiffAPI 是频道增量同步所需的最小 RPC 子集。
 //
-// 输入：解析频道、拉差异、回查元信息消息的参数
+// 输入：解析频道、拉差异的参数
 // 输出：Telegram 原始返回
 // 预期：bot 会话满足；测试注入假实现即可覆盖全部差异分支
 type ChannelDiffAPI interface {
 	ChannelsGetChannels(ctx context.Context, id []tg.InputChannelClass) (tg.MessagesChatsClass, error)
 	UpdatesGetChannelDifference(ctx context.Context, request *tg.UpdatesGetChannelDifferenceRequest) (tg.UpdatesChannelDifferenceClass, error)
-	ChannelsGetMessages(ctx context.Context, request *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
 }
 
 // TelegramChannelDiffer 用 updates.getChannelDifference 拉频道差异。
@@ -36,8 +37,8 @@ type TelegramChannelDiffer struct {
 // ChannelDifference 请求 pts 之后的频道差异。
 //
 // 输入：pts 本地游标；limit 单轮事件上限（普通客户端 10-100）
-// 输出：差异；error
-// 预期：TooLong 时返回最新消息与可重置的 dialog.pts
+// 输出：差异（只有消息号）；error
+// 预期：TooLong 时同样只给消息号，由上层决定整体重建
 func (d *TelegramChannelDiffer) ChannelDifference(ctx context.Context, pts, limit int) (Difference, error) {
 	ch, err := d.channelOf(ctx)
 	if err != nil {
@@ -57,32 +58,18 @@ func (d *TelegramChannelDiffer) ChannelDifference(ctx context.Context, pts, limi
 	case *tg.UpdatesChannelDifferenceEmpty:
 		return Difference{Pts: v.Pts, Final: true}, nil
 	case *tg.UpdatesChannelDifference:
-		msgs, err := d.convert(ctx, ch, v.NewMessages)
-		if err != nil {
-			return Difference{}, err
-		}
-		// 频道里改名/改内容会以 UpdateEditChannelMessage 出现，按同一条消息重放
-		edited, err := d.convert(ctx, ch, editedMessages(v.OtherUpdates))
-		if err != nil {
-			return Difference{}, err
-		}
-		msgs = append(msgs, edited...)
 		return Difference{
-			Pts:      v.Pts,
-			Final:    v.Final,
-			Messages: msgs,
-			Deleted:  deletedIDs(v.OtherUpdates),
+			Pts:     v.Pts,
+			Final:   v.Final,
+			Changed: idsOf(v.NewMessages, editedMessages(v.OtherUpdates)),
+			Deleted: deletedIDs(v.OtherUpdates),
 		}, nil
 	case *tg.UpdatesChannelDifferenceTooLong:
 		newPts := 0
 		if dlg, ok := v.Dialog.(*tg.Dialog); ok {
 			newPts = dlg.Pts
 		}
-		msgs, err := d.convert(ctx, ch, v.Messages)
-		if err != nil {
-			return Difference{}, err
-		}
-		return Difference{Pts: newPts, Final: true, TooLong: true, Messages: msgs}, nil
+		return Difference{Pts: newPts, Final: true, TooLong: true, Changed: idsOf(v.Messages, nil)}, nil
 	}
 	return Difference{}, fmt.Errorf(i18n.T("err.unknown_diff_type"), res)
 }
@@ -120,24 +107,25 @@ func (d *TelegramChannelDiffer) channelOf(ctx context.Context) (*tg.Channel, err
 	return nil, fmt.Errorf(i18n.T("err.channel_unavailable"), d.ChannelID)
 }
 
-// convert 批量把 TL 消息转成本包 Message。
-func (d *TelegramChannelDiffer) convert(ctx context.Context, ch *tg.Channel, msgs []tg.MessageClass) ([]Message, error) {
-	out := make([]Message, 0, len(msgs))
-	for _, mc := range msgs {
-		msg, ok := mc.(*tg.Message)
-		if !ok {
-			continue
+// idsOf 合并两批消息里的消息号。
+//
+// 输入：主消息列表、编辑事件消息列表
+// 输出：去重后的消息号（保序，主列表在前）
+// 预期：非普通消息（服务消息、空消息）被跳过
+func idsOf(primary, edited []tg.MessageClass) []int {
+	seen := map[int]bool{}
+	out := make([]int, 0, len(primary)+len(edited))
+	for _, list := range [][]tg.MessageClass{primary, edited} {
+		for _, mc := range list {
+			msg, ok := mc.(*tg.Message)
+			if !ok || seen[msg.ID] {
+				continue
+			}
+			seen[msg.ID] = true
+			out = append(out, msg.ID)
 		}
-		m, isFile, err := messageFromTG(ctx, d.API, ch.ID, ch.AccessHash, msg)
-		if err != nil {
-			return nil, err
-		}
-		if !isFile {
-			continue
-		}
-		out = append(out, m)
 	}
-	return out, nil
+	return out
 }
 
 // deletedIDs 收集差异里的删除事件。

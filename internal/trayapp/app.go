@@ -75,8 +75,8 @@ func SyncInterval(seconds int) time.Duration {
 //
 // 输出：无（ctx 取消时返回）
 // 预期：启动即同步一次；单轮失败只记日志不退出；有变化才回调
-func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex) {
-	AutoSyncWhile(ctx, notify, idx, d, interval, mu, nil)
+func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex) {
+	AutoSyncWhile(ctx, notify, idx, d, st, interval, mu, nil)
 }
 
 // StatusNotifier 把自动同步的增删转成 status 事件，面板据此刷新。
@@ -126,7 +126,7 @@ func (s *SyncSwitch) Set(on bool) {
 
 // AutoSyncWhile 与 AutoSync 相同，但每轮先问 enabled：
 // 返回 false 时跳过本轮（只等下一个 tick），用于托盘菜单里随时开关。
-func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex, enabled func() bool) {
+func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
@@ -134,7 +134,7 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 			mu.Lock()
 			defer mu.Unlock()
 		}
-		return tgsync.SyncChannel(ctx, idx, d, 100)
+		return tgsync.SyncChannel(ctx, idx, d, st, 100)
 	}
 	for {
 		if enabled == nil || enabled() {
@@ -456,14 +456,14 @@ func Run(opts Options) error {
 				volMu.Unlock()
 				list := make([]map[string]any, 0, len(vs))
 				for _, v := range vs {
-					entries, err := v.idx.List(ctx, "/")
+					children, err := v.idx.Children(ctx, 0)
 					if err != nil {
 						list = append(list, map[string]any{"name": v.name, "error": err.Error()})
 						continue
 					}
 					used, _ := v.idx.Used(ctx)
 					list = append(list, map[string]any{
-						"name": v.name, "entries": len(entries), "used": used,
+						"name": v.name, "entries": len(children), "used": used,
 					})
 				}
 				auth := "ok"
@@ -508,7 +508,7 @@ func Run(opts Options) error {
 				out := make([]map[string]any, 0, len(vs))
 				for _, v := range vs {
 					v.mu.Lock()
-					res, err := tgsync.SyncChannel(ctx, v.idx, v.differ, 100)
+					res, err := tgsync.SyncChannel(ctx, v.idx, v.differ, v.store, 100)
 					v.mu.Unlock()
 					if err != nil {
 						out = append(out, map[string]any{"name": v.name, "error": err.Error()})
@@ -724,7 +724,7 @@ func Run(opts Options) error {
 			interval = SyncInterval(0)
 		}
 		vwg.Go(func() {
-			AutoSyncWhile(vctx, StatusNotifier(bus), idx, differ, interval, &tv.mu, syncSwitch.On)
+			AutoSyncWhile(vctx, StatusNotifier(bus), idx, differ, store, interval, &tv.mu, syncSwitch.On)
 		})
 
 		mu.Lock()
@@ -893,9 +893,9 @@ func Run(opts Options) error {
 		volMu.Unlock()
 		var downloads, queued int
 		for _, v := range vs {
-			if entries, lerr := v.idx.List(rootCtx, "/"); lerr == nil {
+			if children, lerr := v.idx.Children(rootCtx, 0); lerr == nil {
 				used, _ := v.idx.Used(rootCtx)
-				lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol"), v.name, len(entries), humanBytes(used)))
+				lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol"), v.name, len(children), humanBytes(used)))
 			}
 			if v.davfs == nil {
 				continue

@@ -12,9 +12,9 @@ import (
 	"os/signal"
 
 	"mytgfs/internal/app"
-	"mytgfs/internal/channel"
 	"mytgfs/internal/fsck"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/ui"
 )
 
@@ -24,6 +24,7 @@ type checkOutput struct {
 	Checked  int            `json:"checked"`
 	Missing  int            `json:"missing"`
 	Moved    int            `json:"moved"`
+	Added    int            `json:"added"`
 	Fixed    int            `json:"fixed"`
 	Problems []fsck.Problem `json:"problems"`
 }
@@ -55,13 +56,13 @@ func runCheck(args []string) {
 	defer cancel()
 
 	var rep fsck.Report
+	nodes, err := a.AllNodes(ctx, volume.ChatID)
+	if err != nil {
+		failErr(i18n.T("err.check_prefix"), err)
+	}
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
-		ch, rerr := channel.Resolve(ctx, s.API, volume.ChatID)
-		if rerr != nil {
-			return rerr
-		}
 		var xerr error
-		rep, xerr = fsck.Run(ctx, s.Index, s.API, ch.ChannelID, ch.AccessHash, *fix)
+		rep, xerr = fsck.Run(ctx, s.Index, nodeSource(nodes), *fix)
 		return xerr
 	})
 	if err != nil {
@@ -71,7 +72,7 @@ func runCheck(args []string) {
 	if ui.JSONMode() {
 		ui.Print(checkOutput{
 			Volume: volName, Checked: rep.Checked, Missing: rep.Missing,
-			Moved: rep.Moved, Fixed: rep.Fixed, Problems: rep.Problems,
+			Moved: rep.Moved, Added: rep.Added, Fixed: rep.Fixed, Problems: rep.Problems,
 		})
 		return
 	}
@@ -82,14 +83,24 @@ func runCheck(args []string) {
 			fmt.Println(i18n.T("check_problem_missing", p.Path, p.MsgID))
 		case fsck.KindMoved:
 			fmt.Println(i18n.T("check_problem_moved", p.Path, p.Actual, p.MsgID))
+		case fsck.KindAdded:
+			fmt.Println(i18n.T("check_problem_added", p.Path, p.MsgID))
 		}
 	}
 	if len(rep.Problems) == 0 {
 		fmt.Println(i18n.T("check_clean", rep.Checked))
 		return
 	}
-	fmt.Println(i18n.T("check_summary", rep.Checked, rep.Missing, rep.Moved, rep.Fixed))
+	fmt.Println(i18n.T("check_summary", rep.Checked, rep.Missing, rep.Moved, rep.Added, rep.Fixed))
 	if !*fix {
 		fmt.Println(i18n.T("check_fix_hint"))
 	}
+}
+
+// nodeSource 把一次拉好的全量节点包成 fsck.Source。
+type nodeSource []telegramstore.NodeInfo
+
+// AllNodes 返回内存快照。
+func (n nodeSource) AllNodes(context.Context) ([]telegramstore.NodeInfo, error) {
+	return n, nil
 }

@@ -49,12 +49,12 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	if err != nil {
 		return nil, err
 	}
+	store := a.newStore(api, vol.ChatID)
 	// 索引是缓存：空了就重建，否则面板与命令行都会看到空白目录
 	if rerr := a.RebuildIndexIfEmpty(ctx, idx, vol.ChatID); rerr != nil {
 		fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)
 	}
 
-	store := a.newStore(api, vol.ChatID)
 	fsys := dav.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
 	// 批量写入互相抢 Telegram 发消息配额，串行提交
 	fsys.SetQueue(queue.New(1, 3))

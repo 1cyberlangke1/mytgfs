@@ -30,14 +30,14 @@ func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolum
 		if !ok {
 			continue
 		}
-		entries, err := wv.idx.List(ctx, "/")
+		children, err := wv.idx.Children(ctx, 0)
 		if err != nil {
 			list = append(list, map[string]any{"name": v.Name, "error": err.Error()})
 			continue
 		}
 		used, _ := wv.idx.Used(ctx)
 		list = append(list, map[string]any{
-			"name": v.Name, "entries": len(entries), "used": used,
+			"name": v.Name, "entries": len(children), "used": used,
 		})
 		if wv.davfs == nil {
 			continue

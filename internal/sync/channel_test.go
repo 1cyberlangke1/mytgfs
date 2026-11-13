@@ -1,213 +1,241 @@
 package sync
 
+// 频道增量同步单测：用假差异源 + 假节点源，不连 Telegram。
+//
+// 新模型下每条消息自述名字与父消息号，差异事件按消息号直接取节点内容。
+
 import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/gotd/td/tgerr"
 
 	"mytgfs/internal/index"
+	"mytgfs/internal/telegramstore"
 )
 
-// fakeDiffer 按顺序吐出预置的差异结果，并记录每次请求的 pts。
+// fakeDiffer 按顺序返回预设差异。
 type fakeDiffer struct {
 	diffs []Difference
 	errs  []error
-	ptss  []int
-	calls int
+	i     int
 }
 
-func (d *fakeDiffer) ChannelDifference(_ context.Context, pts int, _ int) (Difference, error) {
-	d.ptss = append(d.ptss, pts)
-	d.calls++
-	// 先把预置错误按顺序消费完，再按顺序消费差异结果
-	if len(d.errs) > 0 {
-		err := d.errs[0]
-		d.errs = d.errs[1:]
+func (f *fakeDiffer) ChannelDifference(context.Context, int, int) (Difference, error) {
+	if f.i < len(f.errs) && f.errs[f.i] != nil {
+		err := f.errs[f.i]
+		f.i++
 		return Difference{}, err
 	}
-	if len(d.diffs) > 0 {
-		diff := d.diffs[0]
-		d.diffs = d.diffs[1:]
-		return diff, nil
+	if f.i >= len(f.diffs) {
+		return Difference{Final: true, Pts: 10}, nil
 	}
-	return Difference{Pts: pts, Final: true}, nil
+	d := f.diffs[f.i]
+	f.i++
+	return d, nil
 }
 
-func newSyncIndex(t *testing.T) *index.Index {
+// fakeNodes 是内存里的远端节点表：消息号 → 节点内容。
+type fakeNodes struct {
+	nodes   map[int]telegramstore.NodeInfo
+	fetchEr error
+}
+
+func newFakeNodes() *fakeNodes {
+	return &fakeNodes{nodes: map[int]telegramstore.NodeInfo{}}
+}
+
+func (f *fakeNodes) FetchNodes(_ context.Context, ids []int) (map[int]telegramstore.NodeInfo, error) {
+	if f.fetchEr != nil {
+		return nil, f.fetchEr
+	}
+	out := map[int]telegramstore.NodeInfo{}
+	for _, id := range ids {
+		if n, ok := f.nodes[id]; ok {
+			out[id] = n
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeNodes) put(id int, name string, parent int, dir bool, size int64, sha string) {
+	f.nodes[id] = telegramstore.NodeInfo{
+		MessageID: id, Name: name, Parent: parent, IsDir: dir,
+		DocumentID: int64(id) * 10, AccessHash: int64(id) * 100,
+		Size: size, Mtime: 1000 + int64(id), Sha: sha,
+	}
+}
+
+func newTestIndex(t *testing.T) *index.Index {
 	t.Helper()
 	idx, err := index.OpenMemory()
 	if err != nil {
-		t.Fatalf("打开内存索引: %v", err)
+		t.Fatalf("OpenMemory: %v", err)
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 	return idx
 }
 
-func msg(id int, path string, size int64) Message {
-	return Message{ID: id, Caption: `{"path":"` + path + `"}`, Size: size, Date: time.Unix(int64(id), 0)}
-}
+// TestSyncBootstrapAppliesChanged 首次同步把新消息写进索引。
+func TestSyncBootstrapAppliesChanged(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	nodes := newFakeNodes()
+	nodes.put(2, "a.txt", 0, false, 3, "aa")
+	d := &fakeDiffer{diffs: []Difference{{Pts: 5, Final: true, Changed: []int{2}}}}
 
-// TestSyncChannelBootstrapsFromOne 首次同步从 pts=1 起跑并落盘游标。
-func TestSyncChannelBootstrapsFromOne(t *testing.T) {
-	idx := newSyncIndex(t)
-	d := &fakeDiffer{diffs: []Difference{{
-		Pts: 10, Final: true, Messages: []Message{msg(1, "/a.txt", 1), msg(2, "/b.txt", 2)},
-	}}}
-
-	res, err := SyncChannel(context.Background(), idx, d, 100)
+	res, err := SyncChannel(ctx, idx, d, nodes, 100)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SyncChannel: %v", err)
 	}
-	if res.Pulled != 2 || res.Pts != 10 || res.Rounds != 1 {
-		t.Fatalf("统计不符: %+v", res)
+	if res.Pulled != 1 || res.Pts != 5 || len(res.Changed) != 1 || res.Changed[0] != "/a.txt" {
+		t.Fatalf("结果不符: %+v", res)
 	}
-	if len(d.ptss) != 1 || d.ptss[0] != bootstrapPts {
-		t.Fatalf("首轮 pts 应为 %d，实际 %v", bootstrapPts, d.ptss)
+	n, ok, _ := idx.NodeByID(ctx, 2)
+	if !ok || n.Name != "a.txt" || n.Size != 3 || n.Sha256 != "aa" {
+		t.Fatalf("节点不符: %+v", n)
 	}
-	v, ok, err := idx.GetMeta(context.Background(), MetaChannelPts)
-	if err != nil || !ok || v != 10 {
-		t.Fatalf("pts 未落盘: (%d,%v,%v)", v, ok, err)
-	}
-}
-
-// TestSyncChannelResumesFromMeta 已有游标时从该 pts 继续，不重头拉。
-func TestSyncChannelResumesFromMeta(t *testing.T) {
-	idx := newSyncIndex(t)
-	if err := idx.PutMeta(context.Background(), MetaChannelPts, 33); err != nil {
-		t.Fatal(err)
-	}
-	d := &fakeDiffer{diffs: []Difference{{Pts: 40, Final: true, Messages: []Message{msg(34, "/x.txt", 1)}}}}
-
-	if _, err := SyncChannel(context.Background(), idx, d, 100); err != nil {
-		t.Fatal(err)
-	}
-	if len(d.ptss) != 1 || d.ptss[0] != 33 {
-		t.Fatalf("应从 33 继续，实际 %v", d.ptss)
+	v, ok, _ := idx.GetMeta(ctx, MetaChannelPts)
+	if !ok || v != 5 {
+		t.Fatalf("pts 未落盘: %d %v", v, ok)
 	}
 }
 
-// TestSyncChannelFollowsNonFinal 非 final 的切片要连续拉直到追平。
-func TestSyncChannelFollowsNonFinal(t *testing.T) {
-	idx := newSyncIndex(t)
-	d := &fakeDiffer{diffs: []Difference{
-		{Pts: 5, Final: false, Messages: []Message{msg(1, "/a.txt", 1)}},
-		{Pts: 9, Final: false, Messages: []Message{msg(2, "/b.txt", 1)}},
-		{Pts: 12, Final: true, Messages: []Message{msg(3, "/c.txt", 1)}},
-	}}
+// TestSyncResumesPts 第二轮换用本地已存的 pts。
+func TestSyncResumesPts(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	_ = idx.PutMeta(ctx, MetaChannelPts, 40)
+	d := &fakeDiffer{diffs: []Difference{{Pts: 41, Final: true}}}
+	if _, err := SyncChannel(ctx, idx, d, newFakeNodes(), 100); err != nil {
+		t.Fatalf("SyncChannel: %v", err)
+	}
+	if v, _, _ := idx.GetMeta(ctx, MetaChannelPts); v != 41 {
+		t.Fatalf("pts=%d", v)
+	}
+}
 
-	res, err := SyncChannel(context.Background(), idx, d, 50)
+// TestSyncIgnoresChatMessages 非节点消息（聊天文本）不写索引也不计 pulled。
+func TestSyncIgnoresChatMessages(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	d := &fakeDiffer{diffs: []Difference{{Pts: 2, Final: true, Changed: []int{99}}}}
+	res, err := SyncChannel(ctx, idx, d, newFakeNodes(), 100)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SyncChannel: %v", err)
 	}
-	if res.Pulled != 3 || res.Pts != 12 || res.Rounds != 3 {
-		t.Fatalf("统计不符: %+v", res)
+	if res.Pulled != 0 || len(res.Changed) != 0 {
+		t.Fatalf("聊天消息不该被应用: %+v", res)
 	}
-	want := []int{1, 5, 9}
-	if len(d.ptss) != 3 || d.ptss[0] != want[0] || d.ptss[1] != want[1] || d.ptss[2] != want[2] {
-		t.Fatalf("pts 序列错误: %v", d.ptss)
+	n, _ := idx.CountFiles(ctx)
+	if n != 0 {
+		t.Fatalf("索引不该有文件: %d", n)
 	}
 }
 
-// TestSyncChannelDeletes 删除事件要按消息号清索引。
-func TestSyncChannelDeletes(t *testing.T) {
-	idx := newSyncIndex(t)
-	ctx := context.Background()
-	if _, err := Replay(ctx, idx, []Message{msg(7, "/gone.txt", 3)}); err != nil {
-		t.Fatal(err)
-	}
-	d := &fakeDiffer{diffs: []Difference{{Pts: 9, Final: true, Deleted: []int{7}}}}
+// TestSyncRenameAppliesRemoteName 远端把节点改名，本地跟着改。
+func TestSyncRenameAppliesRemoteName(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	nodes := newFakeNodes()
+	nodes.put(2, "old.txt", 0, false, 1, "aa")
+	// 先手动写一条旧名字的本地节点，模拟上次同步结果
+	_ = idx.PutNode(ctx, index.Node{ID: 2, Name: "old.txt"})
+	nodes.nodes[2] = telegramstore.NodeInfo{MessageID: 2, Name: "new.txt", Parent: 0, Size: 1, Sha: "aa"}
+	d := &fakeDiffer{diffs: []Difference{{Pts: 6, Final: true, Changed: []int{2}}}}
 
-	res, err := SyncChannel(ctx, idx, d, 100)
+	if _, err := SyncChannel(ctx, idx, d, nodes, 100); err != nil {
+		t.Fatalf("SyncChannel: %v", err)
+	}
+	if _, ok, _ := idx.NodeByPath(ctx, "/new.txt"); !ok {
+		t.Fatal("改名没生效")
+	}
+	if _, ok, _ := idx.NodeByPath(ctx, "/old.txt"); ok {
+		t.Fatal("旧名字应消失")
+	}
+}
+
+// TestSyncDeleteRemovesSubtree 删除事件把节点连同子树从本地清掉。
+func TestSyncDeleteRemovesSubtree(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, index.Node{ID: 1, Name: "dir", IsDir: true})
+	_ = idx.PutNode(ctx, index.Node{ID: 2, ParentID: 1, Name: "f.txt", Path: "/dir/f.txt"})
+	d := &fakeDiffer{diffs: []Difference{{Pts: 7, Final: true, Deleted: []int{1}}}}
+
+	res, err := SyncChannel(ctx, idx, d, newFakeNodes(), 100)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SyncChannel: %v", err)
 	}
-	if res.Deleted != 1 {
-		t.Fatalf("删除计数错误: %+v", res)
+	if res.Deleted != 2 {
+		t.Fatalf("应删 2 条路径，实际 %+v", res)
 	}
-	if _, ok, _ := idx.Get(ctx, "/gone.txt"); ok {
-		t.Fatal("被删除的消息应从索引移除")
+	if _, ok, _ := idx.NodeByID(ctx, 2); ok {
+		t.Fatal("子节点应被删")
 	}
 }
 
-// TestSyncChannelPtsInvalidResets pts 失效时重置到起点并重试一次。
-func TestSyncChannelPtsInvalidResets(t *testing.T) {
-	idx := newSyncIndex(t)
-	ctx := context.Background()
-	if err := idx.PutMeta(ctx, MetaChannelPts, 88); err != nil {
-		t.Fatal(err)
-	}
-	d := &fakeDiffer{
-		errs:  []error{tgerr.New(400, "PERSISTENT_TIMESTAMP_EMPTY")},
-		diffs: []Difference{{Pts: 90, Final: true, Messages: []Message{msg(89, "/r.txt", 1)}}},
-	}
-
-	res, err := SyncChannel(ctx, idx, d, 100)
+// TestSyncTooLongMarksTruncated 差异过大只标记，不自动重建。
+func TestSyncTooLongMarksTruncated(t *testing.T) {
+	idx := newTestIndex(t)
+	d := &fakeDiffer{diffs: []Difference{{Pts: 9, TooLong: true, Final: true}}}
+	res, err := SyncChannel(t.Context(), idx, d, newFakeNodes(), 100)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SyncChannel: %v", err)
 	}
-	if res.Pts != 90 {
-		t.Fatalf("重置后应追到 90，实际 %+v", res)
-	}
-	if len(d.ptss) != 2 || d.ptss[0] != 88 || d.ptss[1] != bootstrapPts {
-		t.Fatalf("pts 序列应为 [88 1]，实际 %v", d.ptss)
+	if !res.Truncated || res.Rounds != 1 {
+		t.Fatalf("应标记 Truncated: %+v", res)
 	}
 }
 
-// TestSyncChannelTooLong 差异过大时保留最新消息并标记 Truncated。
-func TestSyncChannelTooLong(t *testing.T) {
-	idx := newSyncIndex(t)
-	d := &fakeDiffer{diffs: []Difference{{
-		Pts: 500, Final: true, TooLong: true, Messages: []Message{msg(499, "/new.txt", 1)},
-	}}}
-
-	res, err := SyncChannel(context.Background(), idx, d, 100)
+// TestSyncPtsInvalidRetries pts 失效时从 bootstrap 重来一次。
+func TestSyncPtsInvalidRetries(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	_ = idx.PutMeta(ctx, MetaChannelPts, 77)
+	// 第一轮报 PERSISTENT_TIMESTAMP_INVALID，第二轮正常
+	d := &fakeDiffer{errs: []error{tgerr.New(400, "PERSISTENT_TIMESTAMP_INVALID")}, diffs: []Difference{{Pts: 1, Final: true}}}
+	res, err := SyncChannel(ctx, idx, d, newFakeNodes(), 100)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SyncChannel: %v", err)
 	}
-	if !res.Truncated || res.Pts != 500 || res.Pulled != 1 {
-		t.Fatalf("统计不符: %+v", res)
-	}
-	if _, ok, _ := idx.Get(context.Background(), "/new.txt"); !ok {
-		t.Fatal("TooLong 返回的最新消息应写入索引")
+	if res.Rounds != 1 {
+		t.Fatalf("应重来一轮，实际 %+v", res)
 	}
 }
 
-// TestSyncChannelPropagatesError 非 pts 失效的错误要原样上报，且不推进游标。
-func TestSyncChannelPropagatesError(t *testing.T) {
-	idx := newSyncIndex(t)
-	ctx := context.Background()
-	if err := idx.PutMeta(ctx, MetaChannelPts, 12); err != nil {
-		t.Fatal(err)
-	}
-	boom := errors.New("network down")
-	d := &fakeDiffer{errs: []error{boom}}
-
-	if _, err := SyncChannel(ctx, idx, d, 100); !errors.Is(err, boom) {
-		t.Fatalf("错误应原样返回，实际 %v", err)
-	}
-	if v, _, _ := idx.GetMeta(ctx, MetaChannelPts); v != 12 {
-		t.Fatalf("失败时游标不应变化，实际 %d", v)
+// TestSyncFetchErrorPropagates 取节点失败原样返回。
+func TestSyncFetchErrorPropagates(t *testing.T) {
+	idx := newTestIndex(t)
+	nodes := newFakeNodes()
+	nodes.fetchEr = errors.New("rpc down")
+	d := &fakeDiffer{diffs: []Difference{{Pts: 3, Final: true, Changed: []int{2}}}}
+	if _, err := SyncChannel(t.Context(), idx, d, nodes, 100); err == nil {
+		t.Fatal("取节点失败应返回错误")
 	}
 }
 
-// TestIsPtsInvalid 只把 EMPTY/INVALID 视为需要重置。
+// TestIsPtsInvalid 只认两种失效码。
 func TestIsPtsInvalid(t *testing.T) {
-	cases := []struct {
-		err  error
-		want bool
-	}{
-		{tgerr.New(400, "PERSISTENT_TIMESTAMP_EMPTY"), true},
-		{tgerr.New(400, "PERSISTENT_TIMESTAMP_INVALID"), true},
-		{tgerr.New(500, "PERSISTENT_TIMESTAMP_OUTDATED"), false},
-		{errors.New("PERSISTENT_TIMESTAMP_INVALID"), false},
-		{nil, false},
+	if IsPtsInvalid(nil) {
+		t.Fatal("nil 不该算失效")
 	}
-	for _, c := range cases {
-		if got := IsPtsInvalid(c.err); got != c.want {
-			t.Fatalf("IsPtsInvalid(%v)=%v，期望 %v", c.err, got, c.want)
-		}
+	if IsPtsInvalid(errors.New("other")) {
+		t.Fatal("普通错误不该算失效")
+	}
+}
+
+// TestApplyChangeOnDeletedNode 变更事件对应的消息已删时，本地节点被清掉。
+func TestApplyChangeOnDeletedNode(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	_ = idx.PutNode(ctx, index.Node{ID: 5, Name: "gone.bin"})
+	_, removed, handled, err := ApplyChange(ctx, idx, newFakeNodes(), 5)
+	if err != nil || !handled || len(removed) != 1 || removed[0] != "/gone.bin" {
+		t.Fatalf("ApplyChange=(%v,%v,%v)", removed, handled, err)
+	}
+	if _, ok, _ := idx.NodeByID(ctx, 5); ok {
+		t.Fatal("本地节点应被删")
 	}
 }

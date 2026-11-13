@@ -1,7 +1,9 @@
 package app
 
 // 索引自动重建：本地 SQLite 只是缓存，丢了（换机、删库、升级）时
-// 用 user 会话把频道历史重新翻一遍，不需要人工敲 sync --backfill。
+// 用 user 会话全量拉一次频道历史，按每条消息自带的名字与父消息号拼出整棵树。
+//
+// 不需要根消息、不需要置顶：父消息号缺失或成环的节点直接挂到卷根。
 
 import (
 	"cmp"
@@ -16,17 +18,11 @@ import (
 	"mytgfs/internal/index"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
+	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 )
 
-// rebuildPageSize 是重建时每页拉取的原始消息条数。
-const rebuildPageSize = 100
-
 // userSessionPath 返回 user 会话文件路径，Options 可覆盖。
-//
-// 输入：无
-// 输出：user.session 路径
-// 预期：默认与 CLI 约定一致，测试可指向临时目录
 func (a *App) userSessionPath() string {
 	return cmp.Or(a.opts.UserSessionPath, DefaultUserSessionPath)
 }
@@ -34,14 +30,51 @@ func (a *App) userSessionPath() string {
 // New 用已加载的配置与装配参数构造 App，避免调用方重复读盘。
 func New(cfg config.Config, opts Options) *App { return &App{cfg: cfg, opts: opts} }
 
-// RebuildIndexIfEmpty 在索引为空时用 user 会话重建。
+// AllNodes 用 user 会话全量拉频道历史，解析出所有节点。
 //
-// 输入：ctx；idx 索引；channelID 频道 ID
+// 输入：ctx；channelID 频道 ID
+// 输出：远端节点列表；error
+// 预期：没有 user 会话时返回空列表（messages.getHistory 是 user-only）
+func (a *App) AllNodes(ctx context.Context, channelID int64) ([]telegramstore.NodeInfo, error) {
+	if _, err := os.Stat(a.userSessionPath()); err != nil {
+		return nil, nil
+	}
+	apiHash := a.cfg.APIHash()
+	if apiHash == "" {
+		return nil, ErrMissingAPIHash
+	}
+	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
+	if err != nil {
+		return nil, err
+	}
+	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: a.userSessionPath(), Key: key},
+		tgclient.Options{})
+
+	var nodes []telegramstore.NodeInfo
+	if err := client.Run(ctx, func(ctx context.Context) error {
+		ch, rerr := channel.Resolve(ctx, client.API(), channelID)
+		if rerr != nil {
+			return rerr
+		}
+		h := &tgsync.TelegramHistory{API: client.API(), ChannelID: ch.ChannelID}
+		var herr error
+		nodes, herr = h.AllNodes(ctx)
+		return herr
+	}); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+// RebuildIndexIfEmpty 在索引为空时按远端全量节点重建。
+//
+// 输入：ctx；idx 索引；channelID 该卷频道 ID
 // 输出：error
 // 预期：
 //   - 索引里已有文件：直接返回，不做任何网络请求
-//   - 没有 user 会话：跳过并返回 nil（只剩 bot 会话时 bot 倒不了历史）
-//   - 重建成功：索引里恢复路径、大小、摘要
+//   - 没有 user 会话：跳过并返回 nil
+//   - 历史里没有节点消息：视为空卷，不写任何节点
 func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channelID int64) error {
 	n, err := idx.CountFiles(ctx)
 	if err != nil {
@@ -51,30 +84,21 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 		return nil
 	}
 	if _, serr := os.Stat(a.userSessionPath()); serr != nil {
-		slog.Info(i18n.T("log.rebuild_skipped"))
+		slog.Info(i18n.T("log.rebuild_no_user"))
 		return nil
 	}
-	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
+	nodes, err := a.AllNodes(ctx, channelID)
 	if err != nil {
 		return err
 	}
-	client := tgclient.New(a.cfg.Telegram.APIID, a.cfg.APIHash(),
-		&sessionstore.Encrypted{Path: a.userSessionPath(), Key: key},
-		tgclient.Options{})
-	var total int
-	err = client.Run(ctx, func(ctx context.Context) error {
-		// messages.getHistory 需要真实 access_hash，先按频道 ID 解析
-		res, rerr := channel.Resolve(ctx, client.API(), channelID)
-		if rerr != nil {
-			return rerr
-		}
-		f := tgsync.TelegramFetcher{API: client.API(), ChannelID: channelID, AccessHash: res.AccessHash}
-		total, rerr = tgsync.Rebuild(ctx, idx, f, rebuildPageSize, 0)
-		return rerr
-	})
+	if len(nodes) == 0 {
+		slog.Info(i18n.T("log.rebuild_empty"), "channel", channelID)
+		return nil
+	}
+	count, err := tgsync.Rebuild(ctx, idx, nodes)
 	if err != nil {
 		return err
 	}
-	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID, "messages", total)
+	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID, "files", count)
 	return nil
 }

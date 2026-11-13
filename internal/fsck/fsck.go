@@ -1,34 +1,29 @@
 package fsck
 
-// 索引对账：把本地索引行与频道里的消息逐条比对。
+// 索引对账：把本地索引与频道全量节点逐条比对。
 //
-// 索引是可丢弃的缓存，但 Telegram 侧也可能被手工改动（删消息、改 caption），
-// 自动同步覆盖不到的漂移需要一次显式核对，并可选择就地修复。
+// 索引是可丢弃的缓存；Telegram 侧可能被手工改动（删消息、改名字、改父节点），
+// 自动同步覆盖不到的漂移需要一次显式核对，并可选择按远端重建。
 
 import (
 	"context"
+	"log/slog"
 
-	"github.com/gotd/td/tg"
-
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	tgsync "mytgfs/internal/sync"
+	"mytgfs/internal/telegramstore"
 )
 
 // 问题类型。
 const (
-	// KindMissing 表示索引行对应的消息已不存在（或不再是文件消息）。
+	// KindMissing 表示索引里的节点在远端已不存在。
 	KindMissing = "missing"
-	// KindMoved 表示 caption 记录的路径与索引不同。
+	// KindMoved 表示同一节点在远端的路径与索引不同。
 	KindMoved = "moved"
+	// KindAdded 表示远端有、索引里没有的节点。
+	KindAdded = "added"
 )
-
-// batchSize 是单次 channels.getMessages 请求的消息数上限。
-const batchSize = 100
-
-// API 是对账需要的 Telegram 能力。
-type API interface {
-	ChannelsGetMessages(ctx context.Context, req *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
-}
 
 // Problem 是一条漂移记录。
 type Problem struct {
@@ -43,110 +38,71 @@ type Report struct {
 	Checked  int
 	Missing  int
 	Moved    int
+	Added    int
 	Fixed    int
 	Problems []Problem
 }
 
-// Run 逐条核对索引行对应的频道消息。
+// Source 提供远端全量节点。
+type Source interface {
+	AllNodes(ctx context.Context) ([]telegramstore.NodeInfo, error)
+}
+
+// Run 以远端全量节点为准核对本地索引。
 //
-// 输入：ctx；idx 本地索引；api bot 会话；channelID/accessHash 频道；fix 是否修复
-// 输出：统计与问题列表；索引读写或 RPC 错误原样返回
+// 输入：ctx；idx 本地索引；src 远端节点源；fix 是否按远端重建
+// 输出：统计与问题列表；错误原样返回
 // 预期：
-//   - 消息已不存在或 caption 不是本程序格式 => KindMissing；fix 时删掉该索引行
-//   - caption 里的路径与索引不同 => KindMoved；fix 时把行迁到真实路径
-//   - 一致的行保持不动
-func Run(ctx context.Context, idx *index.Index, api API, channelID, accessHash int64, fix bool) (Report, error) {
+//   - 本地有、远端无 => KindMissing
+//   - 两边都有但路径不同 => KindMoved（Actual 为远端路径）
+//   - 远端有、本地无 => KindAdded
+//   - fix 时清空节点表并按远端整棵树重建
+func Run(ctx context.Context, idx *index.Index, src Source, fix bool) (Report, error) {
 	var rep Report
-	files, err := idx.ListPrefix(ctx, "/")
+	nodes, err := src.AllNodes(ctx)
 	if err != nil {
 		return rep, err
 	}
-	rep.Checked = len(files)
-	for start := 0; start < len(files); start += batchSize {
-		end := min(start+batchSize, len(files))
-		batch := files[start:end]
-		byID, ferr := fetch(ctx, api, channelID, accessHash, batch)
-		if ferr != nil {
-			return rep, ferr
-		}
-		for _, f := range batch {
-			msg, ok := byID[f.MessageID]
-			if !ok {
-				rep.Missing++
-				rep.Problems = append(rep.Problems, Problem{Path: f.Path, Kind: KindMissing, MsgID: f.MessageID})
-				if fix {
-					if derr := idx.Delete(ctx, f.Path); derr != nil {
-						return rep, derr
-					}
-					rep.Fixed++
-				}
-				continue
-			}
-			p, _, pok := tgsync.ParseFile(msg.Message)
-			if !pok {
-				// 消息还在，但不是本程序写的文件消息：索引行已无对应元数据
-				rep.Missing++
-				rep.Problems = append(rep.Problems, Problem{Path: f.Path, Kind: KindMissing, MsgID: f.MessageID})
-				if fix {
-					if derr := idx.Delete(ctx, f.Path); derr != nil {
-						return rep, derr
-					}
-					rep.Fixed++
-				}
-				continue
-			}
-			if p == f.Path {
-				continue
-			}
-			rep.Moved++
-			rep.Problems = append(rep.Problems, Problem{Path: f.Path, Kind: KindMoved, MsgID: f.MessageID, Actual: p})
-			if fix {
-				if derr := idx.Delete(ctx, f.Path); derr != nil {
-					return rep, derr
-				}
-				f.Path = p
-				if perr := idx.Replace(ctx, f); perr != nil {
-					return rep, perr
-				}
-				rep.Fixed++
-			}
-		}
-	}
-	return rep, nil
-}
-
-// fetch 批量取消息，返回 消息 ID 到消息的映射；已删除的消息不会出现在结果里。
-func fetch(ctx context.Context, api API, channelID, accessHash int64, batch []index.File) (map[int]*tg.Message, error) {
-	ids := make([]tg.InputMessageClass, 0, len(batch))
-	for _, f := range batch {
-		ids = append(ids, &tg.InputMessageID{ID: f.MessageID})
-	}
-	res, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash},
-		ID:      ids,
-	})
+	remote, err := tgsync.Layout(nodes)
 	if err != nil {
-		return nil, err
+		return rep, err
 	}
-	out := make(map[int]*tg.Message, len(batch))
-	for _, mc := range messagesOf(res) {
-		// MessageEmpty 表示消息已被删除，不进映射
-		if m, ok := mc.(*tg.Message); ok {
-			out[m.ID] = m
+	local, err := idx.AllNodes(ctx)
+	if err != nil {
+		return rep, err
+	}
+	rep.Checked = len(local)
+
+	seen := make(map[int]bool, len(local))
+	for _, n := range local {
+		seen[n.ID] = true
+		r, ok := remote[n.ID]
+		if !ok {
+			rep.Missing++
+			rep.Problems = append(rep.Problems, Problem{Path: n.Path, Kind: KindMissing, MsgID: n.ID})
+			continue
+		}
+		if r.Path != n.Path {
+			rep.Moved++
+			rep.Problems = append(rep.Problems, Problem{Path: n.Path, Kind: KindMoved, MsgID: n.ID, Actual: r.Path})
 		}
 	}
-	return out, nil
-}
-
-// messagesOf 把 MessagesMessagesClass 的三种形态摊平成消息列表。
-func messagesOf(res tg.MessagesMessagesClass) []tg.MessageClass {
-	switch m := res.(type) {
-	case *tg.MessagesMessages:
-		return m.Messages
-	case *tg.MessagesMessagesSlice:
-		return m.Messages
-	case *tg.MessagesChannelMessages:
-		return m.Messages
+	for id, r := range remote {
+		if seen[id] {
+			continue
+		}
+		rep.Added++
+		rep.Problems = append(rep.Problems, Problem{Path: r.Path, Kind: KindAdded, MsgID: id})
 	}
-	return nil
+
+	if !fix || len(rep.Problems) == 0 {
+		return rep, nil
+	}
+	n, err := tgsync.Rebuild(ctx, idx, nodes)
+	if err != nil {
+		return rep, err
+	}
+	slog.Debug(i18n.T("log.fsck_rebuilt"), "nodes", n)
+	rep.Fixed = len(rep.Problems)
+	return rep, nil
 }

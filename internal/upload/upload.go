@@ -31,7 +31,7 @@ var ErrNoResult error = errNoResult{}
 
 // Index 是本包需要的索引能力：查同内容、写记录。
 type Index interface {
-	FindContent(ctx context.Context, dir string, size int64, sha string) (index.File, bool, error)
+	FindContent(ctx context.Context, dir string, size int64, sha string) (index.Node, bool, error)
 }
 
 // Store 是本包需要的存储能力。
@@ -68,14 +68,14 @@ func Hash(r io.ReaderAt, size int64) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Part 把索引记录转成存储层消息描述。
-func Part(f index.File) *telegramstore.Part {
+// Part 把节点记录转成存储层消息描述。
+func Part(n index.Node) *telegramstore.Part {
 	return &telegramstore.Part{
-		MessageID:     f.MessageID,
-		DocumentID:    f.DocumentID,
-		AccessHash:    f.AccessHash,
-		FileReference: f.FileReference,
-		Size:          f.Size,
+		MessageID:     n.ID,
+		DocumentID:    n.DocumentID,
+		AccessHash:    n.AccessHash,
+		FileReference: n.FileReference,
+		Size:          n.Size,
 	}
 }
 

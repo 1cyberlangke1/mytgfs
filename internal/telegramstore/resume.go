@@ -92,10 +92,6 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 		return nil, err
 	}
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	caption, err = s.prepareCaption(ctx, peer, caption)
-	if err != nil {
-		return nil, err
-	}
 
 	partSize := uploadPartSizeFor(size)
 	total := partsOf(size, partSize)

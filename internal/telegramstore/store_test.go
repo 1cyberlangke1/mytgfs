@@ -28,11 +28,8 @@ type fakeAPI struct {
 	getFile      []*tg.UploadGetFileRequest
 	getMessages  []*tg.ChannelsGetMessagesRequest
 
-	// texts 保存当前「频道」里的文本消息正文，供 dirent 用例读写回放。
+	// texts 保存当前「频道」里的文本消息正文，供节点用例读写回放。
 	texts map[int]string
-	// pinned 是频道置顶消息号；pinCalls 记录置顶调用次数。
-	pinned   int
-	pinCalls int
 
 	// getMessagesRes/getMessagesErr 控制 ChannelsGetMessages 的返回，供 Refresh 测试使用。
 	getMessagesRes tg.MessagesMessagesClass
@@ -110,20 +107,6 @@ func (f *fakeAPI) MessagesEditMessage(_ context.Context, req *tg.MessagesEditMes
 	if msg, ok := req.GetMessage(); ok {
 		f.texts[req.ID] = msg
 	}
-	return &tg.Updates{}, nil
-}
-
-func (f *fakeAPI) ChannelsGetFullChannel(context.Context, tg.InputChannelClass) (*tg.MessagesChatFull, error) {
-	full := &tg.ChannelFull{}
-	if f.pinned > 0 {
-		full.SetPinnedMsgID(f.pinned)
-	}
-	return &tg.MessagesChatFull{FullChat: full}, nil
-}
-
-func (f *fakeAPI) MessagesUpdatePinnedMessage(_ context.Context, req *tg.MessagesUpdatePinnedMessageRequest) (tg.UpdatesClass, error) {
-	f.pinCalls++
-	f.pinned = req.ID
 	return &tg.Updates{}, nil
 }
 
@@ -268,24 +251,22 @@ func TestUploadTooLarge(t *testing.T) {
 	}
 }
 
-// TestUploadLongCaptionUsesRef 超长 caption 先发文本元数据，文件 caption 只留 ref。
-func TestUploadLongCaptionUsesRef(t *testing.T) {
+// TestUploadCaptionInline 节点 caption 直接写进文件消息，不额外发元信息消息。
+func TestUploadCaptionInline(t *testing.T) {
 	api := newFakeAPI()
 	api.uploadSize = 3
 	s := newTestStore(api)
-	long := strings.Repeat("x", maxCaption+1)
+	body := `{"v":2,"t":"f","n":"a.txt","p":0,"s":"abc"}`
 
-	_, err := s.Upload(context.Background(), bytes.NewReader([]byte("abc")), 3, "a.txt", "text/plain", long)
+	_, err := s.Upload(context.Background(), bytes.NewReader([]byte("abc")), 3, "a.txt", "text/plain", body)
 	if err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
-	if len(api.sendMessage) != 1 || api.sendMessage[0].Message != long {
-		t.Fatalf("应先发完整元数据消息，实际 %+v", api.sendMessage)
+	if len(api.sendMessage) != 0 {
+		t.Fatalf("不该发元信息消息，实际 %+v", api.sendMessage)
 	}
-	// 元数据消息先发，占用 nextID 101；文件消息是 102，caption 指向 101
-	want := `{"ref":101}`
-	if len(api.sendMedia) != 1 || api.sendMedia[0].Message != want {
-		t.Fatalf("文件 caption 应为 %s，实际 %+v", want, api.sendMedia)
+	if len(api.sendMedia) != 1 || api.sendMedia[0].Message != body {
+		t.Fatalf("caption 应原样写入，实际 %+v", api.sendMedia)
 	}
 }
 

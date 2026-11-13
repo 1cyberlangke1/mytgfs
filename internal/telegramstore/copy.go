@@ -53,10 +53,6 @@ func (s *Store) copyWithRefresh(ctx context.Context, ref *Store, src *Part, name
 		return nil, nil, err
 	}
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	caption, err = s.prepareCaption(ctx, peer, caption)
-	if err != nil {
-		return nil, nil, err
-	}
 
 	part, err := s.sendDocRef(ctx, peer, src, name, mime, caption)
 	if err == nil || !IsFileReferenceError(err) {

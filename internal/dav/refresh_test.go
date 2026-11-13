@@ -11,19 +11,18 @@ import (
 	"github.com/gotd/td/tgerr"
 
 	"mytgfs/internal/index"
-	"mytgfs/internal/telegramstore"
 )
 
 // TestReadRefreshesExpiredFileReference 远端报引用过期时，刷新元数据并重试读取成功。
 func TestReadRefreshesExpiredFileReference(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
-
 	ctx := context.Background()
+
 	old := []byte("old-ref")
-	if err := fsys.idx.Put(ctx, index.File{
-		Path: "/a.bin", MessageID: 42, DocumentID: 7, AccessHash: 8,
-		FileReference: old, Size: 1,
+	if err := fsys.idx.PutNode(ctx, index.Node{
+		ID: 42, ParentID: 0, Name: "a.bin", Path: "/a.bin",
+		DocumentID: 7, AccessHash: 8, FileReference: old, Size: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +43,10 @@ func TestReadRefreshesExpiredFileReference(t *testing.T) {
 	if string(buf) != "x" {
 		t.Fatalf("读取内容不符: %q", buf)
 	}
-	if st.refreshCalls != 1 {
-		t.Fatalf("应刷新一次，实际 %d", st.refreshCalls)
+	if st.refreshCall != 1 {
+		t.Fatalf("应刷新一次，实际 %d", st.refreshCall)
 	}
-	got, _, _ := fsys.idx.Get(ctx, "/a.bin")
+	got, _, _ := fsys.idx.NodeByID(ctx, 42)
 	if string(got.FileReference) != "new-ref" {
 		t.Fatalf("刷新后的引用应写回索引，实际 %q", got.FileReference)
 	}
@@ -57,9 +56,11 @@ func TestReadRefreshesExpiredFileReference(t *testing.T) {
 func TestReadDoesNotRefreshOnOtherError(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
-
 	ctx := context.Background()
-	if err := fsys.idx.Put(ctx, index.File{Path: "/a.bin", MessageID: 42, Size: 1}); err != nil {
+
+	if err := fsys.idx.PutNode(ctx, index.Node{
+		ID: 42, ParentID: 0, Name: "a.bin", Path: "/a.bin", Size: 1,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	st.readErr = errors.New("network down")
@@ -72,9 +73,7 @@ func TestReadDoesNotRefreshOnOtherError(t *testing.T) {
 	if _, err := f.Read(make([]byte, 1)); err == nil {
 		t.Fatal("应返回读取错误")
 	}
-	if st.refreshCalls != 0 {
-		t.Fatalf("非引用错误不应刷新，实际 %d", st.refreshCalls)
+	if st.refreshCall != 0 {
+		t.Fatalf("非引用错误不应刷新，实际 %d", st.refreshCall)
 	}
 }
-
-var _ = telegramstore.IsFileReferenceError
