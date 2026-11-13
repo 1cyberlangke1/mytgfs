@@ -278,7 +278,7 @@ func (d *FileSystem) RemoveAll(_ context.Context, name string) error {
 		return errors.New(i18n.T("err.dav_root_delete"))
 	}
 	if d.isDir(name) {
-		return d.idx.DeleteDir(d.ctx, name)
+		return d.removeTree(name)
 	}
 	f, ok, err := d.idx.Get(d.ctx, name)
 	if err != nil {
@@ -291,6 +291,43 @@ func (d *FileSystem) RemoveAll(_ context.Context, name string) error {
 		return err
 	}
 	return d.idx.Delete(d.ctx, name)
+}
+
+// removeTree 递归删除目录：先删子树里的消息，再清索引与目录记录。
+//
+// 输入：dir 卷内目录路径（已 clean，且不是根）
+// 输出：error
+// 预期：一次 RPC 批量删掉子文件消息；远端删除失败即返回，保留索引便于重试；
+// 成功后子文件索引与所有相关目录记录都清空。
+func (d *FileSystem) removeTree(dir string) error {
+	files, err := d.idx.ListPrefix(d.ctx, dir)
+	if err != nil {
+		return err
+	}
+	if len(files) > 0 {
+		ids := make([]int, 0, len(files))
+		for _, f := range files {
+			ids = append(ids, f.MessageID)
+		}
+		if err := d.store.Delete(d.ctx, ids...); err != nil {
+			return err
+		}
+		for _, f := range files {
+			if err := d.idx.Delete(d.ctx, f.Path); err != nil {
+				return err
+			}
+		}
+	}
+	dirs, err := d.idx.Dirs(d.ctx, dir)
+	if err != nil {
+		return err
+	}
+	for _, p := range dirs {
+		if err := d.idx.DeleteDir(d.ctx, p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveDir 删除目录记录。
@@ -309,11 +346,17 @@ func (d *FileSystem) RemoveDir(ctx context.Context, name string) error {
 	return d.idx.DeleteDir(ctx, name)
 }
 
-// Rename 改名：文件的 caption 跟着改，索引同步迁移。
+// Rename 改名：文件的 caption 跟着改，索引同步迁移；目录则整棵子树一起迁移。
 func (d *FileSystem) Rename(_ context.Context, oldName, newName string) error {
 	oldName, newName = clean(oldName), clean(newName)
+	if oldName == newName {
+		return nil
+	}
+	if oldName == "/" {
+		return errors.New(i18n.T("err.dav_root_rename"))
+	}
 	if d.isDir(oldName) {
-		return errors.New(i18n.T("err.dav_dir_rename"))
+		return d.renameDir(oldName, newName)
 	}
 	f, ok, err := d.idx.Get(d.ctx, oldName)
 	if err != nil {
@@ -330,6 +373,63 @@ func (d *FileSystem) Rename(_ context.Context, oldName, newName string) error {
 	}
 	f.Path = newName
 	return d.idx.Replace(d.ctx, f)
+}
+
+// renameDir 把目录整棵子树迁到新路径。
+//
+// 输入：oldName 已 clean 的旧目录；newName 新目录
+// 输出：error
+// 预期：逐文件改 caption 并迁移索引行，再迁移显式目录记录；
+// 目标已存在或移进自身子树时拒绝，拒绝时不做任何改动。
+func (d *FileSystem) renameDir(oldName, newName string) error {
+	// 移进自己的子树会形成环
+	if strings.HasPrefix(newName+"/", oldName+"/") {
+		return errors.New(i18n.T("err.dav_dir_into_self"))
+	}
+	// 目标已存在时拒绝，避免覆盖已有文件或目录
+	if ok, err := d.idx.IsDir(d.ctx, newName); err != nil {
+		return err
+	} else if ok {
+		return os.ErrExist
+	}
+	if _, ok, err := d.idx.Get(d.ctx, newName); err != nil {
+		return err
+	} else if ok {
+		return os.ErrExist
+	}
+
+	files, err := d.idx.ListPrefix(d.ctx, oldName)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		np := newName + strings.TrimPrefix(f.Path, oldName)
+		// 先改远端消息说明，再迁本地索引；中途失败时重建索引仍能按 caption 恢复
+		if err := d.store.Rename(d.ctx, f.MessageID, tgsync.EncodeCaptionHash(np, f.Sha256)); err != nil {
+			return err
+		}
+		if err := d.idx.Delete(d.ctx, f.Path); err != nil {
+			return err
+		}
+		f.Path = np
+		if err := d.idx.Replace(d.ctx, f); err != nil {
+			return err
+		}
+	}
+	dirs, err := d.idx.Dirs(d.ctx, oldName)
+	if err != nil {
+		return err
+	}
+	for _, p := range dirs {
+		if err := d.idx.PutDir(d.ctx, newName+strings.TrimPrefix(p, oldName)); err != nil {
+			return err
+		}
+		if err := d.idx.DeleteDir(d.ctx, p); err != nil {
+			return err
+		}
+	}
+	// 派生目录（没有显式记录）也要保证新路径成立
+	return d.idx.PutDir(d.ctx, newName)
 }
 
 // Stat 返回文件或目录信息。

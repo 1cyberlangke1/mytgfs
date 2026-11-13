@@ -35,6 +35,7 @@ type fakeStore struct {
 	copiedSrc      []int64
 	copyErr        error
 	copyPart       *telegramstore.Part
+	renames        []renameCall
 }
 
 // Copy 记录被复用的 document ID，返回预置 Part 或默认新消息。
@@ -106,7 +107,10 @@ func (f *fakeStore) Delete(_ context.Context, ids ...int) error {
 	return nil
 }
 
-func (f *fakeStore) Rename(context.Context, int, string) error { return nil }
+func (f *fakeStore) Rename(_ context.Context, messageID int, caption string) error {
+	f.renames = append(f.renames, renameCall{id: messageID, caption: caption})
+	return nil
+}
 
 // newTestFS 建一个临时索引与假存储。
 func newTestFS(t *testing.T) (*FileSystem, *fakeStore, func()) {
