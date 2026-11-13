@@ -9,17 +9,21 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"net"
+	"net/http"
 	"os"
-	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+
 	"mytgfs/internal/app"
 	"mytgfs/internal/autostart"
+	"mytgfs/internal/brand"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
@@ -34,7 +38,6 @@ import (
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
-	"mytgfs/internal/tray"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
@@ -43,7 +46,6 @@ import (
 type Options struct {
 	ConfigPath string // 配置文件路径，空则 config.toml
 	Point      string // 挂载点覆盖，空则取配置
-	Port       int    // Web 面板端口，0 则 8720
 }
 
 // SyncInterval 把配置里的秒数换算成自动同步间隔。
@@ -167,11 +169,7 @@ func Run(opts Options) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("err.config_read"), err)
 	}
-	// 端口优先级：命令行 -port > config.toml [web].port > 默认 8720
-	port := opts.Port
-	if port <= 0 {
-		port = cfg.Web.ListenPort()
-	}
+	// 挂载点优先级：命令行 -point > config.toml [mount].point
 	point := opts.Point
 	if point == "" {
 		point = cfg.Mount.Point
@@ -191,6 +189,58 @@ func Run(opts Options) error {
 	var mu sync.Mutex
 	var cancels []context.CancelFunc
 	var wg sync.WaitGroup
+
+	// ---- 桌面壳（Wails）：窗口 + 托盘，不监听端口、不打开浏览器 ----
+	var hmu sync.RWMutex
+	inner := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html><meta charset=utf-8><body style=\"font:14px system-ui;padding:24px\">mytgfs</body>"))
+	}))
+	setHandler := func(h http.Handler) { hmu.Lock(); inner = h; hmu.Unlock() }
+
+	wailsApp := application.New(application.Options{
+		Name:        "mytgfs",
+		Description: "Telegram channel file volumes",
+		Icon:        brand.Large,
+		Assets: application.AssetOptions{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hmu.RLock()
+				h := inner
+				hmu.RUnlock()
+				h.ServeHTTP(w, r)
+			}),
+		},
+	})
+	win := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:   "main",
+		Title:  "mytgfs",
+		Width:  1120,
+		Height: 760,
+		URL:    "/",
+	})
+	// 关窗只隐藏，托盘与后台同步继续运行
+	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		e.Cancel()
+		win.Hide()
+	})
+
+	sysTray := wailsApp.SystemTray.New()
+	if runtime.GOOS == "windows" {
+		sysTray.SetIcon(brand.ICO)
+	} else {
+		sysTray.SetIcon(brand.PNG256)
+	}
+
+	// ready 之前不能碰 Wails 的 UI 对象：InvokeSync 依赖主循环
+	var ready atomic.Bool
+	uiUpdate := func(fn func()) {
+		if !ready.Load() {
+			return
+		}
+		application.InvokeSync(fn)
+	}
+
+	var statusItem, davItem, syncItem, autoItem *application.MenuItem
 
 	// trayVolume 是一个已挂载卷的运行时句柄，供状态展示与手动同步使用。
 	type trayVolume struct {
@@ -217,7 +267,12 @@ func Run(opts Options) error {
 		stateMu.Lock()
 		connKey, connText = key, text
 		stateMu.Unlock()
-		tray.SetStatus(text)
+		uiUpdate(func() {
+			if statusItem != nil {
+				statusItem.SetLabel(text)
+			}
+			sysTray.SetTooltip("mytgfs · " + text)
+		})
 	}
 
 	// 授权失效标记：Web 面板据此显示重新登录提示，并禁用写操作
@@ -266,7 +321,11 @@ func Run(opts Options) error {
 				if !ok {
 					return
 				}
-				tray.SetWebDAV(davSvc.State().Enabled)
+				uiUpdate(func() {
+					if davItem != nil {
+						davItem.SetChecked(davSvc.State().Enabled)
+					}
+				})
 			}
 		}
 	}()
@@ -371,30 +430,8 @@ func Run(opts Options) error {
 			},
 		})
 
-	// Web 面板：按需启动/关闭，绑定 127.0.0.1
-	var webMu sync.Mutex
-	var webCancel context.CancelFunc
-	var webAddr string
-
-	startWeb := func() string {
-		webMu.Lock()
-		defer webMu.Unlock()
-		if webCancel != nil {
-			return webAddr
-		}
-		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		if ln, lerr := net.Listen("tcp", addr); lerr != nil {
-			// 端口被占用时退回随机端口，面板仍可用
-			if ln2, lerr2 := net.Listen("tcp", "127.0.0.1:0"); lerr2 == nil {
-				addr = ln2.Addr().String()
-				_ = ln2.Close()
-			}
-		} else {
-			_ = ln.Close()
-		}
-		ctx, cancel := context.WithCancel(rootCtx)
-		webCancel = cancel
-		webAddr = addr
+	// 面板路由：桌面壳直接挂在 webview 上，不监听端口
+	buildPanel := func() http.Handler {
 		webOpts := web.Options{
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
@@ -576,26 +613,7 @@ func Run(opts Options) error {
 			// PWA：默认启用，配置里可改名/关掉/限制单文件离线大小
 			PWA: cfg.PWA,
 		}
-		go func() {
-			if serr := web.ServeWith(ctx, addr, cfgPath, webOpts); serr != nil {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.web_failed"), serr)
-			}
-			webMu.Lock()
-			if webAddr == addr {
-				webCancel = nil
-			}
-			webMu.Unlock()
-		}()
-		return addr
-	}
-	stopWeb := func() {
-		webMu.Lock()
-		c := webCancel
-		webCancel = nil
-		webMu.Unlock()
-		if c != nil {
-			c()
-		}
+		return web.NewHandler(cfgPath, webOpts)
 	}
 
 	// 挂载一个卷；挂载点为空表示跳过
@@ -715,48 +733,80 @@ func Run(opts Options) error {
 	}
 	exePath, exeErr := os.Executable()
 
-	actions := tray.Actions{
-		OpenWeb: func() {
-			addr := startWeb()
-			if cfg.Web.OpensBrowser() {
-				OpenBrowser("http://" + addr)
-			}
-		},
-		CloseWeb:         stopWeb,
-		AutostartEnabled: autoOn,
-		SetAutostart: func(on bool) error {
-			if exeErr != nil {
-				return exeErr
-			}
-			if on {
-				return autostart.Enable(exePath)
-			}
-			return autostart.Disable()
-		},
-		WebDAVEnabled:   davState().Enabled,
-		SetWebDAV:       setDAV,
-		AutoSyncEnabled: syncSwitch.On(),
-		SetAutoSync: func(on bool) error {
-			// 写回配置：打开用默认 15s，关闭写 -1
-			secs := 0
-			if !on {
-				secs = -1
-			}
-			if werr := config.SetKey(cfgPath, "mount.sync_seconds", strconv.Itoa(secs)); werr != nil {
-				return werr
-			}
-			syncSwitch.Set(on)
-			return nil
-		},
-		Quit: func() {
-			setState("tray.state.unmounted")
-			// 先停 WebDAV 再卸卷，避免客户端读到已关闭的索引
-			_ = stopDAV()
-			unmountAll()
-			stopWeb()
-			rootCancel()
-		},
-	}
+	// ---- 托盘菜单 ----
+	// 状态行只做展示；开关项点击后立即落盘，并回写勾选状态
+	menu := wailsApp.NewMenu()
+	statusItem = menu.Add(connText)
+	statusItem.SetEnabled(false)
+	menu.AddSeparator()
+	menu.Add(i18n.T("tray.menu.open")).OnClick(func(*application.Context) {
+		win.Show()
+		win.Focus()
+	})
+	menu.AddSeparator()
+
+	autoItem = menu.AddCheckbox(i18n.T("tray.menu.autostart"), autoOn)
+	autoItem.OnClick(func(*application.Context) {
+		on := !autoOn
+		if exeErr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_toggle_failed"), exeErr)
+			return
+		}
+		var terr error
+		if on {
+			terr = autostart.Enable(exePath)
+		} else {
+			terr = autostart.Disable()
+		}
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_toggle_failed"), terr)
+			return
+		}
+		autoOn = on
+		autoItem.SetChecked(on)
+	})
+
+	davItem = menu.AddCheckbox(i18n.T("tray.menu.webdav"), davState().Enabled)
+	davItem.OnClick(func(*application.Context) {
+		on := !davState().Enabled
+		if derr := setDAV(on); derr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.webdav_toggle_failed"), derr)
+			return
+		}
+		davItem.SetChecked(on)
+	})
+
+	syncItem = menu.AddCheckbox(i18n.T("tray.menu.autosync"), syncSwitch.On())
+	syncItem.OnClick(func(*application.Context) {
+		on := !syncSwitch.On()
+		// 写回配置：打开用默认 15s，关闭写 -1
+		secs := 0
+		if !on {
+			secs = -1
+		}
+		if werr := config.SetKey(cfgPath, "mount.sync_seconds", strconv.Itoa(secs)); werr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autosync_toggle_failed"), werr)
+			return
+		}
+		syncSwitch.Set(on)
+		syncItem.SetChecked(on)
+	})
+
+	menu.AddSeparator()
+	menu.Add(i18n.T("tray.menu.quit")).OnClick(func(*application.Context) {
+		setState("tray.state.unmounted")
+		// 先停 WebDAV 再卸卷，避免客户端读到已关闭的索引
+		_ = stopDAV()
+		unmountAll()
+		rootCancel()
+		wailsApp.Quit()
+	})
+
+	sysTray.SetMenu(menu)
+	sysTray.OnClick(func() {
+		win.Show()
+		win.Focus()
+	})
 
 	// 托盘悬浮提示：状态 + 每卷占用 + 正在跑的任务，每 5 秒刷新
 	tooltipText := func() string {
@@ -795,7 +845,7 @@ func Run(opts Options) error {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
-			tray.SetTooltip(tooltipText())
+			uiUpdate(func() { sysTray.SetTooltip(tooltipText()) })
 			select {
 			case <-rootCtx.Done():
 				return
@@ -804,17 +854,20 @@ func Run(opts Options) error {
 		}
 	})
 
-	if tray.Supported() {
-		tray.Run(actions, connText)
-	} else {
-		// 无图形环境：不起托盘，挂载与自动同步照常跑，Ctrl+C / SIGINT 退出
-		fmt.Fprintln(os.Stderr, i18n.T("tray.headless"))
-		sigCtx, stop := signal.NotifyContext(rootCtx, os.Interrupt)
-		defer stop()
-		<-sigCtx.Done()
+	// 主循环起来之后才能安全操作窗口与托盘对象
+	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		ready.Store(true)
+		sysTray.SetTooltip(tooltipText())
+	})
+
+	// 面板路由直接挂到 webview：不监听端口、不开浏览器
+	setHandler(buildPanel())
+
+	if err := wailsApp.Run(); err != nil {
+		return err
 	}
 
-	// 托盘退出后收尾：停挂盘服务、卸载卷、取消后台任务
+	// 窗口退出后收尾：停挂盘服务、卸载卷、取消后台任务
 	_ = stopDAV()
 	unmountAll()
 	rootCancel()

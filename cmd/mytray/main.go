@@ -1,6 +1,6 @@
 package main
 
-// mytgfs-tray：GUI 子系统入口，双击直接进托盘，不弹控制台窗口。
+// mytgfs-tray：GUI 子系统入口，双击直接打开桌面窗口与托盘，不弹控制台。
 //
 // 与 `mytgfs tray` 共用 internal/trayapp；启动失败写 data/tray-error.log，
 // 因为没有控制台可以打印。
@@ -15,7 +15,6 @@ import (
 
 func main() {
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
-	port := fs.Int("port", 8720, "web panel port")
 	point := fs.String("point", "", "mount point")
 	cfg := fs.String("config", "config.toml", "config file")
 	_ = fs.Parse(os.Args[1:])
@@ -23,7 +22,6 @@ func main() {
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath: *cfg,
 		Point:      *point,
-		Port:       *port,
 	}); err != nil {
 		writeTrayError(err.Error())
 		os.Exit(1)

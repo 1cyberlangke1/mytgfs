@@ -213,7 +213,7 @@ func writeICO(path string, sizes []int) error {
 }
 
 func main() {
-	const out = "assets/brand"
+	const out = "internal/brand/icons"
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -94,6 +94,16 @@ type Options struct {
 // 输入：ctx；addr 监听地址；configPath 配置文件；opts 状态/同步钩子
 // 输出：error
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时状态为空列表
+// NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
+//
+// 输入：configPath 配置文件路径；opts 面板能力
+// 输出：http.Handler
+// 预期：与 ServeWith 使用同一套路由，不监听任何端口
+func NewHandler(configPath string, opts Options) http.Handler {
+	return newMux(configPath, opts)
+}
+
+// ServeWith 在 addr 上提供面板，ctx 取消时优雅关闭。
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	srv := &http.Server{Addr: addr, Handler: newMux(configPath, opts)}
 	// AfterFunc 在 ctx 取消时优雅关闭，不再常驻等待 goroutine

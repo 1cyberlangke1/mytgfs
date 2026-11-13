@@ -1,7 +1,5 @@
 package main
 
-// `mytgfs tray` 子命令：转交给托盘主管进程实现。
-
 import (
 	"flag"
 
@@ -9,21 +7,19 @@ import (
 	"mytgfs/internal/trayapp"
 )
 
-// runTray 启动系统托盘常驻进程。
+// runTray 启动桌面壳与托盘（Wails 窗口 + 系统托盘）。
 //
-// 输入：--port 面板端口；--point 挂载点覆盖
-// 输出：无；启动失败时退出
-// 预期：挂载、自动同步、按需面板都由 trayapp 负责
+// 输入：args 子命令参数
+// 输出：无；失败直接退出
+// 预期：不监听端口，面板由内嵌 webview 承载
 func runTray(args []string) {
 	fs := flag.NewFlagSet("tray", flag.ExitOnError)
-	port := fs.Int("port", 8720, i18n.T("cli.flag.web_port"))
 	point := fs.String("point", "", i18n.T("cli.flag.mount_point"))
 	_ = fs.Parse(args)
 
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath: "config.toml",
 		Point:      *point,
-		Port:       *port,
 	}); err != nil {
 		fatal(err.Error())
 	}
