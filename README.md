@@ -6,7 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/1cyberlangke1/mytgfs)](https://github.com/1cyberlangke1/mytgfs/releases)
 
 把 Telegram 私有频道当文件存储用的工具。用 bot 通过 MTProto 直连 Telegram，
-文件内容存频道，路径等元数据写在文件消息的 caption 里，本地 SQLite 只是可重建的索引缓存。
+文件内容存频道，每个节点（文件/目录）是一条消息，消息里自述名字与父节点消息号，
+本地 SQLite 只是可重建的索引缓存。改名/移动只编辑节点自己那一条消息，与子树大小无关。
 
 提供三种使用方式：
 
@@ -14,8 +15,8 @@
 - **WebDAV**（`mytgfs webdav`）：映射成系统网络盘，用资源管理器操作。
 - **系统托盘**（`mytgfs tray`）：常驻后台、自动增量同步，按需打开面板。
 
-> 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己上传、且在 caption 里带路径元数据的文件消息**，
-> 不会扫描、删除频道里任何其它消息。删文件只删自己记下的那一条。
+> 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己格式的消息**（正文含 `v`/`t`/`n`/`p` 字段），
+> 不会扫描、删除频道里任何其它消息。删文件只删自己记下的那条消息。
 
 ## 环境要求
 
@@ -100,7 +101,7 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs volume create --name <n> --point Y:` | 建卷 |
 | `mytgfs volume delete --name <n>` | 删卷：删频道、移除配置、删本地索引 |
 | `mytgfs volume check` | 检查每个卷的频道是否仍可读写 |
-| `mytgfs web [--port N] [--no-open]` | 启动本地 Web 面板（端口默认取 `[web].port`） |
+| `mytgfs web [--port N]` | 启动本地 Web 面板（端口默认取 `[web].port`，传 0 用随机端口） |
 | `mytgfs tray [--port N]` | 系统托盘常驻（自动同步、按需面板） |
 | `mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]` | 启动 WebDAV 服务 |
 | `mytgfs unmap --addr 127.0.0.1:8080` | 清理指向本服务的网络映射 |
@@ -111,8 +112,8 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs get [--name 卷] <远端> [本地\|-]` | 下载文件（`-` 输出到 stdout） |
 | `mytgfs search [--name 卷] [--dir 目录] [--limit N] <关键词>` | 按文件名递归搜索 |
 | `mytgfs config show\|get\|set\|keys` | 读写配置（与面板配置卡片等价） |
-| `mytgfs sync [--name 卷] [--limit N] [--backfill]` | 增量同步（`--name` 省略时用第一个卷）；`--backfill` 用 user 会话回填历史 |
-| `mytgfs check [--name 卷] [--fix]` | 核对索引与频道消息；`--fix` 删除缺失行、按 caption 修正路径 |
+| `mytgfs sync [--name 卷] [--limit N] [--rebuild]` | 增量同步（`--name` 省略时用第一个卷）；`--rebuild` 用 user 会话全量重建 |
+| `mytgfs check [--name 卷] [--fix]` | 以频道全量节点为准核对索引；`--fix` 按远端整棵树重建 |
 | `mytgfs put [--name 卷] [--remote /目录] <路径...>` | 批量上传文件/目录 |
 | `mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>` | 卷内/跨卷复制（同内容复用引用，零重传） |
 | `mytgfs startup enable\|disable\|status` | 开机自启（默认关） |
@@ -127,18 +128,21 @@ go build -o mytgfs ./cmd/mytgfs
 - `[telegram]`：`api_id` 填这里；`api_hash_file` / `bot_token_file` 指向 `secrets/` 下的文件。
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
   `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
-- `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）、`auto_open`（打开面板时是否自动开浏览器，默认 `true`）。
+- `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）。`mytgfs web` 只打印地址，不改浏览器；桌面托盘由 Wails 直接显示面板窗口。
 - `[webdav]`：默认 `enabled = false`，只绑本机回环；可在面板或托盘里开关。
 - `[pwa]`：默认启用可安装 PWA 与「离线保存」，单文件上限默认 256MB。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
 
 ## 数据都放在哪
 
-- **文件正文 + 元数据**：Telegram 私有频道。每个文件是一条文档消息，caption 里是 `{"path":"/a.txt","sha256":"..."}`；
-  超长 caption 会拆成独立的元信息消息。
+- **文件正文 + 元数据**：Telegram 私有频道。每个节点一条消息：
+  - 文件是文档消息，caption 是 `{"v":2,"t":"f","n":"a.txt","p":0,"s":"<sha256>"}`；
+  - 目录是纯文本消息，正文是 `{"v":2,"t":"d","n":"docs","p":0}`；
+  - `p` 是父节点消息号，`0` 表示挂在卷根 `/`。卷根是虚拟的，没有根消息、不用置顶。
+  - 名字限长 255 字节，正文恒小于 Telegram caption/文本上限，不需要拆到别的消息里。
 - **本地索引**：`data/index-<卷名>.db`（SQLite，WAL）。**可丢弃**：删掉后启动 `web` / `webdav` / `tray`
-  会用 user 会话翻整个频道历史自动重建（`RebuildIndexIfEmpty`）；也可手动 `mytgfs sync --backfill`。
-  注意 `secrets/` 里的会话与密钥不能删，那是连接 Telegram 的身份。
+  会用 user 会话翻整个频道历史自动重建（`RebuildIndexIfEmpty`，按父消息号拼树）；也可手动 `mytgfs sync --rebuild`。
+  父消息不存在或成环的节点会挂到卷根。注意 `secrets/` 里的会话与密钥不能删，那是连接 Telegram 的身份。
 - **上传断点**：`data/uploads/<sha256>.json`，记录已上传的分片，中断后按内容摘要续传。
 - **待补传账本**：写进同一个索引库的 `pending` 表，见下节。
 - **会话/密钥**：`secrets/`（bot.session、user.session、session.key 等）。
@@ -170,7 +174,11 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 `file_reference`，Telegram 的引用会过期。读取遇到 `FILE_REFERENCE_EXPIRED` 时，程序按消息 ID
 重新调用 `channels.getMessages` 取最新引用、写回索引并重试一次，因此重建后的旧文件照样能读回。
 
-**边界**：这套机制只依据本程序自己记下的 `pending` 记录和 caption 元数据工作，
+**中途失败**：改名/移动先改远端消息、再改本地索引；本地写入失败时按已改好的远端正文
+重新对账（`reconcileNode`），不会出现「远端叫新名、本地还叫旧名」的分叉视图。
+删除时若远端已删、本地清库失败，对账会按「读不到」把本地节点清掉。
+
+**边界**：这套机制只依据本程序自己记下的 `pending` 记录和节点正文工作，
 不会因为「频道里有不在索引里的消息」就去删任何东西，聊天消息始终不受影响。
 
 ## 传输进度与队列
@@ -181,10 +189,11 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 ## 限制
 
 - 单文件上限约 2GB（Telegram 文档上限），不做跨消息自动分片，超限直接报错。
+- 文件名/目录名最长 255 字节，超长直接拒绝（正文要塞进一条 caption/文本消息）。
 - 索引是缓存，不是副本：频道消息若被 Telegram 删除，对应文件不可恢复；重要数据请另做备份。
-  从频道重建时，早期上传的文件消息 caption 里没有 sha256 字段，重建后这些记录的摘要为空；
-  读取、改名、跨卷复制都不依赖这个字段（按消息 ID 与 document 引用工作），不受影响。
-  下次覆盖写同名文件时会重新计算并补上。
+- v0.2.0 起元数据格式改为「节点自述父消息号」，**不兼容 v0.1.x 的旧 caption 与旧索引库**。
+  旧频道需用一次性迁移脚本把文件消息 caption 改写成节点正文、按需补目录消息（零字节重传），
+  旧 `data/index-*.db` 删掉后由程序全量重建；库代码里不含任何旧格式兼容分支。
 - 多端同时写同一路径时按最后写入生效（与本地网络盘一致，不做冲突检测）；
   自动同步窗口约 15 秒，其它端在这段时间内看到的是上次同步后的内容。
 - Windows 资源管理器路径受 MAX_PATH 260 限制，深层目录建议用面板操作。
@@ -199,8 +208,9 @@ cmd/mytray/     GUI 子系统托盘入口（Windows 双击无黑框）
 internal/
   dav/          WebDAV 文件系统（读写/待补传记账）
   telegramstore/ MTProto 上传、下载、断点续传、引用复制
-  index/        SQLite 索引（files/dirs/meta/pending/pending_done）
-  sync/         频道 pts 增量同步、caption 编解码
+  index/        SQLite 索引（nodes/meta/pending/pending_done）
+  dirent/       节点正文编解码（name/parent/type/sha，名字限长）
+  sync/         频道 pts 增量同步、全量历史重建（按父消息号拼树）
   web/          内嵌面板、文件管理、PWA、缩略图、分片上传
   trayapp/      托盘 + 自动同步 + 按需面板 + WebDAV 开关
   ...           auth/channel/config/crypto/fm/queue/uploadcache/...
@@ -212,7 +222,7 @@ packaging/      安装/卸载/映射脚本
 
 `mytgfs-tray.exe`（或 `mytgfs tray`）常驻任务栏，菜单里的常用项：
 
-- **打开面板 / 关闭面板**：按需启停本地 Web 服务；`[web].auto_open = false` 时只起服务不开浏览器。
+- **打开面板 / 关闭面板**：按需显示/隐藏 Wails 面板窗口（桌面壳不监听端口）。
 - **自动同步**：即时开关频道增量同步，状态写回 `config.toml` 的 `[mount].sync_seconds`。
 - **WebDAV**：开关网络盘服务，状态写回 `[webdav].enabled`。
 - **开机自启**：写当前用户的系统注册项，默认关闭。
