@@ -28,6 +28,7 @@ import (
 	"github.com/natefinch/atomic"
 
 	"mytgfs/internal/fm"
+	"mytgfs/internal/i18n"
 )
 
 const (
@@ -92,27 +93,27 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 			return
 		}
 		if api == nil {
-			http.Error(w, "no file management", http.StatusNotImplemented)
+			http.Error(w, i18n.T("err.http_no_files"), http.StatusNotImplemented)
 			return
 		}
 		q := r.URL.Query()
 		vol, p := q.Get("vol"), q.Get("path")
 		if !thumbExts[strings.ToLower(path.Ext(p))] {
-			http.Error(w, "not an image", http.StatusUnsupportedMediaType)
+			http.Error(w, i18n.T("err.http_not_image"), http.StatusUnsupportedMediaType)
 			return
 		}
 		m, ok := api.manager(vol)
 		if !ok {
-			http.Error(w, "no volume", http.StatusNotFound)
+			http.Error(w, i18n.T("err.http_no_volume"), http.StatusNotFound)
 			return
 		}
 		e, err := m.Info(r.Context(), p)
 		if err != nil || e.Dir {
-			http.Error(w, "not found", http.StatusNotFound)
+			http.Error(w, i18n.T("err.http_not_found"), http.StatusNotFound)
 			return
 		}
 		if e.Size > thumbMaxSource {
-			http.Error(w, "too large", http.StatusUnsupportedMediaType)
+			http.Error(w, i18n.T("err.http_too_large"), http.StatusUnsupportedMediaType)
 			return
 		}
 
@@ -140,7 +141,7 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 		}
 		api.thumbs.mu.Unlock()
 		if b == nil {
-			http.Error(w, "cannot decode image", http.StatusUnsupportedMediaType)
+			http.Error(w, i18n.T("err.http_decode_failed"), http.StatusUnsupportedMediaType)
 			return
 		}
 		writeThumb(w, b)

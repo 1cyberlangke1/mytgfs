@@ -56,7 +56,7 @@ func runVolume(args []string) {
 // 预期：只读 RPC（getChannels + getParticipant），不往频道写任何消息
 func runVolumeCheck(args []string) {
 	fs := flag.NewFlagSet("volume check", flag.ExitOnError)
-	cfgPath := fs.String("config", "config.toml", "config file")
+	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load(*cfgPath)
@@ -121,8 +121,8 @@ func runVolumeCheck(args []string) {
 // 预期：频道删除失败时中止，不改本地配置；一旦频道删掉，本地清理失败也继续
 func runVolumeDelete(args []string) {
 	fs := flag.NewFlagSet("volume delete", flag.ExitOnError)
-	name := fs.String("name", "", "volume name")
-	cfgPath := fs.String("config", "config.toml", "config file")
+	name := fs.String("name", "", i18n.T("cli.flag.volume_plain"))
+	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
 	volName := strings.TrimSpace(*name)
@@ -132,7 +132,7 @@ func runVolumeDelete(args []string) {
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
 	var target *config.Volume
 	for i := range cfg.Volumes {
@@ -196,11 +196,11 @@ func runVolumeDelete(args []string) {
 // 预期：Telegram 侧建好后追加 [[volumes]]；同名卷直接失败，不会建第二个频道
 func runVolumeCreate(args []string) {
 	fs := flag.NewFlagSet("volume create", flag.ExitOnError)
-	name := fs.String("name", "", "volume name (index-<name>.db)")
-	title := fs.String("title", "", "channel title (default: name)")
-	point := fs.String("point", "", "mount point, e.g. Y:")
-	bot := fs.String("bot", "", "bot username (default: read from bot session)")
-	cfgPath := fs.String("config", "config.toml", "config file")
+	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
+	title := fs.String("title", "", i18n.T("cli.flag.title_default"))
+	point := fs.String("point", "", i18n.T("cli.flag.mount_example"))
+	bot := fs.String("bot", "", i18n.T("cli.flag.bot_default"))
+	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
 	volName := strings.TrimSpace(*name)
@@ -218,7 +218,7 @@ func runVolumeCreate(args []string) {
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
@@ -265,7 +265,7 @@ func runVolumeCreate(args []string) {
 		if errors.Is(aerr, config.ErrVolumeExists) {
 			fatal(i18n.T("err.volume_exists"))
 		}
-		fatal(fmt.Sprintf("写入配置: %v", aerr))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_write"), aerr))
 	}
 
 	fmt.Println(i18n.T("volume.ok", res.Name, res.ChannelID, res.ChatID))

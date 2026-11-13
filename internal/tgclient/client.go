@@ -13,6 +13,8 @@ import (
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // ConnState 是主连接状态，屏蔽 gotd 的具体枚举。
@@ -134,7 +136,7 @@ func (c *Client) PooledAPI(n int) (*tg.Client, func(), error) {
 	}
 	invoker, err := c.Client.Pool(int64(n))
 	if err != nil {
-		return nil, nil, fmt.Errorf("创建连接池: %w", err)
+		return nil, nil, fmt.Errorf(i18n.T("err.pool_create")+": %w", err)
 	}
 	return tg.NewClient(invoker), func() { _ = invoker.Close() }, nil
 }

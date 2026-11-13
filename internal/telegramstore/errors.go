@@ -18,13 +18,13 @@ import (
 
 var (
 	// ErrTooLarge 表示文件超过单条 Telegram 消息上限。
-	ErrTooLarge = errors.New("file exceeds Telegram single-message limit")
+	ErrTooLarge = errors.New(i18n.T("err.too_large"))
 	// ErrNoDocument 表示 Updates 里没有 document。
-	ErrNoDocument = errors.New("updates contains no document")
+	ErrNoDocument = errors.New(i18n.T("err.no_document"))
 	// ErrNoMessage 表示 Updates 里没有消息 ID。
-	ErrNoMessage = errors.New("updates contains no message id")
+	ErrNoMessage = errors.New(i18n.T("err.no_message"))
 	// ErrBadRange 表示读取区间越界。
-	ErrBadRange = errors.New("range out of bounds")
+	ErrBadRange = errors.New(i18n.T("err.bad_range"))
 )
 
 // channelErrors 把「频道这一侧不可用」的 RPC 错误映射到 i18n key。

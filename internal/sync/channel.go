@@ -14,6 +14,7 @@ import (
 
 	"github.com/gotd/td/tgerr"
 
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 )
 
@@ -147,8 +148,8 @@ func SyncChannel(ctx context.Context, idx *index.Index, d ChannelDiffer, limit i
 			return res, nil
 		}
 	}
-	return res, fmt.Errorf("sync: 差异轮数超过上限 %d（pts=%d）", maxDiffRounds, pts)
+	return res, fmt.Errorf(i18n.T("err.diff_rounds_exceeded"), maxDiffRounds, pts)
 }
 
 // ErrNoDiffer 表示调用方没有提供差异源。
-var ErrNoDiffer = errors.New("sync: 未提供 ChannelDiffer")
+var ErrNoDiffer = errors.New(i18n.T("err.no_differ"))

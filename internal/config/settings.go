@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"mytgfs/internal/i18n"
 )
 
 // settingKind 是配置项的取值类型。
@@ -71,7 +73,7 @@ func Keys() []string {
 func SetKey(path, name, value string) error {
 	s, ok := settings[name]
 	if !ok {
-		return fmt.Errorf("未知配置项 %q（可用：%s）", name, strings.Join(Keys(), ", "))
+		return fmt.Errorf(i18n.T("err.config_key_unknown"), name, strings.Join(Keys(), ", "))
 	}
 	lit, err := normalizeValue(s.kind, value)
 	if err != nil {
@@ -88,7 +90,7 @@ func SetKey(path, name, value string) error {
 func GetKey(path, name string) (string, bool, error) {
 	s, ok := settings[name]
 	if !ok {
-		return "", false, fmt.Errorf("未知配置项 %q（可用：%s）", name, strings.Join(Keys(), ", "))
+		return "", false, fmt.Errorf(i18n.T("err.config_key_unknown"), name, strings.Join(Keys(), ", "))
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -131,11 +133,11 @@ func normalizeValue(kind settingKind, value string) (string, error) {
 		case "false", "0", "off", "no":
 			return "false", nil
 		}
-		return "", fmt.Errorf("需要 true 或 false，收到 %q", value)
+		return "", fmt.Errorf(i18n.T("err.config_bool_format"), value)
 	case kindInt:
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return "", fmt.Errorf("需要整数，收到 %q", value)
+			return "", fmt.Errorf(i18n.T("err.config_int_format"), value)
 		}
 		return strconv.Itoa(n), nil
 	default:

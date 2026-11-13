@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"mytgfs/internal/i18n"
 )
 
 const (
@@ -23,7 +25,7 @@ const (
 )
 
 // ErrLegacyPlain 表示输入不是本包加密的格式。
-var ErrLegacyPlain = errors.New("legacy plaintext")
+var ErrLegacyPlain = errors.New(i18n.T("err.crypto_legacy"))
 
 // LoadOrCreateKey 读取 hex 编码的 32 字节密钥；不存在时生成并写入。
 //
@@ -35,10 +37,10 @@ func LoadOrCreateKey(path string) ([]byte, error) {
 	if err == nil {
 		key, derr := hex.DecodeString(strings.TrimSpace(string(raw)))
 		if derr != nil {
-			return nil, fmt.Errorf("解码密钥: %w", derr)
+			return nil, fmt.Errorf(i18n.T("err.key_decode")+": %w", derr)
 		}
 		if len(key) != KeySize {
-			return nil, fmt.Errorf("密钥长度 %d，需要 %d", len(key), KeySize)
+			return nil, fmt.Errorf(i18n.T("err.key_length"), len(key), KeySize)
 		}
 		return key, nil
 	}
@@ -62,7 +64,7 @@ func LoadOrCreateKey(path string) ([]byte, error) {
 // 预期：每次 nonce 随机，同一明文输出不同
 func Encrypt(key, plaintext []byte) ([]byte, error) {
 	if len(key) != KeySize {
-		return nil, errors.New("invalid key size")
+		return nil, errors.New(i18n.T("err.crypto_key_size"))
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -93,7 +95,7 @@ func Decrypt(key, blob []byte) ([]byte, error) {
 		return nil, ErrLegacyPlain
 	}
 	if len(key) != KeySize {
-		return nil, errors.New("invalid key size")
+		return nil, errors.New(i18n.T("err.crypto_key_size"))
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -104,7 +106,7 @@ func Decrypt(key, blob []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(blob) < len(magic)+gcm.NonceSize() {
-		return nil, errors.New("blob too short")
+		return nil, errors.New(i18n.T("err.crypto_blob_short"))
 	}
 	nonce := blob[len(magic) : len(magic)+gcm.NonceSize()]
 	ciphertext := blob[len(magic)+gcm.NonceSize():]

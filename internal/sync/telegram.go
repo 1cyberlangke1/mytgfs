@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // metaFetcher 是读取元信息消息所需的最小能力。
@@ -68,7 +70,7 @@ func fetchMetaText(ctx context.Context, api metaFetcher, channelID, accessHash i
 			return msg.Message, nil
 		}
 	}
-	return "", fmt.Errorf("元信息消息 %d 不存在", ref)
+	return "", fmt.Errorf(i18n.T("err.meta_msg_missing"), ref)
 }
 
 // messagesOf 把 MessagesMessagesClass 的三种形态摊平成消息列表。

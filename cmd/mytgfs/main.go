@@ -186,8 +186,8 @@ func runAuth(sub string) {
 // runChannelCreate 创建频道，可选把 bot 设为管理员。
 func runChannelCreate(args []string) {
 	fs := flag.NewFlagSet("channel create", flag.ExitOnError)
-	name := fs.String("name", "mytgfs", "channel title")
-	bot := fs.String("bot", "", "optional bot username")
+	name := fs.String("name", "mytgfs", i18n.T("cli.flag.channel_title"))
+	bot := fs.String("bot", "", i18n.T("cli.flag.bot_optional"))
 	_ = fs.Parse(args)
 
 	apiID, apiHash := loadAPI()
@@ -256,7 +256,7 @@ func runChannelList(args []string) {
 		return nil
 	})
 	if err != nil {
-		failErr("列出频道失败", err)
+		failErr(i18n.T("err.list_channels"), err)
 	}
 	ui.Print(map[string]any{"channels": out})
 }
@@ -265,11 +265,11 @@ func runChannelList(args []string) {
 func runChannelAdd(args []string) {
 	fs := flag.NewFlagSet("channel add", flag.ExitOnError)
 	channelID := fs.Int64("channel", 0, "channel id")
-	bot := fs.String("bot", "", "bot username")
+	bot := fs.String("bot", "", i18n.T("cli.flag.bot"))
 	_ = fs.Parse(args)
 
 	if *channelID == 0 || *bot == "" {
-		fatal("需要 --channel 和 --bot")
+		fatal(i18n.T("err.need_channel_bot"))
 	}
 	apiID, apiHash := loadAPI()
 	key, err := crypto.LoadOrCreateKey("secrets/session.key")
@@ -291,7 +291,7 @@ func runChannelAdd(args []string) {
 		return err
 	})
 	if err != nil {
-		failErr("添加 bot 失败", err)
+		failErr(i18n.T("err.add_bot"), err)
 	}
 	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
@@ -299,8 +299,8 @@ func runChannelAdd(args []string) {
 // runChannelInit 建频道并给 bot 提权（等价 channel create --bot）。
 func runChannelInit(args []string) {
 	fs := flag.NewFlagSet("channel init", flag.ExitOnError)
-	name := fs.String("name", "mytgfs", "channel title")
-	botUsername := fs.String("bot", "", "bot username without @")
+	name := fs.String("name", "mytgfs", i18n.T("cli.flag.channel_title"))
+	botUsername := fs.String("bot", "", i18n.T("cli.flag.bot_no_at"))
 	_ = fs.Parse(args)
 
 	if *botUsername == "" {
@@ -356,14 +356,14 @@ func resolveVolumeName(cfg config.Config, name string) string {
 //	--backfill 走 messages.getHistory（user-only），用于首次深挖旧文件
 func runSync(args []string) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
-	limit := fs.Int("limit", 100, "每轮事件上限 / 回填条数")
-	name := fs.String("name", "", "volume name（空则取第一个卷）")
-	backfill := fs.Bool("backfill", false, "用 user 会话回填历史消息")
+	limit := fs.Int("limit", 100, i18n.T("cli.flag.limit_sync"))
+	name := fs.String("name", "", i18n.T("cli.flag.volume"))
+	backfill := fs.Bool("backfill", false, i18n.T("cli.flag.backfill"))
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
 	if err != nil {
-		fatal(fmt.Sprintf("读取配置: %v", err))
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
 	volName := resolveVolumeName(cfg, *name)
 	// 同步目标是卷对应的频道；只有完全没有卷配置时才回落到 [telegram].channel_id
@@ -384,7 +384,7 @@ func runSync(args []string) {
 	}
 	idx, err := index.Open(datadir.Path("index-" + volName + ".db"))
 	if err != nil {
-		fatal(fmt.Sprintf("打开索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_open"), err))
 	}
 	defer idx.Close()
 
@@ -409,7 +409,7 @@ func runSync(args []string) {
 			return tgsync.Sync(ctx, idx, f, *limit)
 		})
 		if err != nil {
-			failErr("回填失败", err)
+			failErr(i18n.T("err.backfill"), err)
 		}
 	} else {
 		client := tgclient.New(cfg.Telegram.APIID, apiHash,
@@ -423,19 +423,19 @@ func runSync(args []string) {
 			return serr
 		})
 		if err != nil {
-			failErr("同步失败", err)
+			failErr(i18n.T("err.sync"), err)
 		}
 		if res.Truncated {
-			fmt.Println("警告: 差异过大，只拿到最新消息；可用 --backfill 补历史")
+			fmt.Println(i18n.T("warn.diff_too_long"))
 		}
-		fmt.Printf("PULLED=%d DELETED=%d PTS=%d ROUNDS=%d\n", res.Pulled, res.Deleted, res.Pts, res.Rounds)
+		fmt.Println(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
 	}
 
 	entries, err := idx.List(ctx, "/")
 	if err != nil {
-		fatal(fmt.Sprintf("读取索引: %v", err))
+		fatal(fmt.Sprintf(i18n.T("err.index_read"), err))
 	}
-	fmt.Printf("OK synced, root entries=%d\n", len(entries))
+	fmt.Println(i18n.T("cli.sync_ok", len(entries)))
 }
 
 // runMount 已停用：FUSE/WinFsp 挂载层已移除，改用 WebDAV 挂载。
@@ -458,8 +458,8 @@ func runMount(_ []string) {
 //   - [web].auto_open=false 时不自动开浏览器，只启动服务
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
-	port := fs.Int("port", 0, "port (0 = random)")
-	noOpen := fs.Bool("no-open", false, "do not open browser")
+	port := fs.Int("port", 0, i18n.T("cli.flag.port_random"))
+	noOpen := fs.Bool("no-open", false, i18n.T("cli.flag.no_open"))
 	_ = fs.Parse(args)
 	portSet := false
 	fs.Visit(func(f *flag.Flag) {
@@ -486,7 +486,7 @@ func runWeb(args []string) {
 		_ = ln.Close()
 	}
 	url := "http://" + addr
-	fmt.Println("web:", url)
+	fmt.Println(i18n.T("cli.web_url", url))
 	if !*noOpen && cfg.Web.OpensBrowser() {
 		trayapp.OpenBrowser(url)
 	}
@@ -703,7 +703,7 @@ func loadAPI() (int, string) {
 
 func usage() {
 	if ui.JSONMode() {
-		ui.Error("usage", fmt.Errorf("mytgfs <command> [flags]"))
+		ui.Error("usage", fmt.Errorf("%s", i18n.T("cli.usage_short")))
 		os.Exit(2)
 	}
 	fmt.Fprintln(os.Stderr, i18n.T("cli.usage"))

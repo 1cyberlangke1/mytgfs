@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"mytgfs/internal/i18n"
 )
 
 // ErrUnsupported 表示当前平台不支持开机自启。
-var ErrUnsupported = errors.New("autostart is not supported on this platform")
+var ErrUnsupported = errors.New(i18n.T("err.autostart_unsupported"))
 
 // trayName 是 GUI 托盘二进制的文件名。
 //

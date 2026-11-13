@@ -5,6 +5,8 @@ package channel
 import (
 	"context"
 	"fmt"
+
+	"mytgfs/internal/i18n"
 )
 
 // Add 把 bot 设为已有频道的管理员。
@@ -25,7 +27,7 @@ func Add(ctx context.Context, api API, channelID int64, botUsername string) (*Re
 		}
 	}
 	if target == nil {
-		return nil, fmt.Errorf("当前 user 的频道列表里没有 %d", channelID)
+		return nil, fmt.Errorf(i18n.T("err.channel_not_in_list"), channelID)
 	}
 
 	res := &Result{

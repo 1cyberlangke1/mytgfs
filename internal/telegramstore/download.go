@@ -7,6 +7,8 @@ import (
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 const (
@@ -79,7 +81,7 @@ func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int
 		b = b.WithProgress(func(done, _ int64) { progress(start + done) })
 	}
 	if _, err := b.Parallel(ctx, w); err != nil {
-		return nil, DescribeError(fmt.Errorf("下载 %d..%d: %w", start, end, s.noteErr(err)))
+		return nil, DescribeError(fmt.Errorf(i18n.T("err.download_range")+": %w", start, end, s.noteErr(err)))
 	}
 
 	lo := offset - start

@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // ChannelDiffAPI 是频道增量同步所需的最小 RPC 子集。
@@ -82,7 +84,7 @@ func (d *TelegramChannelDiffer) ChannelDifference(ctx context.Context, pts, limi
 		}
 		return Difference{Pts: newPts, Final: true, TooLong: true, Messages: msgs}, nil
 	}
-	return Difference{}, fmt.Errorf("未知的频道差异类型 %T", res)
+	return Difference{}, fmt.Errorf(i18n.T("err.unknown_diff_type"), res)
 }
 
 // channelOf 解析并缓存 bot 视角的频道。
@@ -115,7 +117,7 @@ func (d *TelegramChannelDiffer) channelOf(ctx context.Context) (*tg.Channel, err
 			return ch, nil
 		}
 	}
-	return nil, fmt.Errorf("频道 %d 不存在或 bot 未加入", d.ChannelID)
+	return nil, fmt.Errorf(i18n.T("err.channel_unavailable"), d.ChannelID)
 }
 
 // convert 批量把 TL 消息转成本包 Message。

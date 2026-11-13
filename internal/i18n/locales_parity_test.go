@@ -1,6 +1,6 @@
 package i18n
 
-// 语言包一致性：中英文键集合必须完全相同，缺键只在运行时才发现太晚。
+// 语言包一致性：所有语言包的键集合必须与 en 完全相同，缺键只在运行时才发现太晚。
 
 import (
 	"encoding/json"
@@ -24,41 +24,66 @@ func loadLocaleFile(t *testing.T, tag string) map[string]string {
 	return m
 }
 
-// TestLocalesParity 两个语言包键集合完全一致且没有空值。
-func TestLocalesParity(t *testing.T) {
-	zh := loadLocaleFile(t, "zh-CN")
-	en := loadLocaleFile(t, "en")
+// localeFiles 列出 locales/ 下所有语言包标签（去掉 .json）。
+func localeFiles(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir("locales")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tags []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		tags = append(tags, strings.TrimSuffix(e.Name(), ".json"))
+	}
+	return tags
+}
 
-	for k := range zh {
-		if _, ok := en[k]; !ok {
-			t.Errorf("en 缺少键 %q", k)
+// TestLocalesParity 每个语言包的键集合与 en 完全一致，且没有空值。
+func TestLocalesParity(t *testing.T) {
+	tags := localeFiles(t)
+	if len(tags) < 2 {
+		t.Fatalf("语言包数量 = %d，至少需要 en 与一种翻译", len(tags))
+	}
+	en := loadLocaleFile(t, "en")
+	for tag := range en {
+		if en[tag] == "" {
+			t.Errorf("en.%s 为空", tag)
 		}
 	}
-	for k := range en {
-		if _, ok := zh[k]; !ok {
-			t.Errorf("zh-CN 缺少键 %q", k)
+	for _, locale := range tags {
+		m := loadLocaleFile(t, locale)
+		for k := range en {
+			if _, ok := m[k]; !ok {
+				t.Errorf("%s 缺少键 %q", locale, k)
+			}
 		}
-	}
-	for tag, m := range map[string]map[string]string{"zh-CN": zh, "en": en} {
-		for k, v := range m {
-			if v == "" {
-				t.Errorf("%s.%s 为空", tag, k)
+		for k := range m {
+			if _, ok := en[k]; !ok {
+				t.Errorf("%s 多出键 %q", locale, k)
+			}
+			if m[k] == "" {
+				t.Errorf("%s.%s 为空", locale, k)
 			}
 		}
 	}
 }
 
-// TestPlaceholdersMatch 同一条文案里的 %s/%d/{pct} 占位符数量要一致。
+// TestPlaceholdersMatch 同一条文案里的 %s/%d/%v/{pct} 占位符数量要一致。
 func TestPlaceholdersMatch(t *testing.T) {
-	zh := loadLocaleFile(t, "zh-CN")
 	en := loadLocaleFile(t, "en")
-	for k, zv := range zh {
-		ev, ok := en[k]
-		if !ok {
-			continue
-		}
-		if countVerb(zv) != countVerb(ev) || countToken(zv, "{pct}") != countToken(ev, "{pct}") {
-			t.Errorf("%s 占位符不一致: zh=%q en=%q", k, zv, ev)
+	for _, locale := range localeFiles(t) {
+		m := loadLocaleFile(t, locale)
+		for k, v := range m {
+			ev, ok := en[k]
+			if !ok {
+				continue
+			}
+			if countVerb(v) != countVerb(ev) || countToken(v, "{pct}") != countToken(ev, "{pct}") {
+				t.Errorf("%s.%s 占位符不一致: %q vs en=%q", locale, k, v, ev)
+			}
 		}
 	}
 }

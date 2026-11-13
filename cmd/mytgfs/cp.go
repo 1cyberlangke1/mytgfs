@@ -39,9 +39,9 @@ import (
 // runCopy 处理频道内复制。
 func runCopy(args []string) {
 	fs := flag.NewFlagSet("cp", flag.ExitOnError)
-	name := fs.String("name", "", "volume name（空则用第一个卷）")
-	to := fs.String("to", "", "目标卷名，留空表示同一卷")
-	force := fs.Bool("force", false, "覆盖目标路径上已有的文件")
+	name := fs.String("name", "", i18n.T("cli.flag.volume"))
+	to := fs.String("to", "", i18n.T("cli.flag.to"))
+	force := fs.Bool("force", false, i18n.T("cli.flag.force"))
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		usage()

@@ -56,10 +56,11 @@ func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolum
 		}
 	}
 	return map[string]any{
-		"state":     i18n.T("web.state_local"),
-		"auth":      "ok",
-		"volumes":   list,
-		"transfers": xfers,
-		"queue":     queued,
+		"state":      i18n.T("web.state_local"),
+		"state_code": "local",
+		"auth":       "ok",
+		"volumes":    list,
+		"transfers":  xfers,
+		"queue":      queued,
 	}
 }

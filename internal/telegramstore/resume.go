@@ -255,7 +255,7 @@ func (s *Store) saveResume(key string, r *UploadResume, done map[int]bool) {
 	}
 	r.Done = slices.Sorted(maps.Keys(done))
 	if err := s.resumeStore.Save(key, r); err != nil {
-		slog.Debug("保存上传断点失败", "err", err)
+		slog.Debug(i18n.T("log.resume_save"), "err", err)
 	}
 }
 
@@ -265,7 +265,7 @@ func (s *Store) clearResume(key string) {
 		return
 	}
 	if err := s.resumeStore.Clear(key); err != nil {
-		slog.Debug("删除上传断点失败", "err", err)
+		slog.Debug(i18n.T("log.resume_delete"), "err", err)
 	}
 }
 

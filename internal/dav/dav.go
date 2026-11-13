@@ -763,7 +763,7 @@ func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error
 			reused = true
 		} else {
 			// 复用失败（引用过期、对端异常）不影响正确性：回退成正常上传
-			slog.Debug("去重复用失败，回退上传", "path", name, "src", hit.Path, "err", cerr)
+			slog.Debug(i18n.T("log.dedup_fallback"), "path", name, "src", hit.Path, "err", cerr)
 		}
 	}
 	upload := func(uploadCtx context.Context) error {
@@ -830,11 +830,11 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	}
 	if hadOld && old.MessageID > 0 && old.MessageID != part.MessageID {
 		if derr := f.d.store.Delete(ctx, old.MessageID); derr != nil {
-			slog.Debug("删除被覆盖的旧消息失败", "path", name, "msg", old.MessageID, "err", derr)
+			slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.MessageID, "err", derr)
 		}
 	}
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
-		slog.Debug("清理已上传记账失败（下次补索引幂等）", "path", name, "err", err)
+		slog.Debug(i18n.T("log.cleanup_acked"), "path", name, "err", err)
 	}
 	return nil
 }
@@ -899,7 +899,7 @@ func (f *file) Read(p []byte) (int, error) {
 		if err != nil {
 			// 消息在 Telegram 侧被删了：索引里这条已经没有意义，删掉并按文件不存在处理
 			if telegramstore.IsMessageGone(err) {
-				slog.Debug("远端消息已被删除，清理索引", "path", f.name, "msg", f.entry.MessageID)
+				slog.Debug(i18n.T("log.remote_gone"), "path", f.name, "msg", f.entry.MessageID)
 				_ = f.d.idx.Delete(f.d.ctx, f.name)
 				return 0, os.ErrNotExist
 			}

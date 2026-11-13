@@ -4,9 +4,12 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // Result 是频道初始化结果。
@@ -39,12 +42,12 @@ func Init(ctx context.Context, api API, botUsername, title string) (*Result, err
 func extractChannel(u tg.UpdatesClass) (*tg.Channel, error) {
 	upd, ok := u.(*tg.Updates)
 	if !ok {
-		return nil, fmt.Errorf("createChannel 返回类型 %T", u)
+		return nil, fmt.Errorf(i18n.T("err.create_channel_type"), u)
 	}
 	for _, c := range upd.Chats {
 		if ch, ok := c.(*tg.Channel); ok {
 			return ch, nil
 		}
 	}
-	return nil, fmt.Errorf("createChannel 返回里没有 channel")
+	return nil, errors.New(i18n.T("err.create_channel_no_channel"))
 }

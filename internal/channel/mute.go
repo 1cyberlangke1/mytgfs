@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // muteForever 是 Telegram 的永久静音标记（0x7FFFFFFF）。
@@ -32,7 +34,7 @@ func MuteForever(ctx context.Context, api API, res *Result) error {
 		},
 		Settings: settings,
 	}); err != nil {
-		return fmt.Errorf("关闭频道通知: %w", err)
+		return fmt.Errorf(i18n.T("err.mute_channel")+": %w", err)
 	}
 	return nil
 }

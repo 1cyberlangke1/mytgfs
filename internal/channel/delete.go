@@ -7,9 +7,12 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // ResolveAPI 是解析频道需要的最小接口。
@@ -46,7 +49,7 @@ func Resolve(ctx context.Context, api ResolveAPI, channelID int64) (*Result, err
 			return &Result{ChannelID: ch.ID, AccessHash: ch.AccessHash, Title: ch.Title}, nil
 		}
 	}
-	return nil, fmt.Errorf("频道 %d 不存在或无权访问", channelID)
+	return nil, fmt.Errorf(i18n.T("err.channel_missing"), channelID)
 }
 
 // Delete 永久删除频道及其全部消息。
@@ -56,7 +59,7 @@ func Resolve(ctx context.Context, api ResolveAPI, channelID int64) (*Result, err
 // 预期：不可逆；只能由频道创建者或管理员调用
 func Delete(ctx context.Context, api DeleteAPI, res *Result) error {
 	if res == nil || res.ChannelID == 0 {
-		return fmt.Errorf("频道 id 不能为空")
+		return errors.New(i18n.T("err.channel_id_empty"))
 	}
 	if _, err := api.ChannelsDeleteChannel(ctx, &tg.InputChannel{
 		ChannelID:  res.ChannelID,

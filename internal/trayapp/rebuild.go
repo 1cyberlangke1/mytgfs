@@ -11,6 +11,7 @@ import (
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
@@ -40,7 +41,7 @@ func RebuildIndexIfEmpty(ctx context.Context, cfg config.Config, idx *index.Inde
 		return nil
 	}
 	if _, serr := os.Stat(userSessionPath); serr != nil {
-		slog.Info("索引为空，但没有 user 会话，跳过自动重建")
+		slog.Info(i18n.T("log.rebuild_skipped"))
 		return nil
 	}
 	key, err := crypto.LoadOrCreateKey("secrets/session.key")
@@ -64,6 +65,6 @@ func RebuildIndexIfEmpty(ctx context.Context, cfg config.Config, idx *index.Inde
 	if err != nil {
 		return err
 	}
-	slog.Info("索引已按频道历史重建", "channel", channelID, "messages", total)
+	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID, "messages", total)
 	return nil
 }

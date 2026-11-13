@@ -40,8 +40,8 @@ type checkOutput struct {
 // 预期：--fix 删除缺失行、按 caption 修正路径；不加时只报告
 func runCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	name := fs.String("name", "", "卷名（空则用第一个卷）")
-	fix := fs.Bool("fix", false, "按核对结果修复索引")
+	name := fs.String("name", "", i18n.T("cli.flag.volume"))
+	fix := fs.Bool("fix", false, i18n.T("cli.flag.fix"))
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")

@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"mytgfs/internal/eventbus"
+	"mytgfs/internal/i18n"
 )
 
 // handleEvents 维持一条 SSE 连接。
@@ -22,12 +23,12 @@ import (
 func handleEvents(bus *eventbus.Bus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if bus == nil {
-			http.Error(w, "events unavailable", http.StatusNotImplemented)
+			http.Error(w, i18n.T("err.http_events_unavailable"), http.StatusNotImplemented)
 			return
 		}
 		fl, ok := w.(http.Flusher)
 		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			http.Error(w, i18n.T("err.http_stream_unsupported"), http.StatusInternalServerError)
 			return
 		}
 		h := w.Header()

@@ -33,8 +33,8 @@ import (
 // runWebDAV 启动 WebDAV 服务。
 func runWebDAV(args []string) {
 	fs := flag.NewFlagSet("webdav", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "监听地址")
-	name := fs.String("name", "", "卷名（空则用第一个卷）")
+	addr := fs.String("addr", "127.0.0.1:8080", i18n.T("cli.flag.addr_webdav"))
+	name := fs.String("name", "", i18n.T("cli.flag.volume"))
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load("config.toml")
@@ -107,7 +107,7 @@ func runWebDAV(args []string) {
 		return nil
 	})
 	if err != nil {
-		failErr("webdav 失败", err)
+		failErr(i18n.T("err.webdav_prefix"), err)
 	}
 }
 
@@ -119,7 +119,7 @@ func runWebDAV(args []string) {
 // 预期：只删与本服务地址匹配的映射，其它盘符不动
 func runUnmap(args []string) {
 	fs := flag.NewFlagSet("unmap", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "服务地址")
+	addr := fs.String("addr", "127.0.0.1:8080", i18n.T("cli.flag.addr"))
 	_ = fs.Parse(args)
 	netmap.Cleanup(*addr)
 	fmt.Println(i18n.T("dav.cleanup_done", *addr))

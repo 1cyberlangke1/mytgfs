@@ -23,14 +23,15 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 )
 
 var (
 	// ErrBadPath 表示路径越界或指向卷根，不允许操作。
-	ErrBadPath = errors.New("invalid path")
+	ErrBadPath = errors.New(i18n.T("err.fm_bad_path"))
 	// ErrExists 表示目标已存在，不静默覆盖。
-	ErrExists = errors.New("target already exists")
+	ErrExists = errors.New(i18n.T("err.fm_exists"))
 )
 
 // Entry 是一条目录项。

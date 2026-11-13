@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // Create 创建一个私有广播频道。
@@ -21,7 +23,7 @@ func Create(ctx context.Context, api API, title string) (*Result, error) {
 		About:     "mytgfs storage",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("建频道: %w", err)
+		return nil, fmt.Errorf(i18n.T("err.create_channel")+": %w", err)
 	}
 	ch, err := extractChannel(updates)
 	if err != nil {
@@ -44,7 +46,7 @@ func AddBot(ctx context.Context, api API, res *Result, botUsername string) (int6
 		Username: botUsername,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("解析 bot: %w", err)
+		return 0, fmt.Errorf(i18n.T("err.resolve_bot")+": %w", err)
 	}
 	var bot *tg.User
 	for _, u := range resolved.Users {
@@ -54,7 +56,7 @@ func AddBot(ctx context.Context, api API, res *Result, botUsername string) (int6
 		}
 	}
 	if bot == nil {
-		return 0, fmt.Errorf("找不到 bot %s", botUsername)
+		return 0, fmt.Errorf(i18n.T("err.bot_not_found"), botUsername)
 	}
 
 	rights := tg.ChatAdminRights{
@@ -73,7 +75,7 @@ func AddBot(ctx context.Context, api API, res *Result, botUsername string) (int6
 		UserID:      &tg.InputUser{UserID: bot.ID, AccessHash: bot.AccessHash},
 		AdminRights: rights,
 	}); err != nil {
-		return 0, fmt.Errorf("给 bot 提权: %w", err)
+		return 0, fmt.Errorf(i18n.T("err.promote_bot")+": %w", err)
 	}
 	return bot.ID, nil
 }

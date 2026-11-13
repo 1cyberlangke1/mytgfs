@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/trayapp"
 )
 
@@ -15,8 +16,8 @@ import (
 // 预期：挂载、自动同步、按需面板都由 trayapp 负责
 func runTray(args []string) {
 	fs := flag.NewFlagSet("tray", flag.ExitOnError)
-	port := fs.Int("port", 8720, "web panel port")
-	point := fs.String("point", "", "mount point")
+	port := fs.Int("port", 8720, i18n.T("cli.flag.web_port"))
+	point := fs.String("point", "", i18n.T("cli.flag.mount_point"))
 	_ = fs.Parse(args)
 
 	if err := trayapp.Run(trayapp.Options{

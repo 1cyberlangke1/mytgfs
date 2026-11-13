@@ -8,10 +8,12 @@ package volume
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"mytgfs/internal/channel"
+	"mytgfs/internal/i18n"
 )
 
 // Request 是建卷参数。
@@ -45,10 +47,10 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 	req.Title = strings.TrimSpace(req.Title)
 	req.BotUsername = strings.TrimPrefix(strings.TrimSpace(req.BotUsername), "@")
 	if req.Name == "" {
-		return Result{}, fmt.Errorf("卷名不能为空")
+		return Result{}, errors.New(i18n.T("err.volume_name_empty"))
 	}
 	if req.BotUsername == "" {
-		return Result{}, fmt.Errorf("bot 用户名不能为空")
+		return Result{}, errors.New(i18n.T("err.bot_username_empty"))
 	}
 	if req.Title == "" {
 		req.Title = req.Name
@@ -68,7 +70,7 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 
 	botID, err := channel.AddBot(ctx, api, ch, req.BotUsername)
 	if err != nil {
-		return partial, fmt.Errorf("频道 %d 已创建，但拉 bot 失败: %w", ch.ChannelID, err)
+		return partial, fmt.Errorf(i18n.T("err.channel_created_bot_failed")+": %w", ch.ChannelID, err)
 	}
 	partial.BotID = botID
 

@@ -122,7 +122,7 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 			}
 			switch {
 			case err != nil:
-				fmt.Fprintf(os.Stderr, "自动同步失败: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autosync_failed"), err)
 			case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
 				notify(res.Changed, res.Removed)
 			}
@@ -147,7 +147,7 @@ func Run(opts Options) error {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return fmt.Errorf("读取配置: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("err.config_read"), err)
 	}
 	// 端口优先级：命令行 -port > config.toml [web].port > 默认 8720
 	port := opts.Port
@@ -191,12 +191,15 @@ func Run(opts Options) error {
 	syncSwitch := NewSyncSwitch(cfg.Mount.SyncSeconds >= 0)
 
 	var stateMu sync.Mutex
-	connText := i18n.T("tray.state.starting")
-	setState := func(s string) {
+	// connKey 是状态对应的语言包键，state_code 由它映射；connText 只用于展示
+	connKey := "tray.state.starting"
+	connText := i18n.T(connKey)
+	setState := func(key string) {
+		text := i18n.T(key)
 		stateMu.Lock()
-		connText = s
+		connKey, connText = key, text
 		stateMu.Unlock()
-		tray.SetStatus(s)
+		tray.SetStatus(text)
 	}
 
 	// 授权失效标记：Web 面板据此显示重新登录提示，并禁用写操作
@@ -334,18 +337,18 @@ func Run(opts Options) error {
 			OnConnState: func(s tgclient.ConnState) {
 				switch s {
 				case tgclient.ConnReady:
-					setState(i18n.T("tray.state.connected"))
+					setState("tray.state.connected")
 				case tgclient.ConnConnecting:
-					setState(i18n.T("tray.state.connecting"))
+					setState("tray.state.connecting")
 				default:
-					setState(i18n.T("tray.state.reconnecting"))
+					setState("tray.state.reconnecting")
 				}
 			},
 			OnAuthLost: func(_ context.Context, err error) error {
 				// 会话被吊销只能重新登录；停止 Run，别让连接循环空转
 				authLost.Store(true)
-				setState(i18n.T("tray.state.auth_lost"))
-				fmt.Fprintf(os.Stderr, "会话失效: %v\n", err)
+				setState("tray.state.auth_lost")
+				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.session_invalid"), err)
 				return err
 			},
 		})
@@ -378,6 +381,7 @@ func Run(opts Options) error {
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
 				st := connText
+				code := stateCode(connKey)
 				stateMu.Unlock()
 				volMu.Lock()
 				vs := append([]*trayVolume(nil), volumes...)
@@ -425,7 +429,7 @@ func Run(opts Options) error {
 					}
 				}
 				return map[string]any{
-					"state": st, "auth": auth, "volumes": list,
+					"state": st, "state_code": code, "auth": auth, "volumes": list,
 					"transfers": xfers, "queue": queued,
 				}, nil
 			},
@@ -583,7 +587,7 @@ func Run(opts Options) error {
 		}
 		idx, oerr := index.Open(datadir.Path("index-" + name + ".db"))
 		if oerr != nil {
-			fmt.Fprintf(os.Stderr, "打开索引 %s: %v\n", name, oerr)
+			fmt.Fprintf(os.Stderr, "%s %s: %v\n", i18n.T("log.index_open_failed"), name, oerr)
 			return
 		}
 		// 索引是缓存，丢了用 user 会话按频道历史重建
@@ -690,20 +694,20 @@ func Run(opts Options) error {
 		}
 		if tgclient.IsAuthLost(rerr) {
 			authLost.Store(true)
-			setState(i18n.T("tray.state.auth_lost"))
-			fmt.Fprintf(os.Stderr, "凭据失效: %v\n", rerr)
+			setState("tray.state.auth_lost")
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.auth_lost"), rerr)
 			return
 		}
 		// 其它永久错误（app id 无效等）无法自愈，保持托盘可退出
-		setState(i18n.T("tray.state.reconnecting"))
-		fmt.Fprintf(os.Stderr, "Telegram 连接结束: %v\n", rerr)
+		setState("tray.state.reconnecting")
+		fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.conn_closed"), rerr)
 	})
 
 	// 开机自启：状态以系统注册项为准，默认关闭
 	autoOn, aerr := autostart.Enabled()
 	if aerr != nil {
 		autoOn = false
-		fmt.Fprintf(os.Stderr, "读取开机自启状态失败: %v\n", aerr)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_read_failed"), aerr)
 	}
 	exePath, exeErr := os.Executable()
 
@@ -741,7 +745,7 @@ func Run(opts Options) error {
 			return nil
 		},
 		Quit: func() {
-			setState(i18n.T("tray.state.unmounted"))
+			setState("tray.state.unmounted")
 			// 先停 WebDAV 再卸卷，避免客户端读到已关闭的索引
 			_ = stopDAV()
 			unmountAll()
@@ -839,4 +843,26 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%d %s", n, units[i])
 	}
 	return fmt.Sprintf("%.1f %s", f, units[i])
+}
+
+// stateCode 把托盘状态语言包键映射成机器可读代码。
+//
+// 输入：key 形如 tray.state.connected
+// 输出：online / connecting / reconnecting / auth_lost / unmounted / starting
+// 预期：面板按代码决定状态条颜色，不再匹配翻译后的文本
+func stateCode(key string) string {
+	switch key {
+	case "tray.state.connected":
+		return "online"
+	case "tray.state.connecting":
+		return "connecting"
+	case "tray.state.reconnecting":
+		return "reconnecting"
+	case "tray.state.auth_lost":
+		return "auth_lost"
+	case "tray.state.unmounted":
+		return "unmounted"
+	default:
+		return "starting"
+	}
 }

@@ -16,6 +16,8 @@ import (
 	"math/rand"
 
 	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/i18n"
 )
 
 // Copy 在频道内复制已有文件，不传输文件内容。
@@ -62,7 +64,7 @@ func (s *Store) copyWithRefresh(ctx context.Context, ref *Store, src *Part, name
 	}
 	np, rerr := ref.Refresh(ctx, src.MessageID)
 	if rerr != nil {
-		return nil, nil, fmt.Errorf("复制前刷新 file_reference: %w", rerr)
+		return nil, nil, fmt.Errorf(i18n.T("err.copy_refresh")+": %w", rerr)
 	}
 	part, err = s.sendDocRef(ctx, peer, np, name, mime, caption)
 	return part, np, err

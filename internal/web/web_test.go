@@ -188,23 +188,25 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
-// TestPillKind 状态条配色判定。
+// TestPillKind 状态条配色判定只看机器代码，不看翻译文本。
 func TestPillKind(t *testing.T) {
 	cases := []struct {
-		state string
-		lost  bool
-		want  string
+		code string
+		lost bool
+		want string
 	}{
-		{"已连接", false, "ok"},
-		{"连接中", false, "ok"},
-		{"重连中", false, "warn"},
+		{"online", false, "ok"},
+		{"connecting", false, "ok"},
+		{"local", false, "ok"},
+		{"reconnecting", false, "warn"},
 		{"disconnected", false, "warn"},
-		{"已连接", true, "bad"},
+		{"online", true, "bad"},
+		{"auth_lost", false, "bad"},
 		{"", false, ""},
 	}
 	for _, c := range cases {
-		if got := pillKind(c.state, c.lost); got != c.want {
-			t.Errorf("pillKind(%q,%v) = %q，期望 %q", c.state, c.lost, got, c.want)
+		if got := pillKind(c.code, c.lost); got != c.want {
+			t.Errorf("pillKind(%q,%v) = %q，期望 %q", c.code, c.lost, got, c.want)
 		}
 	}
 }
@@ -214,8 +216,9 @@ func TestViewOfNormalizes(t *testing.T) {
 	l := pageLabels{NoInstance: "无实例", Entries: "条目", Xfer: "下载中"}
 
 	tray := map[string]any{
-		"state": "已连接",
-		"auth":  "ok",
+		"state":      "已连接",
+		"state_code": "online",
+		"auth":       "ok",
 		"volumes": []any{
 			map[string]any{"name": "demo", "entries": 3, "used": 4096},
 			map[string]any{"name": "demo2", "entries": 2, "used": 1024},
@@ -241,8 +244,9 @@ func TestViewOfNormalizes(t *testing.T) {
 func TestFragStatusSwapsOOB(t *testing.T) {
 	status := func(context.Context) (any, error) {
 		return map[string]any{
-			"state": "已连接",
-			"auth":  "ok",
+			"state":      "已连接",
+			"state_code": "online",
+			"auth":       "ok",
 			"volumes": []any{
 				map[string]any{"name": "demo", "entries": 3, "used": 4096},
 			},

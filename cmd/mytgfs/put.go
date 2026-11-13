@@ -50,8 +50,8 @@ type putItem struct {
 // runPut 处理批量上传。
 func runPut(args []string) {
 	fs := flag.NewFlagSet("put", flag.ExitOnError)
-	name := fs.String("name", "", "volume name（空则用第一个卷）")
-	remote := fs.String("remote", "/", "remote base directory")
+	name := fs.String("name", "", i18n.T("cli.flag.volume"))
+	remote := fs.String("remote", "/", i18n.T("cli.flag.remote_base"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		usage()
@@ -173,7 +173,7 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, i
 			part = p
 		} else {
 			// 复用失败（引用过期、对端异常）不影响正确性：回退成正常上传
-			slog.Debug("put 去重复用失败，回退上传", "path", it.remote, "src", hit.Path, "err", cerr)
+			slog.Debug(i18n.T("log.dedup_fallback"), "path", it.remote, "src", hit.Path, "err", cerr)
 		}
 	}
 	if part == nil {

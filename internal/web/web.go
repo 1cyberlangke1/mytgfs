@@ -561,9 +561,10 @@ type msgData struct {
 //
 // 卷统计、下载进度、上传队列都由状态提供方填充；缺字段按零值处理。
 type rawStatus struct {
-	State   string `json:"state"`
-	Auth    string `json:"auth"`
-	Volumes []struct {
+	State     string `json:"state"`
+	StateCode string `json:"state_code"`
+	Auth      string `json:"auth"`
+	Volumes   []struct {
 		Name    string `json:"name"`
 		Entries int64  `json:"entries"`
 		Used    int64  `json:"used"`
@@ -598,7 +599,7 @@ func viewOf(v any, l pageLabels) statusView {
 	}
 	view.State = rs.State
 	view.AuthLost = rs.Auth == "lost"
-	view.Kind = pillKind(rs.State, view.AuthLost)
+	view.Kind = pillKind(rs.StateCode, view.AuthLost)
 	for _, vol := range rs.Volumes {
 		view.Volumes = append(view.Volumes, volumeView{Name: vol.Name, Entries: vol.Entries, Used: vol.Used})
 		view.TotalFiles += vol.Entries
@@ -619,20 +620,17 @@ func viewOf(v any, l pageLabels) statusView {
 
 // pillKind 决定状态条的颜色语义。
 //
-// 输入：state 状态文本；lost 凭证是否失效
+// 输入：code 状态代码（online / connecting / reconnecting / auth_lost / ...）；lost 凭证是否失效
 // 输出：ok / warn / bad / 空串
-// 预期：凭证失效最优先，其次重连中，最后才是已连接
-func pillKind(state string, lost bool) string {
-	if lost {
+// 预期：只看机器可读代码，不匹配翻译后的文本；未知代码保持无色
+func pillKind(code string, lost bool) string {
+	if lost || code == "auth_lost" {
 		return "bad"
 	}
-	lower := strings.ToLower(state)
-	switch {
-	case strings.Contains(lower, "reconnect"), strings.Contains(lower, "disconnect"),
-		strings.Contains(state, "重连"), strings.Contains(state, "断开"):
+	switch code {
+	case "reconnecting", "disconnected":
 		return "warn"
-	case strings.Contains(lower, "connect"), strings.Contains(lower, "ready"),
-		strings.Contains(state, "连接"):
+	case "online", "connecting", "starting", "local", "unmounted":
 		return "ok"
 	}
 	return ""

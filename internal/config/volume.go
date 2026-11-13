@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	"github.com/natefinch/atomic"
+
+	"mytgfs/internal/i18n"
 )
 
 // ErrVolumeExists 表示配置里已经有同名卷（忽略大小写）。
-var ErrVolumeExists = errors.New("volume already exists")
+var ErrVolumeExists = errors.New(i18n.T("err.sentinel_volume_exists"))
 
 // AppendVolume 在配置文件末尾追加一个 [[volumes]] 条目。
 //
@@ -25,10 +27,10 @@ var ErrVolumeExists = errors.New("volume already exists")
 func AppendVolume(path string, v Volume) error {
 	name := strings.TrimSpace(v.Name)
 	if name == "" {
-		return fmt.Errorf("卷名不能为空")
+		return errors.New(i18n.T("err.volume_name_empty"))
 	}
 	if strings.ContainsAny(name, "\r\n") {
-		return fmt.Errorf("卷名不能包含换行")
+		return errors.New(i18n.T("err.volume_name_newline"))
 	}
 
 	existing, err := Load(path)
@@ -66,7 +68,7 @@ func AppendVolume(path string, v Volume) error {
 }
 
 // ErrVolumeNotFound 表示配置里没有这个卷。
-var ErrVolumeNotFound = errors.New("volume not found")
+var ErrVolumeNotFound = errors.New(i18n.T("err.sentinel_volume_not_found"))
 
 // RemoveVolume 从配置文件里删除指定名字的 [[volumes]] 整段。
 //
@@ -76,7 +78,7 @@ var ErrVolumeNotFound = errors.New("volume not found")
 func RemoveVolume(path, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("卷名不能为空")
+		return errors.New(i18n.T("err.volume_name_empty"))
 	}
 
 	old, err := os.ReadFile(path)
