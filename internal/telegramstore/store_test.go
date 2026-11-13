@@ -28,6 +28,12 @@ type fakeAPI struct {
 	getFile      []*tg.UploadGetFileRequest
 	getMessages  []*tg.ChannelsGetMessagesRequest
 
+	// texts 保存当前「频道」里的文本消息正文，供 dirent 用例读写回放。
+	texts map[int]string
+	// pinned 是频道置顶消息号；pinCalls 记录置顶调用次数。
+	pinned   int
+	pinCalls int
+
 	// getMessagesRes/getMessagesErr 控制 ChannelsGetMessages 的返回，供 Refresh 测试使用。
 	getMessagesRes tg.MessagesMessagesClass
 	getMessagesErr error
@@ -51,7 +57,7 @@ type fakeAPI struct {
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{nextID: 100, fileData: []byte("0123456789"), partErrOnceAt: -1}
+	return &fakeAPI{nextID: 100, fileData: []byte("0123456789"), partErrOnceAt: -1, texts: map[int]string{}}
 }
 
 func (f *fakeAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClass) (tg.MessagesChatsClass, error) {
@@ -93,6 +99,7 @@ func (f *fakeAPI) MessagesSendMedia(_ context.Context, req *tg.MessagesSendMedia
 func (f *fakeAPI) MessagesSendMessage(_ context.Context, req *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error) {
 	f.sendMessage = append(f.sendMessage, req)
 	f.nextID++
+	f.texts[f.nextID] = req.Message
 	return &tg.Updates{Updates: []tg.UpdateClass{
 		&tg.UpdateNewChannelMessage{Message: &tg.Message{ID: f.nextID}},
 	}}, nil
@@ -100,6 +107,23 @@ func (f *fakeAPI) MessagesSendMessage(_ context.Context, req *tg.MessagesSendMes
 
 func (f *fakeAPI) MessagesEditMessage(_ context.Context, req *tg.MessagesEditMessageRequest) (tg.UpdatesClass, error) {
 	f.editMessage = append(f.editMessage, req)
+	if msg, ok := req.GetMessage(); ok {
+		f.texts[req.ID] = msg
+	}
+	return &tg.Updates{}, nil
+}
+
+func (f *fakeAPI) ChannelsGetFullChannel(context.Context, tg.InputChannelClass) (*tg.MessagesChatFull, error) {
+	full := &tg.ChannelFull{}
+	if f.pinned > 0 {
+		full.SetPinnedMsgID(f.pinned)
+	}
+	return &tg.MessagesChatFull{FullChat: full}, nil
+}
+
+func (f *fakeAPI) MessagesUpdatePinnedMessage(_ context.Context, req *tg.MessagesUpdatePinnedMessageRequest) (tg.UpdatesClass, error) {
+	f.pinCalls++
+	f.pinned = req.ID
 	return &tg.Updates{}, nil
 }
 
@@ -170,6 +194,9 @@ func (f *fakeAPI) UploadGetWebFile(context.Context, *tg.UploadGetWebFileRequest)
 }
 
 // ChannelsGetMessages 记录请求并返回测试预置的消息结果。
+//
+// 未预置结果时按 texts 里的文本消息回放，消息不存在的 id 返回 MessageEmpty，
+// 与 Telegram 对已删消息的行为一致。
 func (f *fakeAPI) ChannelsGetMessages(_ context.Context, req *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -177,7 +204,22 @@ func (f *fakeAPI) ChannelsGetMessages(_ context.Context, req *tg.ChannelsGetMess
 	if f.getMessagesErr != nil {
 		return nil, f.getMessagesErr
 	}
-	return f.getMessagesRes, nil
+	if f.getMessagesRes != nil {
+		return f.getMessagesRes, nil
+	}
+	out := make([]tg.MessageClass, 0, len(req.ID))
+	for _, id := range req.ID {
+		one, ok := id.(*tg.InputMessageID)
+		if !ok {
+			continue
+		}
+		if text, found := f.texts[one.ID]; found {
+			out = append(out, &tg.Message{ID: one.ID, Message: text})
+		} else {
+			out = append(out, &tg.MessageEmpty{ID: one.ID})
+		}
+	}
+	return &tg.MessagesChannelMessages{Messages: out}, nil
 }
 
 // newTestStore 创建关闭限速的 Store，避免单测被 1 秒间隔拖慢。

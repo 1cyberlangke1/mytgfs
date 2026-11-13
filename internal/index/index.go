@@ -113,6 +113,10 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(nodesSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Index{db: db}, nil
 }
 
