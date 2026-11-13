@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,6 +71,40 @@ func SyncInterval(seconds int) time.Duration {
 // 输出：无（ctx 取消时返回）
 // 预期：启动即同步一次；单轮失败只记日志不退出；有变化才回调
 func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex) {
+	AutoSyncWhile(ctx, notify, idx, d, interval, mu, nil)
+}
+
+// SyncSwitch 是自动同步的运行开关。
+//
+// 输入：由托盘菜单切换；nil 等价于常开
+// 输出：On() 当前状态
+// 预期：关掉后只跳过同步，不动卷与索引
+type SyncSwitch struct {
+	on atomic.Bool
+}
+
+// NewSyncSwitch 创建开关并设定初始状态。
+func NewSyncSwitch(on bool) *SyncSwitch {
+	s := &SyncSwitch{}
+	s.on.Store(on)
+	return s
+}
+
+// On 返回当前是否启用。
+func (s *SyncSwitch) On() bool {
+	return s == nil || s.on.Load()
+}
+
+// Set 设置开关状态。
+func (s *SyncSwitch) Set(on bool) {
+	if s != nil {
+		s.on.Store(on)
+	}
+}
+
+// AutoSyncWhile 与 AutoSync 相同，但每轮先问 enabled：
+// 返回 false 时跳过本轮（只等下一个 tick），用于托盘菜单里随时开关。
+func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, interval time.Duration, mu *sync.Mutex, enabled func() bool) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
@@ -80,15 +115,17 @@ func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *
 		return tgsync.SyncChannel(ctx, idx, d, 100)
 	}
 	for {
-		res, err := syncOnce()
-		if ctx.Err() != nil {
-			return
-		}
-		switch {
-		case err != nil:
-			fmt.Fprintf(os.Stderr, "自动同步失败: %v\n", err)
-		case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
-			notify(res.Changed, res.Removed)
+		if enabled == nil || enabled() {
+			res, err := syncOnce()
+			if ctx.Err() != nil {
+				return
+			}
+			switch {
+			case err != nil:
+				fmt.Fprintf(os.Stderr, "自动同步失败: %v\n", err)
+			case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
+				notify(res.Changed, res.Removed)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -107,14 +144,15 @@ func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *
 //	Web 面板只在菜单「打开面板」时启动，「关闭面板」立即停止
 func Run(opts Options) error {
 	cfgPath := cmp.Or(opts.ConfigPath, "config.toml")
-	port := opts.Port
-	if port <= 0 {
-		port = 8720
-	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("读取配置: %w", err)
+	}
+	// 端口优先级：命令行 -port > config.toml [web].port > 默认 8720
+	port := opts.Port
+	if port <= 0 {
+		port = cfg.Web.ListenPort()
 	}
 	point := opts.Point
 	if point == "" {
@@ -148,6 +186,9 @@ func Run(opts Options) error {
 	}
 	var volMu sync.Mutex
 	var volumes []*trayVolume
+
+	// 自动同步总开关：默认跟随配置，托盘菜单可即时开/关并写回 config.toml
+	syncSwitch := NewSyncSwitch(cfg.Mount.SyncSeconds >= 0)
 
 	var stateMu sync.Mutex
 	connText := i18n.T("tray.state.starting")
@@ -577,11 +618,14 @@ func Run(opts Options) error {
 		volMu.Unlock()
 
 		var vwg sync.WaitGroup
-		if interval := SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
-			vwg.Go(func() {
-				AutoSync(vctx, nil, idx, differ, interval, &tv.mu)
-			})
+		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
+		interval := SyncInterval(cfg.Mount.SyncSeconds)
+		if interval <= 0 {
+			interval = SyncInterval(0)
 		}
+		vwg.Go(func() {
+			AutoSyncWhile(vctx, nil, idx, differ, interval, &tv.mu, syncSwitch.On)
+		})
 
 		mu.Lock()
 		cancels = append(cancels, vcancel)
@@ -666,7 +710,9 @@ func Run(opts Options) error {
 	actions := tray.Actions{
 		OpenWeb: func() {
 			addr := startWeb()
-			OpenBrowser("http://" + addr)
+			if cfg.Web.OpensBrowser() {
+				OpenBrowser("http://" + addr)
+			}
 		},
 		CloseWeb:         stopWeb,
 		AutostartEnabled: autoOn,
@@ -679,8 +725,21 @@ func Run(opts Options) error {
 			}
 			return autostart.Disable()
 		},
-		WebDAVEnabled: davState().Enabled,
-		SetWebDAV:     setDAV,
+		WebDAVEnabled:   davState().Enabled,
+		SetWebDAV:       setDAV,
+		AutoSyncEnabled: syncSwitch.On(),
+		SetAutoSync: func(on bool) error {
+			// 写回配置：打开用默认 15s，关闭写 -1
+			secs := 0
+			if !on {
+				secs = -1
+			}
+			if werr := config.SetKey(cfgPath, "mount.sync_seconds", strconv.Itoa(secs)); werr != nil {
+				return werr
+			}
+			syncSwitch.Set(on)
+			return nil
+		},
 		Quit: func() {
 			setState(i18n.T("tray.state.unmounted"))
 			// 先停 WebDAV 再卸卷，避免客户端读到已关闭的索引
@@ -690,6 +749,53 @@ func Run(opts Options) error {
 			rootCancel()
 		},
 	}
+
+	// 托盘悬浮提示：状态 + 每卷占用 + 正在跑的任务，每 5 秒刷新
+	tooltipText := func() string {
+		stateMu.Lock()
+		st := connText
+		stateMu.Unlock()
+		lines := []string{st}
+		volMu.Lock()
+		vs := append([]*trayVolume(nil), volumes...)
+		volMu.Unlock()
+		var downloads, queued int
+		for _, v := range vs {
+			if entries, lerr := v.idx.List(rootCtx, "/"); lerr == nil {
+				used, _ := v.idx.Used(rootCtx)
+				lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol"), v.name, len(entries), humanBytes(used)))
+			}
+			if v.davfs == nil {
+				continue
+			}
+			downloads += len(v.davfs.Transfers())
+			if q := v.davfs.Queue(); q != nil {
+				queued += q.Pending()
+			}
+		}
+		if downloads > 0 || queued > 0 {
+			lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.tasks"), downloads, queued))
+		}
+		if syncSwitch.On() {
+			lines = append(lines, i18n.T("tray.tip.sync_on"))
+		} else {
+			lines = append(lines, i18n.T("tray.tip.sync_off"))
+		}
+		return strings.Join(lines, "\n")
+	}
+	wg.Go(func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			tray.SetTooltip(tooltipText())
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	})
+
 	if tray.Supported() {
 		tray.Run(actions, connText)
 	} else {
@@ -714,4 +820,23 @@ func Run(opts Options) error {
 	case <-time.After(5 * time.Second):
 	}
 	return nil
+}
+
+// humanBytes 把字节数格式化成 1 位小数的可读单位。
+//
+// 输入：n 字节数
+// 输出：如 "159.1 MB"
+// 预期：1024 进制，与面板的占用显示一致
+func humanBytes(n int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	f := float64(n)
+	i := 0
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%d %s", n, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", f, units[i])
 }

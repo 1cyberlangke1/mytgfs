@@ -1,5 +1,5 @@
 {
-  "cli.usage": "Usage:\n  mytgfs version    print version and runtime (supports --json)\n  mytgfs auth bot    log in with a bot token\n  mytgfs auth user   log in with a phone number (code at runtime)\n  mytgfs channel init --bot <username>  create private channel and grant bot admin\n  mytgfs volume create --name <name>  create a volume, invite bot, mute notifications\n  mytgfs volume delete --name <name>  delete the volume's channel and local index\n  mytgfs volume check  verify every volume channel is still usable\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name volume]  start the WebDAV server\n  mytgfs unmap --addr 127.0.0.1:8080  remove network mappings pointing at this server\n  mytgfs cp [--name volume] [--to target] [--force] <src> <dst>  reference-copy a file\n  mytgfs put [--name volume] [--remote /dir] <local files or dirs...>  batch upload\n  mytgfs sync        rebuild local index from channel history\n  mytgfs check [--name volume] [--fix]  compare index with the channel and repair\n  mytgfs web [--port N]  local web dashboard\n  mytgfs tray [--port N]  system tray: WebDAV toggle, auto sync, dashboard\n  mytgfs startup enable|disable|status  start at login (off by default)\n\nEnvironment:\n  MYTGFS_API_ID  override default api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     2FA password (optional)\n  MYTGFS_LANG    force language",
+  "cli.usage": "Usage:\n  mytgfs version    print version and runtime (supports --json)\n  mytgfs auth bot   log in with a bot token\n  mytgfs auth user  log in with a phone number (code prompted at runtime)\n  mytgfs channel init --bot <username>  create a private channel and promote the bot\n  mytgfs volume create --name <name>  create a volume: channel, bot, muted notifications\n  mytgfs volume delete --name <name>  delete a volume: channel, config entry, local index\n  mytgfs volume check  verify every volume's channel\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name VOL]  start the WebDAV server\n  mytgfs unmap --addr 127.0.0.1:8080  remove network mappings to this server\n  mytgfs ls [--name VOL] [DIR]  list a directory\n  mytgfs mkdir [--name VOL] <DIR>  create a directory\n  mytgfs rm [--name VOL] <PATH...>  delete files or directories (recursive)\n  mytgfs mv [--name VOL] <SRC> <DST>  move or rename\n  mytgfs get [--name VOL] <REMOTE> [LOCAL|-]  download a file\n  mytgfs search [--name VOL] [--dir DIR] [--limit N] <QUERY>  search by file name\n  mytgfs cp [--name VOL] [--to DST_VOL] [--force] <SRC> <DST>  copy by reference\n  mytgfs put [--name VOL] [--remote /dir] <LOCAL...>  upload files or directories\n  mytgfs sync        rebuild the index from channel history\n  mytgfs check [--name VOL] [--fix]  compare index with channel and repair\n  mytgfs config show|get|set|keys  read/write config (same as the panel)\n  mytgfs web [--port N] [--no-open]  local web panel (port defaults to [web].port)\n  mytgfs tray [--port N]  system tray: WebDAV, auto sync, panel\n  mytgfs startup enable|disable|status  run at login (off by default)\n\nEnvironment:\n  MYTGFS_API_ID  override api_id\n  MYTGFS_PHONE   phone number for user login\n  MYTGFS_2FA     optional 2FA password for user login\n  MYTGFS_LANG    force a language\n",
   "err.missing_api_hash": "missing secrets/api_hash",
   "err.session_key_prefix": "failed to load session key",
   "prompt.bot_token": "bot token: ",
@@ -229,5 +229,14 @@
   "web.files_offline_fail": "Could not save the offline copy",
   "web.files_offline_too_large": "File exceeds the offline size limit",
   "err.missing_api_id": "Missing api_id: set it in config.toml [telegram] or MYTGFS_API_ID",
-  "err.bad_api_id": "Invalid api_id"
+  "err.bad_api_id": "Invalid api_id",
+  "tray.menu.autosync": "Auto sync",
+  "tray.menu.autosync.tip": "Pull changes from other clients every 15 seconds",
+  "tray.tip.vol": "%s: %d files · %s",
+  "tray.tip.tasks": "Downloading %d · queued %d",
+  "tray.tip.sync_on": "Auto sync on",
+  "tray.tip.sync_off": "Auto sync off",
+  "err.fs_prefix": "file operation failed",
+  "err.fs_rebuild": "index rebuild failed",
+  "err.config_key_missing": "config key %s is not set"
 }

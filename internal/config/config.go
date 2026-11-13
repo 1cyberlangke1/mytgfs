@@ -16,9 +16,42 @@ type Config struct {
 	Telegram Telegram `toml:"telegram"`
 	Mount    Mount    `toml:"mount"`
 	Volumes  []Volume `toml:"volumes"`
+	Web      Web      `toml:"web"`
 	WebDAV   WebDAV   `toml:"webdav"`
 	PWA      PWA      `toml:"pwa"`
 	Log      Log      `toml:"log"`
+}
+
+// Web 是本地面板配置。
+type Web struct {
+	// Port 监听端口，0 用 DefaultWebPort；被占用时仍会退回随机端口。
+	Port int `toml:"port"`
+	// AutoOpen 打开面板时是否同时打开浏览器；nil 按 true 处理。
+	AutoOpen *bool `toml:"auto_open"`
+}
+
+// DefaultWebPort 是面板默认端口。
+const DefaultWebPort = 8720
+
+// ListenPort 返回面板端口。
+//
+// 输入：无
+// 输出：端口号，默认 DefaultWebPort，越界时同样回落默认值
+// 预期：只用于 127.0.0.1 回环监听，端口冲突由调用方退回随机端口
+func (w Web) ListenPort() int {
+	if w.Port <= 0 || w.Port > 65535 {
+		return DefaultWebPort
+	}
+	return w.Port
+}
+
+// OpensBrowser 表示打开面板时是否自动开浏览器。
+//
+// 输入：无
+// 输出：true 表示起面板后直接开系统浏览器
+// 预期：未写 auto_open 时按 true 处理；关掉后只启动服务，等用户自己访问
+func (w Web) OpensBrowser() bool {
+	return w.AutoOpen == nil || *w.AutoOpen
 }
 
 // WebDAV 是「把卷挂成盘」的可选服务。

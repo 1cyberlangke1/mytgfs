@@ -1,5 +1,5 @@
 {
-  "cli.usage": "用法:\n  mytgfs version    打印版本与运行环境（支持 --json）\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs volume create --name <name>  建卷：建频道、拉 bot、关通知\n  mytgfs volume delete --name <name>  删卷：删频道、移除配置、删本地索引\n  mytgfs volume check  检查每个卷的频道是否仍可用\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]  启动 WebDAV 服务\n  mytgfs unmap --addr 127.0.0.1:8080  清理指向本服务的网络映射\n  mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>  引用复制文件\n  mytgfs put [--name 卷] [--remote /目录] <本地文件或目录...>  批量上传\n  mytgfs sync        拉频道历史重建索引\n  mytgfs check [--name 卷] [--fix]  核对索引与频道并修复\n  mytgfs web [--port N]  本地 Web 面板\n  mytgfs tray [--port N]  系统托盘：WebDAV 开关、自动同步、面板\n  mytgfs startup enable|disable|status  开机自启（默认关闭）\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言",
+  "cli.usage": "用法:\n  mytgfs version    打印版本与运行环境（支持 --json）\n  mytgfs auth bot    用 bot token 登录\n  mytgfs auth user   用手机号登录（验证码运行时输入）\n  mytgfs channel init --bot <username>  建私有频道并提权\n  mytgfs volume create --name <name>  建卷：建频道、拉 bot、关通知\n  mytgfs volume delete --name <name>  删卷：删频道、移除配置、删本地索引\n  mytgfs volume check  检查每个卷的频道是否仍可用\n  mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]  启动 WebDAV 服务\n  mytgfs unmap --addr 127.0.0.1:8080  清理指向本服务的网络映射\n  mytgfs ls [--name 卷] [目录]  列出目录\n  mytgfs mkdir [--name 卷] <目录>  创建目录\n  mytgfs rm [--name 卷] <路径...>  删除文件或目录（递归）\n  mytgfs mv [--name 卷] <源> <目标>  移动或改名\n  mytgfs get [--name 卷] <远端路径> [本地路径|-]  下载文件\n  mytgfs search [--name 卷] [--dir 目录] [--limit N] <关键词>  按文件名搜索\n  mytgfs cp [--name 卷] [--to 目标卷] [--force] <src> <dst>  引用复制文件\n  mytgfs put [--name 卷] [--remote /目录] <本地文件或目录...>  批量上传\n  mytgfs sync        拉频道历史重建索引\n  mytgfs check [--name 卷] [--fix]  核对索引与频道并修复\n  mytgfs config show|get|set|keys  读写配置（与面板配置卡片等价）\n  mytgfs web [--port N] [--no-open]  本地 Web 面板（端口默认取 [web].port）\n  mytgfs tray [--port N]  系统托盘：WebDAV 开关、自动同步、面板\n  mytgfs startup enable|disable|status  开机自启（默认关闭）\n\n环境变量:\n  MYTGFS_API_ID  覆盖默认 api_id\n  MYTGFS_PHONE   user 登录手机号\n  MYTGFS_2FA     user 登录 2FA 密码（可空）\n  MYTGFS_LANG    强制语言\n",
   "err.missing_api_hash": "缺少 secrets/api_hash",
   "err.session_key_prefix": "读取会话密钥失败",
   "prompt.bot_token": "bot token: ",
@@ -229,5 +229,14 @@
   "web.files_offline_fail": "离线保存失败",
   "web.files_offline_too_large": "文件超过离线保存大小上限",
   "err.missing_api_id": "缺少 api_id：请在 config.toml 的 [telegram] 里填写，或设置 MYTGFS_API_ID",
-  "err.bad_api_id": "api_id 不合法"
+  "err.bad_api_id": "api_id 不合法",
+  "tray.menu.autosync": "自动同步",
+  "tray.menu.autosync.tip": "每 15 秒拉取其它端的改动",
+  "tray.tip.vol": "%s: %d 个文件 · %s",
+  "tray.tip.tasks": "下载 %d · 排队 %d",
+  "tray.tip.sync_on": "自动同步已开",
+  "tray.tip.sync_off": "自动同步已关",
+  "err.fs_prefix": "文件操作失败",
+  "err.fs_rebuild": "索引重建失败",
+  "err.config_key_missing": "配置项 %s 未设置"
 }

@@ -126,3 +126,40 @@ func TestAutoSyncNilNotify(t *testing.T) {
 		t.Fatal("首轮同步没有写入索引")
 	}
 }
+
+// TestAutoSyncWhileHonorsSwitch 关闭时不同步，打开后立即同步。
+//
+// 输入：SyncSwitch 初始 false，100ms 后置 true
+// 输出：首次同步发生在打开之后
+// 预期：关闭期间差异源一次都没被调用；打开后索引里出现 /a.txt
+func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
+	idx, err := index.OpenMemory()
+	if err != nil {
+		t.Fatalf("打开索引失败: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sw := NewSyncSwitch(false)
+	d := &fakeDiffer{}
+	go AutoSyncWhile(ctx, nil, idx, d, 20*time.Millisecond, nil, sw.On)
+
+	time.Sleep(100 * time.Millisecond)
+	d.mu.Lock()
+	before := d.calls
+	d.mu.Unlock()
+	if before != 0 {
+		t.Fatalf("关闭期间同步了 %d 次", before)
+	}
+
+	sw.Set(true)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok, _ := idx.Get(context.Background(), "/a.txt"); ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("打开开关后没有同步")
+}

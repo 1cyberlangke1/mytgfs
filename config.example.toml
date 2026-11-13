@@ -29,6 +29,12 @@ download_parallel = 4
 # 上传并发分片数：0 = 默认 4，范围 1..16
 upload_parallel = 4
 
+[web]
+# 面板端口：0 = 默认 8720；被占用时自动退回随机端口
+port = 8720
+# 打开面板时是否自动打开系统浏览器
+auto_open = true
+
 [webdav]
 # 是否把卷挂成网络驱动器（默认关闭，面板本身已能增删改查）
 enabled = false

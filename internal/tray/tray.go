@@ -32,16 +32,39 @@ type Actions struct {
 	WebDAVEnabled bool
 	// SetWebDAV 打开/关闭 WebDAV 挂盘；返回 error 时菜单保持原状态。
 	SetWebDAV func(bool) error
+
+	// AutoSyncEnabled 是启动时自动增量同步的状态。
+	AutoSyncEnabled bool
+	// SetAutoSync 打开/关闭自动增量同步；返回 error 时菜单保持原状态。
+	SetAutoSync func(bool) error
 }
 
 var (
 	mu       sync.Mutex
 	statusIt *systray.MenuItem
 	davIt    *systray.MenuItem
+	tip      string
+	tipSet   bool
+	tipReady bool
 	// davWant/davSet 记录托盘就绪前收到的状态，就绪时补上
 	davWant bool
 	davSet  bool
 )
+
+// SetTooltip 更新托盘图标的悬浮提示（状态/占用/任务）。
+//
+// 输入：s 多行提示文本
+// 输出：无
+// 预期：托盘尚未就绪时先记下，onReady 时补写
+func SetTooltip(s string) {
+	mu.Lock()
+	tip, tipSet = s, true
+	ready := tipReady
+	mu.Unlock()
+	if ready {
+		systray.SetTooltip(s)
+	}
+}
 
 // SetWebDAV 同步托盘里「挂载为网络驱动器」的勾选状态。
 //
@@ -111,10 +134,21 @@ func onReady(a Actions, initial string) {
 		i18n.T("tray.menu.webdav.tip"),
 		a.WebDAVEnabled,
 	)
+	mSync := systray.AddMenuItemCheckbox(
+		i18n.T("tray.menu.autosync"),
+		i18n.T("tray.menu.autosync.tip"),
+		a.AutoSyncEnabled,
+	)
 	mu.Lock()
 	davIt = mDAV
+	tipReady = true
 	want, set := davWant, davSet
+	t := tip
+	hasTip := tipSet
 	mu.Unlock()
+	if hasTip {
+		systray.SetTooltip(t)
+	}
 	if set {
 		if want {
 			mDAV.Check()
@@ -172,6 +206,21 @@ func onReady(a Actions, initial string) {
 					mDAV.Check()
 				} else {
 					mDAV.Uncheck()
+				}
+			case <-mSync.ClickedCh:
+				if a.SetAutoSync == nil {
+					continue
+				}
+				next := !mSync.Checked()
+				if err := a.SetAutoSync(next); err != nil {
+					fmt.Fprintf(os.Stderr, "autosync: %v\n", err)
+					continue
+				}
+				// 勾选状态跟随配置写入结果，不提前翻转
+				if next {
+					mSync.Check()
+				} else {
+					mSync.Uncheck()
 				}
 			case <-mQuit.ClickedCh:
 				if a.Quit != nil {
