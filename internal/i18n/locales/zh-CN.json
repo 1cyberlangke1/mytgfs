@@ -294,6 +294,7 @@
   "log.autostart_read_failed": "读取开机自启状态失败",
   "log.rebuild_skipped": "索引为空，但没有 user 会话，跳过自动重建",
   "log.rebuild_done": "索引已按频道历史重建",
+  "log.volume_warn": "卷 %s: %v",
   "err.bot_username_empty": "bot 用户名不能为空",
   "err.channel_created_bot_failed": "频道 %d 已创建，但拉 bot 失败",
   "err.webdav_prefix": "webdav 失败",

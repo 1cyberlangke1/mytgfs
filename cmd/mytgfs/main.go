@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"mytgfs/internal/app"
 	"mytgfs/internal/auth"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
@@ -31,14 +32,12 @@ import (
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
-	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
-	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/version"
 	"mytgfs/internal/web"
 )
@@ -523,7 +522,7 @@ func runWeb(args []string) {
 			return perr
 		}
 		defer closePool()
-		vols := openWebVolumes(ctx, cfg, api)
+		vols := openWebVolumes(ctx, app.New(cfg), api)
 		defer closeWebVolumes(vols)
 		davSvc, mount := newMountControl(cfgPath, vols)
 		defer davSvc.Stop()
@@ -615,44 +614,23 @@ type webVolume struct {
 	idx   *index.Index
 }
 
-// openWebVolumes 为每个启用的卷打开索引与存储。
+// openWebVolumes 为每个启用的卷打开文件系统后端。
 //
-// 输入：ctx；cfg 配置；api 已认证的 MTProto 客户端
+// 输入：ctx；a 装配根；api 已认证的 MTProto 客户端
 // 输出：卷名 → 后端；打开失败的卷直接跳过（面板里就不显示）
 // 预期：只读索引 + 可写存储，每个卷独立 db 文件
-func openWebVolumes(ctx context.Context, cfg config.Config, api telegramstore.API) map[string]*webVolume {
+func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[string]*webVolume {
 	out := map[string]*webVolume{}
-	for _, v := range cfg.Volumes {
+	for _, v := range a.Config().Volumes {
 		if !v.Enabled {
 			continue
 		}
-		idx, err := index.Open(datadir.Path("index-" + v.Name + ".db"))
+		vf, err := a.OpenVolume(ctx, v.Name, api)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, i18n.T("tray.mount.failed", v.Name, err))
 			continue
 		}
-		// 索引是缓存：空了就用 user 会话按频道历史重建，避免面板一片空白
-		if rerr := trayapp.RebuildIndexIfEmpty(ctx, cfg, idx, v.ChatID); rerr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("tray.mount.failed", v.Name), rerr)
-		}
-		store := telegramstore.New(api, v.ChatID)
-		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
-		store.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
-		davfs := dav.New(ctx, idx, store, cfg.Mount.ReadChunk())
-		// 面板上传同样走串行队列：批量拖拽不会互相抢 Telegram 配额
-		davfs.SetQueue(queue.New(1, 3))
-		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
-		davfs.SetTempDir(datadir.Path("tmp"))
-		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
-		if rerr := davfs.ResumePending(); rerr != nil {
-			fmt.Fprintf(os.Stderr, "pending resume (%s): %v\n", v.Name, rerr)
-		}
-		out[v.Name] = &webVolume{
-			mgr:   fm.New(davfs),
-			davfs: davfs,
-			idx:   idx,
-		}
+		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index}
 	}
 	return out
 }

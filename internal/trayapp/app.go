@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"mytgfs/internal/app"
 	"mytgfs/internal/autostart"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
@@ -585,35 +586,21 @@ func Run(opts Options) error {
 		if mp == "" {
 			return
 		}
-		idx, oerr := index.Open(datadir.Path("index-" + name + ".db"))
-		if oerr != nil {
-			fmt.Fprintf(os.Stderr, "%s %s: %v\n", i18n.T("log.index_open_failed"), name, oerr)
-			return
-		}
-		// 索引是缓存，丢了用 user 会话按频道历史重建
-		if rerr := RebuildIndexIfEmpty(rootCtx, cfg, idx, channelID); rerr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("tray.mount.failed", name), rerr)
-		}
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", i18n.T("tray.mount.failed", name, perr))
 			return
 		}
-		store := telegramstore.New(api, channelID)
-		store.SetParallel(cfg.Mount.DownloadConnections())
-		store.SetUploadParallel(cfg.Mount.UploadParallelism())
 		vctx, vcancel := context.WithCancel(rootCtx)
-		// 面板文件管理与可选 WebDAV 共用同一份 WebDAV 语义后端
-		davfs := dav.New(vctx, idx, store, cfg.Mount.ReadChunk())
-		// 面板上传与 WebDAV 共用同一队列，批量操作串行提交
-		davfs.SetQueue(queue.New(1, 3))
-		// 上传临时文件放数据目录，异常中断的残留由 dav 按时间清扫
-		davfs.SetTempDir(datadir.Path("tmp"))
-		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
-		if rerr := davfs.ResumePending(); rerr != nil {
-			fmt.Fprintf(os.Stderr, "pending resume (%s): %v\n", name, rerr)
+		// 索引、存储、WebDAV 语义与文件管理统一由装配根给出
+		vf, oerr := app.New(cfg).OpenVolume(vctx, name, api)
+		if oerr != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.index_open_failed"), oerr)
+			vcancel()
+			closePool()
+			return
 		}
-		fmgr := fm.New(davfs)
+		idx, store, davfs, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
 		tv := &trayVolume{name: name, idx: idx, davfs: davfs, fmgr: fmgr, store: store, differ: differ}
 
@@ -639,7 +626,7 @@ func Run(opts Options) error {
 		wg.Go(func() {
 			<-vctx.Done()
 			vwg.Wait()
-			_ = idx.Close()
+			_ = vf.Close()
 			closePool()
 			volMu.Lock()
 			for i, v := range volumes {

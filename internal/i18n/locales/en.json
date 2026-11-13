@@ -294,6 +294,7 @@
   "log.autostart_read_failed": "failed to read the autostart state",
   "log.rebuild_skipped": "index is empty but there is no user session, skipping the automatic rebuild",
   "log.rebuild_done": "index rebuilt from channel history",
+  "log.volume_warn": "volume %s: %v",
   "err.bot_username_empty": "bot username must not be empty",
   "err.channel_created_bot_failed": "channel %d was created but adding the bot failed",
   "err.webdav_prefix": "webdav failed",
