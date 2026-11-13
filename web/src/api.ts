@@ -22,6 +22,7 @@ export interface ApiVolume {
   name: string;
   entries: number;
   used: number;
+  cover?: boolean;
 }
 
 export interface ApiTransfer {
@@ -39,6 +40,7 @@ export interface ApiMount {
 
 export interface ApiState {
   volumes: ApiVolume[];
+  caps?: { createVolume?: boolean; deleteVolume?: boolean };
   status?: {
     state?: string;
     state_code?: string;
@@ -219,6 +221,24 @@ export function setMount(enabled: boolean): Promise<ApiMount> {
 // triggerSync 立即增量同步。
 export function triggerSync(): Promise<unknown> {
   return request('/api/sync', { method: 'POST' });
+}
+
+// createVolume 新建卷：后端建 Telegram 频道并写配置。
+export function createVolume(
+  name: string,
+  title: string,
+  point: string
+): Promise<{ name: string; channel_id: number; chat_id: number }> {
+  return request('/api/volumes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, title, point }),
+  });
+}
+
+// deleteVolume 删除卷：删频道、移出配置、删本地索引，不可撤销。
+export function deleteVolume(name: string): Promise<{ removed: boolean }> {
+  return request(`/api/volumes?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
 // fileURL 返回下载/预览地址；inline 用于内嵌播放。

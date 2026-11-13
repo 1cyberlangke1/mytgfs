@@ -44,6 +44,8 @@ import {
   ApiState,
   ApiTransfer,
   cacheFile,
+  createVolume,
+  deleteVolume,
   fileURL,
   getSettings,
   getState,
@@ -185,6 +187,13 @@ export default function App() {
 
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // 卷管理能力来自服务端：桌面壳可建/删卷，纯网页模式可能只读
+  const [caps, setCaps] = useState<{ createVolume: boolean; deleteVolume: boolean }>({
+    createVolume: false,
+    deleteVolume: false,
+  });
+  // 封面图地址带版本号，改完封面立刻刷新，不依赖浏览器缓存过期
+  const [coverVersion, setCoverVersion] = useState(0);
 
   const t = DICTIONARY[locale] || DICTIONARY.zh;
   const localeMeta = getLocaleMeta(locale);
@@ -242,11 +251,16 @@ export default function App() {
         channelHint: prev.find((p) => p.id === v.name)?.channelHint || '',
         description: prev.find((p) => p.id === v.name)?.description || '',
         createdAt: prev.find((p) => p.id === v.name)?.createdAt || '',
+        hasCover: Boolean(v.cover),
       }));
       return next;
     });
     setConnectionStatus(connOf(st.status));
     setServerTransfers((st.status?.transfers ?? []).map(transferFromServer));
+    setCaps({
+      createVolume: Boolean(st.caps?.createVolume),
+      deleteVolume: Boolean(st.caps?.deleteVolume),
+    });
     if (st.mount) {
       setSettings((prev) => ({
         ...prev,
@@ -322,6 +336,7 @@ export default function App() {
             channelHint: '',
             description: '',
             createdAt: '',
+            hasCover: Boolean(v.cover),
           }))
         );
         setActiveVolumeId((cur) => cur || st.volumes[0]?.name || '');
@@ -654,6 +669,56 @@ export default function App() {
   const handleResetSettings = () => {
     reloadSettings()
       .then(() => pushToast(t.settings.saveSuccessToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表
+  const handleCreateVolume = (name: string, title: string, point: string) => {
+    createVolume(name, title, point)
+      .then(() => Promise.all([reloadState(), reloadFiles()]))
+      .then(() => pushToast(t.volume.createSuccess.replace('{name}', name), 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleDeleteVolume 删卷不可撤销：删频道 → 移出配置 → 删索引
+  const handleDeleteVolume = (name: string) => {
+    deleteVolume(name)
+      .then(() => Promise.all([reloadState(), reloadFiles()]))
+      .then(() => pushToast(t.volume.deleteSuccess.replace('{name}', name), 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleSetCover 把图片以保留名写进卷根目录，服务端据此生成封面
+  const handleSetCover = (volume: string, file: File) => {
+    const dot = file.name.lastIndexOf('.');
+    const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : 'jpg';
+    uploadFile(volume, '/', `.cover.${ext}`, file)
+      .then(() => {
+        setCoverVersion((v) => v + 1);
+        return Promise.all([reloadFiles([volume]), reloadState()]);
+      })
+      .then(() => pushToast(t.volume.coverSaved, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleRemoveCover 删除卷根目录里的保留封面文件
+  const handleRemoveCover = (volume: string) => {
+    const covers = files.filter(
+      (f) => f.volumeId === volume && !f.isDir && /^\.?cover\.(jpe?g|png|gif|webp)$/i.test(f.name)
+    );
+    if (covers.length === 0) {
+      pushToast(t.volume.noCover, 'error');
+      return;
+    }
+    removeItems(
+      volume,
+      covers.map((c) => c.id)
+    )
+      .then(() => {
+        setCoverVersion((v) => v + 1);
+        return Promise.all([reloadFiles([volume]), reloadState()]);
+      })
+      .then(() => pushToast(t.volume.coverRemoved, 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
@@ -1069,6 +1134,7 @@ export default function App() {
                 onToggleTransferPause={handleToggleTransferPause}
                 onCancelTransfer={handleCancelTransfer}
                 onClearCompletedTransfers={handleClearCompletedTransfers}
+                coverVersion={coverVersion}
               />
             )}
 
@@ -1095,6 +1161,12 @@ export default function App() {
                 onDownloadFile={handleDownloadFile}
                 onSaveOffline={handleSaveOffline}
                 onPreviewFile={setPreviewFile}
+                canCreateVolume={caps.createVolume}
+                canDeleteVolume={caps.deleteVolume}
+                onCreateVolume={handleCreateVolume}
+                onDeleteVolume={handleDeleteVolume}
+                onSetCover={handleSetCover}
+                onRemoveCover={handleRemoveCover}
               />
             )}
 

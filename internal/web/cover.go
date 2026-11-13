@@ -10,6 +10,7 @@ package web
 // 之后启动、切页、刷新都不再回 Telegram 取图。
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"strings"
@@ -43,8 +44,8 @@ func isCoverName(name string) bool {
 // 输入：ctx；m 文件后端
 // 输出：条目与是否找到
 // 预期：多个同名（不同扩展名）时按名字排序取第一个，保证结果稳定
-func findCover(r *http.Request, m fm.Files) (fm.Entry, bool) {
-	entries, err := m.List(r.Context(), "/")
+func findCover(ctx context.Context, m fm.Files) (fm.Entry, bool) {
+	entries, err := m.List(ctx, "/")
 	if err != nil {
 		return fm.Entry{}, false
 	}
@@ -85,7 +86,7 @@ func handleVolumeCover(api *filesAPI) http.HandlerFunc {
 			http.Error(w, i18n.T("err.http_no_volume"), http.StatusNotFound)
 			return
 		}
-		e, ok := findCover(r, m)
+		e, ok := findCover(r.Context(), m)
 		if !ok {
 			http.Error(w, i18n.T("err.http_not_found"), http.StatusNotFound)
 			return

@@ -301,5 +301,27 @@
     "pwa.name": "显示在浏览器安装提示里",
     "pwa.offline_max_mb": "0 用默认 256MB，负数表示不限",
     "log.level": "debug 会记录每次回源，排查问题时再开"
+  },
+  "volume": {
+    "createBtn": "新建卷",
+    "deleteBtn": "删除卷",
+    "coverBtn": "设置封面",
+    "removeCoverBtn": "移除封面",
+    "createTitle": "新建卷",
+    "createDesc": "会在 Telegram 建一个私有频道，并把 bot 拉进去当管理员。",
+    "nameLabel": "卷名",
+    "nameHint": "只允许字母、数字、下划线、中划线",
+    "titleLabel": "频道标题（可选）",
+    "pointLabel": "盘符（可选）",
+    "createConfirm": "创建",
+    "deleteConfirmTitle": "删除这个卷？",
+    "deleteConfirmDesc": "会删除 Telegram 频道、配置条目和本地索引，无法撤销。卷名：{name}",
+    "deleteConfirm": "删除",
+    "createSuccess": "已创建卷 {name}",
+    "deleteSuccess": "已删除卷 {name}",
+    "coverSaved": "封面已更新",
+    "coverRemoved": "封面已移除",
+    "noCover": "这个卷还没有封面",
+    "invalidName": "卷名只能包含字母、数字、下划线和中划线"
   }
 }

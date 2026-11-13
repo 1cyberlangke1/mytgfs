@@ -11,10 +11,12 @@ import {
   FolderPlus,
   FolderUp,
   HardDrive,
+  Image as ImageIcon,
   LayoutGrid,
   List,
   Loader2,
   Pencil,
+  Plus,
   Search,
   Trash2,
   Upload,
@@ -70,6 +72,13 @@ interface FilesViewProps {
   onDownloadFile: (file: FileItem) => void;
   onSaveOffline: (file: FileItem) => void;
   onPreviewFile: (file: FileItem) => void;
+  /** 服务端能力：纯网页模式可能不允许建/删卷 */
+  canCreateVolume: boolean;
+  canDeleteVolume: boolean;
+  onCreateVolume: (name: string, title: string, point: string) => void;
+  onDeleteVolume: (name: string) => void;
+  onSetCover: (volumeId: string, file: File) => void;
+  onRemoveCover: (volumeId: string) => void;
 }
 
 const PAGE_SIZE = 50;
@@ -93,9 +102,21 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onDownloadFile,
   onSaveOffline,
   onPreviewFile,
+  canCreateVolume,
+  canDeleteVolume,
+  onCreateVolume,
+  onDeleteVolume,
+  onSetCover,
+  onRemoveCover,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
+  const coverInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 卷管理弹窗状态
+  const [showCreateVolume, setShowCreateVolume] = useState(false);
+  const [newVolume, setNewVolume] = useState({ name: '', title: '', point: '' });
+  const [showDeleteVolume, setShowDeleteVolume] = useState(false);
 
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [searchQuery, setSearchQuery] = useState('');
@@ -359,6 +380,56 @@ export const FilesView: React.FC<FilesViewProps> = ({
             <FolderPlus className="w-3.5 h-3.5" />
             <span>{t.files.newFolderBtn}</span>
           </Button>
+
+          {canCreateVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setNewVolume({ name: '', title: '', point: '' });
+                setShowCreateVolume(true);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t.volume.createBtn}</span>
+            </Button>
+          )}
+
+          {currentVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => coverInputRef.current?.click()}
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>{t.volume.coverBtn}</span>
+            </Button>
+          )}
+
+          {canDeleteVolume && currentVolume && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowDeleteVolume(true)}
+              className="text-red-600 dark:text-red-400 hover:bg-red-500/10"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{t.volume.deleteBtn}</span>
+            </Button>
+          )}
+
+          {/* 封面选择：限制成图片，选中后由 App 上传为 .cover.<ext> */}
+          <input
+            ref={coverInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const picked = e.target.files?.[0];
+              if (picked && currentVolume) onSetCover(currentVolume.id, picked);
+              e.target.value = '';
+            }}
+          />
         </div>
       </div>
 
@@ -1172,6 +1243,123 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
               <Button type="button" variant="destructive" onClick={confirmDelete}>
                 {t.files.deleteConfirmBtn}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 5: Create Volume */}
+      {showCreateVolume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-create-volume-title"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const name = newVolume.name.trim();
+              if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+                window.alert(t.volume.invalidName);
+                return;
+              }
+              onCreateVolume(name, newVolume.title.trim(), newVolume.point.trim());
+              setShowCreateVolume(false);
+            }}
+            className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          >
+            <div>
+              <h3
+                id="modal-create-volume-title"
+                className="text-base font-semibold text-zinc-950 dark:text-white"
+              >
+                {t.volume.createTitle}
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                {t.volume.createDesc}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="volume-name" className="block text-xs font-medium">
+                {t.volume.nameLabel}
+              </label>
+              <Input
+                id="volume-name"
+                required
+                autoFocus
+                dir="ltr"
+                pattern="[A-Za-z0-9_-]{1,32}"
+                value={newVolume.name}
+                onChange={(e) => setNewVolume((v) => ({ ...v, name: e.target.value }))}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.volume.nameHint}</p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="volume-title" className="block text-xs font-medium">
+                {t.volume.titleLabel}
+              </label>
+              <Input
+                id="volume-title"
+                value={newVolume.title}
+                onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="volume-point" className="block text-xs font-medium">
+                {t.volume.pointLabel}
+              </label>
+              <Input
+                id="volume-point"
+                dir="ltr"
+                value={newVolume.point}
+                onChange={(e) => setNewVolume((v) => ({ ...v, point: e.target.value }))}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setShowCreateVolume(false)}>
+                {t.files.cancel}
+              </Button>
+              <Button type="submit" variant="accent">
+                {t.volume.createConfirm}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal 6: Delete Volume */}
+      {showDeleteVolume && currentVolume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-delete-volume-title"
+        >
+          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+            <h3
+              id="modal-delete-volume-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.volume.deleteConfirmTitle}
+            </h3>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              {interpolate(t.volume.deleteConfirmDesc, { name: currentVolume.name }, locale)}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setShowDeleteVolume(false)}>
+                {t.files.cancel}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  onDeleteVolume(currentVolume.name);
+                  setShowDeleteVolume(false);
+                }}
+              >
+                {t.volume.deleteConfirm}
               </Button>
             </div>
           </div>
