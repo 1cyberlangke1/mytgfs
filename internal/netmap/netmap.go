@@ -27,8 +27,25 @@ func Cleanup(addr string) {
 	if err != nil {
 		return
 	}
+	for _, drive := range mappingDrives(string(out), addr) {
+		_ = command("use", drive, "/delete", "/y").Run()
+	}
+}
+
+// mappingDrives 从 net use 的输出里挑出指向 addr 的盘符。
+//
+// 输入：out net use 原始输出；addr 监听地址（如 127.0.0.1:8080）
+// 输出：需要删除的盘符（形如 "Y:"），按出现顺序
+// 预期：
+//   - 同时匹配 "127.0.0.1:8080" 与 net use 显示的 "127.0.0.1@8080"
+//   - 不含该地址的行不产生任何盘符；空地址返回空
+func mappingDrives(out, addr string) []string {
+	if addr == "" {
+		return nil
+	}
 	patterns := []string{addr, strings.Replace(addr, ":", "@", 1)}
-	for line := range strings.SplitSeq(string(out), "\n") {
+	var drives []string
+	for line := range strings.SplitSeq(out, "\n") {
 		matched := false
 		for _, p := range patterns {
 			if p != "" && strings.Contains(line, p) {
@@ -42,8 +59,9 @@ func Cleanup(addr string) {
 		// 盘符是形如 "Y:" 的两字符字段
 		for f := range strings.FieldsSeq(line) {
 			if len(f) == 2 && strings.HasSuffix(f, ":") {
-				_ = command("use", f, "/delete", "/y").Run()
+				drives = append(drives, f)
 			}
 		}
 	}
+	return drives
 }
