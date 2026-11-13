@@ -121,11 +121,11 @@ func splitKeyValue(line string) (key, value string) {
 	if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "[") {
 		return "", ""
 	}
-	i := strings.IndexByte(t, '=')
-	if i <= 0 {
+	key, value, ok := strings.Cut(t, "=")
+	if !ok || key == "" {
 		return "", ""
 	}
-	return strings.TrimSpace(t[:i]), strings.TrimSpace(t[i+1:])
+	return strings.TrimSpace(key), strings.TrimSpace(value)
 }
 
 // boolLiteral 输出 TOML 布尔字面量。

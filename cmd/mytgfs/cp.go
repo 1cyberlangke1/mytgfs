@@ -12,6 +12,7 @@ package main
 // 预期：src 必须在索引里；dst 已存在时默认拒绝，--force 才覆盖
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -57,10 +58,7 @@ func runCopy(args []string) {
 	if !ok {
 		fatal(i18n.T("err.volume_not_found", volName))
 	}
-	dstName := *to
-	if dstName == "" {
-		dstName = volName
-	}
+	dstName := cmp.Or(*to, volName)
 	dstVolume, ok := volumeByName(cfg, dstName)
 	if !ok {
 		fatal(i18n.T("err.volume_target_not_found", dstName))

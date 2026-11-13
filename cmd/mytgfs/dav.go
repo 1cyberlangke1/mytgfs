@@ -93,12 +93,12 @@ func runWebDAV(args []string) {
 		handler := dav.NewHandler(fsys, nil)
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
-		go func() {
-			<-ctx.Done()
+		// AfterFunc 在 ctx 取消时起协程收尾，不再常驻一个等待 goroutine
+		context.AfterFunc(ctx, func() {
 			shutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancelShutdown()
 			_ = srv.Shutdown(shutdown)
-		}()
+		})
 
 		fmt.Printf("webdav listening on http://%s/ (volume %s)\n", *addr, volName)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

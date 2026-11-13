@@ -59,10 +59,10 @@ func (s *Server) SetHandler(h Handler) {
 
 // Serve 接受连接直到 ctx 取消或 Close。
 func (s *Server) Serve(ctx context.Context) error {
-	go func() {
-		<-ctx.Done()
+	// AfterFunc 在 ctx 取消时关监听器，避免 Accept 永久阻塞
+	context.AfterFunc(ctx, func() {
 		s.ln.Close()
-	}()
+	})
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {

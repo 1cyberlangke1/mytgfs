@@ -209,7 +209,7 @@ func (f *memFile) Stat() (fs.FileInfo, error) {
 
 func (f *memFile) Close() error {
 	if f.write && !f.aborted {
-		f.fs.files[f.name] = append([]byte(nil), f.buf.Bytes()...)
+		f.fs.files[f.name] = bytes.Clone(f.buf.Bytes())
 		delete(f.fs.dirs, f.name)
 	}
 	return nil

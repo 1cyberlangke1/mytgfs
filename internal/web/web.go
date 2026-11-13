@@ -103,10 +103,10 @@ type Options struct {
 // 预期：ctx 取消时优雅关闭；opts.Status 为 nil 时状态为空列表
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	srv := &http.Server{Addr: addr, Handler: newMux(configPath, opts)}
-	go func() {
-		<-ctx.Done()
+	// AfterFunc 在 ctx 取消时优雅关闭，不再常驻等待 goroutine
+	context.AfterFunc(ctx, func() {
 		_ = srv.Shutdown(context.Background())
-	}()
+	})
 	err := srv.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
