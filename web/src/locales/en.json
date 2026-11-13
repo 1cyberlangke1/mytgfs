@@ -328,6 +328,17 @@
     "coverSaved": "Cover updated",
     "coverRemoved": "Cover removed",
     "noCover": "This volume has no cover yet",
-    "invalidName": "Volume name allows letters, digits, underscore and hyphen only"
+    "invalidName": "Volume name allows letters, digits, underscore and hyphen only",
+    "typeToConfirm": "Type {name} to confirm deletion",
+    "removeCoverTitle": "Remove cover?",
+    "removeCoverDesc": "Only the cover image {name} at the volume root is deleted; other files stay.",
+    "attachBtn": "Attach channel",
+    "attachTitle": "Attach an existing channel",
+    "attachDesc": "Create a private channel in Telegram, add the bot as admin, then enter the channel id. No channel is created.",
+    "chatIdLabel": "Channel id",
+    "chatIdHint": "-100... chat id or bare channel id, e.g. -1003536007396",
+    "attachConfirm": "Attach",
+    "attachSuccess": "Channel attached as volume {name}",
+    "chatIdInvalid": "Invalid channel id"
   }
 }

@@ -37,6 +37,8 @@ func runVolume(args []string) {
 		os.Exit(2)
 	}
 	switch args[0] {
+	case "attach":
+		runVolumeAttach(args[1:])
 	case "create":
 		runVolumeCreate(args[1:])
 	case "delete":
@@ -184,6 +186,74 @@ func runVolumeDelete(args []string) {
 		}
 	}
 	fmt.Println(i18n.T("volume.deleted", volName))
+}
+
+// runVolumeAttach 把已有频道挂成卷。
+//
+// 输入：--name 卷名（必填）；--chat-id Bot API 形式 -100... 或裸频道 id；
+//
+//	--point 盘符；--config 配置文件
+//
+// 输出：卷信息与写入结果
+// 预期：只读校验频道可见 + bot 有发言权；频道不存在或无权限直接失败，不写配置
+func runVolumeAttach(args []string) {
+	fs := flag.NewFlagSet("volume attach", flag.ExitOnError)
+	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
+	chatID := fs.Int64("chat-id", 0, i18n.T("cli.flag.chat_id"))
+	point := fs.String("point", "", i18n.T("cli.flag.mount_example"))
+	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
+	_ = fs.Parse(args)
+
+	volName := strings.TrimSpace(*name)
+	if volName == "" {
+		fatal(i18n.T("err.volume_name_required"))
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
+	}
+	for _, v := range cfg.Volumes {
+		if strings.EqualFold(v.Name, volName) {
+			fatal(i18n.T("err.volume_exists", volName))
+		}
+	}
+	apiHash := cfg.APIHash()
+	if apiHash == "" {
+		fatal(i18n.T("err.missing_api_hash"))
+	}
+	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	botClient := tgclient.New(cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key}, tgclient.Options{})
+	var res volume.Result
+	err = botClient.Run(ctx, func(ctx context.Context) error {
+		r, aerr := volume.Attach(ctx, botClient.API(), volume.AttachRequest{Name: volName, ChatID: *chatID})
+		res = r
+		return aerr
+	})
+	if err != nil {
+		failErr(i18n.T("err.volume_attach_prefix"), err)
+	}
+	vol := config.Volume{
+		Name:    res.Name,
+		ChatID:  res.ChannelID,
+		Point:   strings.TrimSpace(*point),
+		Enabled: true,
+	}
+	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
+		failErr(i18n.T("err.volume_config_append_prefix"), aerr)
+	}
+	ui.Print(map[string]any{
+		"name":       res.Name,
+		"channel_id": res.ChannelID,
+		"chat_id":    res.ChatID,
+		"title":      res.Title,
+	})
 }
 
 // runVolumeCreate 新建一个卷并写入配置文件。

@@ -13,6 +13,7 @@ import {
   HardDrive,
   Image as ImageIcon,
   LayoutGrid,
+  Link2,
   List,
   Loader2,
   Pencil,
@@ -76,7 +77,9 @@ interface FilesViewProps {
   /** 服务端能力：纯网页模式可能不允许建/删卷 */
   canCreateVolume: boolean;
   canDeleteVolume: boolean;
+  canAttachVolume: boolean;
   onCreateVolume: (name: string, title: string, point: string) => void;
+  onAttachVolume: (name: string, chatId: number) => void;
   onDeleteVolume: (name: string) => void;
   onSetCover: (volumeId: string, file: File) => void;
   onRemoveCover: (volumeId: string) => void;
@@ -144,7 +147,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onPreviewFile,
   canCreateVolume,
   canDeleteVolume,
+  canAttachVolume,
   onCreateVolume,
+  onAttachVolume,
   onDeleteVolume,
   onSetCover,
   onRemoveCover,
@@ -156,7 +161,11 @@ export const FilesView: React.FC<FilesViewProps> = ({
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
   const [newVolume, setNewVolume] = useState({ name: '', title: '', point: '' });
+  const [showAttachVolume, setShowAttachVolume] = useState(false);
+  const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
   const [showDeleteVolume, setShowDeleteVolume] = useState(false);
+  const [deleteVolumeInput, setDeleteVolumeInput] = useState('');
+  const [showRemoveCover, setShowRemoveCover] = useState(false);
 
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [searchQuery, setSearchQuery] = useState('');
@@ -434,6 +443,20 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </Button>
           )}
 
+          {canAttachVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setAttachForm({ name: '', chatId: '' });
+                setShowAttachVolume(true);
+              }}
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              <span>{t.volume.attachBtn}</span>
+            </Button>
+          )}
+
           {currentVolume && (
             <Button
               type="button"
@@ -445,12 +468,24 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </Button>
           )}
 
+          {currentVolume?.hasCover && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowRemoveCover(true)}
+              className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{t.volume.removeCoverBtn}</span>
+            </Button>
+          )}
+
           {canDeleteVolume && currentVolume && (
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => setShowDeleteVolume(true)}
-              className="text-red-600 dark:text-red-400 hover:bg-red-500/10"
+              className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>{t.volume.deleteBtn}</span>
@@ -1374,6 +1409,83 @@ export const FilesView: React.FC<FilesViewProps> = ({
         </div>
       )}
 
+      {/* Modal 8: Attach Existing Channel */}
+      {showAttachVolume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-attach-volume-title"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const name = attachForm.name.trim();
+              const id = Number(attachForm.chatId.trim());
+              if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+                window.alert(t.volume.invalidName);
+                return;
+              }
+              if (!Number.isInteger(id) || id === 0) {
+                window.alert(t.volume.chatIdInvalid);
+                return;
+              }
+              onAttachVolume(name, id);
+              setShowAttachVolume(false);
+            }}
+            className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          >
+            <div>
+              <h3
+                id="modal-attach-volume-title"
+                className="text-base font-semibold text-zinc-950 dark:text-white"
+              >
+                {t.volume.attachTitle}
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                {t.volume.attachDesc}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="attach-volume-name" className="block text-xs font-medium">
+                {t.volume.nameLabel}
+              </label>
+              <Input
+                id="attach-volume-name"
+                required
+                autoFocus
+                dir="ltr"
+                pattern="[A-Za-z0-9_-]{1,32}"
+                value={attachForm.name}
+                onChange={(e) => setAttachForm((v) => ({ ...v, name: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
+                {t.volume.chatIdLabel}
+              </label>
+              <Input
+                id="attach-volume-chat"
+                required
+                dir="ltr"
+                inputMode="numeric"
+                value={attachForm.chatId}
+                onChange={(e) => setAttachForm((v) => ({ ...v, chatId: e.target.value }))}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.volume.chatIdHint}</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setShowAttachVolume(false)}>
+                {t.files.cancel}
+              </Button>
+              <Button type="submit" variant="accent">
+                {t.volume.attachConfirm}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Modal 6: Delete Volume */}
       {showDeleteVolume && currentVolume && (
         <div
@@ -1383,28 +1495,94 @@ export const FilesView: React.FC<FilesViewProps> = ({
           aria-labelledby="modal-delete-volume-title"
         >
           <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3
+                  id="modal-delete-volume-title"
+                  className="text-base font-semibold text-zinc-950 dark:text-white"
+                >
+                  {t.volume.deleteConfirmTitle}
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed mt-1">
+                  {interpolate(t.volume.deleteConfirmDesc, { name: currentVolume.name }, locale)}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="delete-volume-name" className="block text-xs font-medium">
+                {interpolate(t.volume.typeToConfirm, { name: currentVolume.name }, locale)}
+              </label>
+              <Input
+                id="delete-volume-name"
+                dir="ltr"
+                autoFocus
+                value={deleteVolumeInput}
+                onChange={(e) => setDeleteVolumeInput(e.target.value)}
+                placeholder={currentVolume.name}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowDeleteVolume(false);
+                  setDeleteVolumeInput('');
+                }}
+              >
+                {t.files.cancel}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={deleteVolumeInput.trim() !== currentVolume.name}
+                onClick={() => {
+                  onDeleteVolume(currentVolume.name);
+                  setShowDeleteVolume(false);
+                  setDeleteVolumeInput('');
+                }}
+              >
+                {t.volume.deleteConfirm}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 7: Remove Cover */}
+      {showRemoveCover && currentVolume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-remove-cover-title"
+        >
+          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
             <h3
-              id="modal-delete-volume-title"
+              id="modal-remove-cover-title"
               className="text-base font-semibold text-zinc-950 dark:text-white"
             >
-              {t.volume.deleteConfirmTitle}
+              {t.volume.removeCoverTitle}
             </h3>
             <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-              {interpolate(t.volume.deleteConfirmDesc, { name: currentVolume.name }, locale)}
+              {interpolate(t.volume.removeCoverDesc, { name: currentVolume.name }, locale)}
             </p>
             <div className="flex items-center justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={() => setShowDeleteVolume(false)}>
+              <Button type="button" variant="outline" onClick={() => setShowRemoveCover(false)}>
                 {t.files.cancel}
               </Button>
               <Button
                 type="button"
                 variant="destructive"
                 onClick={() => {
-                  onDeleteVolume(currentVolume.name);
-                  setShowDeleteVolume(false);
+                  onRemoveCover(currentVolume.id);
+                  setShowRemoveCover(false);
                 }}
               >
-                {t.volume.deleteConfirm}
+                {t.volume.removeCoverBtn}
               </Button>
             </div>
           </div>

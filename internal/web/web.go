@@ -30,6 +30,13 @@ type CreateVolumeFunc func(ctx context.Context, name, title, point string) (any,
 // DeleteVolumeFunc 删除一个卷（频道 + 配置 + 本地索引）。
 type DeleteVolumeFunc func(ctx context.Context, name string) error
 
+// AttachVolumeFunc 把已有频道挂成卷。
+//
+// 输入：ctx；name 卷名；chatID Bot API 形式或裸频道 id
+// 输出：卷信息；error
+// 预期：频道不可见或 bot 无发言权时报错，不写配置
+type AttachVolumeFunc func(ctx context.Context, name string, chatID int64) (any, error)
+
 // Options 是面板的可选能力，零值表示只提供只读状态。
 type Options struct {
 	Status StatusFunc
@@ -38,6 +45,8 @@ type Options struct {
 	CreateVolume CreateVolumeFunc
 	// DeleteVolume 为 nil 时删卷接口返回 501
 	DeleteVolume DeleteVolumeFunc
+	// AttachVolume 为 nil 时「添加已有频道」返回 501
+	AttachVolume AttachVolumeFunc
 	// Files 返回指定卷的文件管理后端；nil 表示不提供文件管理
 	Files func(volume string) (fm.Files, bool)
 	// Volumes 返回可管理卷名，按配置顺序
@@ -102,6 +111,7 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/thumb", handleFileThumb(api))
 	mux.Handle("/api/cover", handleVolumeCover(api))
 	mux.Handle("/api/volumes", handleAPIVolumes(opts))
+	mux.Handle("/api/volumes/attach", handleAPIAttachVolume(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
 	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))

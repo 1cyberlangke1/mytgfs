@@ -224,6 +224,14 @@ func Run(opts Options) error {
 		e.Cancel()
 		win.Hide()
 	})
+	// 调试用：设置 MYTGFS_DEBUG_SHOW=1 时启动直接显示主窗口
+	if os.Getenv("MYTGFS_DEBUG_SHOW") != "" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			win.Show()
+			win.Focus()
+		}()
+	}
 
 	sysTray := wailsApp.SystemTray.New()
 	if runtime.GOOS == "windows" {
@@ -589,6 +597,27 @@ func Run(opts Options) error {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
 				return nil
+			},
+			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
+			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
+				res, aerr := volume.Attach(ctx, client.API(), volume.AttachRequest{Name: name, ChatID: chatID})
+				if aerr != nil {
+					return nil, aerr
+				}
+				vol := config.Volume{
+					Name:    res.Name,
+					ChatID:  res.ChannelID,
+					Enabled: true,
+				}
+				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
+					return nil, werr
+				}
+				return map[string]any{
+					"name":       res.Name,
+					"channel_id": res.ChannelID,
+					"chat_id":    res.ChatID,
+					"title":      res.Title,
+				}, nil
 			},
 			// 文件管理：复用挂载时创建的 WebDAV 后端，不加额外连接
 			Files: func(name string) (fm.Files, bool) {

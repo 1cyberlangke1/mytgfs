@@ -328,6 +328,17 @@
     "coverSaved": "封面已更新",
     "coverRemoved": "封面已移除",
     "noCover": "这个卷还没有封面",
-    "invalidName": "卷名只能包含字母、数字、下划线和中划线"
+    "invalidName": "卷名只能包含字母、数字、下划线和中划线",
+    "typeToConfirm": "输入卷名 {name} 以确认删除",
+    "removeCoverTitle": "移除封面？",
+    "removeCoverDesc": "只会删除卷根目录里的封面图片 {name}，卷内其它文件不受影响。",
+    "attachBtn": "添加已有频道",
+    "attachTitle": "添加已有频道",
+    "attachDesc": "先在 Telegram 建好私有频道，把 bot 设为管理员，然后填频道 id。不会新建频道。",
+    "chatIdLabel": "频道 id",
+    "chatIdHint": "-100 开头的 chat_id 或裸频道 id，例如 -1003536007396",
+    "attachConfirm": "添加",
+    "attachSuccess": "已挂载频道为卷 {name}",
+    "chatIdInvalid": "频道 id 不合法"
   }
 }

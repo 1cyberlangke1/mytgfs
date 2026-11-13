@@ -282,6 +282,7 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 		resp["caps"] = map[string]bool{
 			"createVolume": opts.CreateVolume != nil,
 			"deleteVolume": opts.DeleteVolume != nil,
+			"attachVolume": opts.AttachVolume != nil,
 		}
 		if opts.Status != nil {
 			if st, err := opts.Status(r.Context()); err == nil {

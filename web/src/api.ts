@@ -48,7 +48,7 @@ export interface ApiQueueItem {
 
 export interface ApiState {
   volumes: ApiVolume[];
-  caps?: { createVolume?: boolean; deleteVolume?: boolean };
+  caps?: { createVolume?: boolean; deleteVolume?: boolean; attachVolume?: boolean };
   status?: {
     state?: string;
     state_code?: string;
@@ -241,6 +241,18 @@ export function createVolume(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, title, point }),
+  });
+}
+
+// attachVolume 把已有频道挂成卷：后端只读校验后写配置。
+export function attachVolume(
+  name: string,
+  chatId: number
+): Promise<{ name: string; channel_id: number; chat_id: number; title: string }> {
+  return request('/api/volumes/attach', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, chat_id: chatId }),
   });
 }
 

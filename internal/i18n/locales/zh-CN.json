@@ -13,7 +13,7 @@
   "err.bot_not_ready": "bot 会话尚未就绪，请检查网络后再试",
   "err.volume_name_required": "需要 --name",
   "err.volume_create_prefix": "创建卷失败",
-  "err.volume_exists": "配置里已经有同名卷",
+  "err.volume_exists": "配置里已经有名为 %s 的卷",
   "err.volume_not_found": "配置里没有名为 %s 的卷",
   "err.volume_no_channel": "卷 %s 没有配置频道 id",
   "err.check_prefix": "对账失败",
@@ -331,5 +331,10 @@
   "err.config_range": "%s 必须在 %d 到 %d 之间（当前为 %d）",
   "err.config_enum": "%s 只能是 %s 之一（当前为 %s）",
   "err.config_addr": "%s 不是合法地址，应为 host:port（例如 127.0.0.1:8080）",
-  "err.config_too_long": "%s 不能超过 %d 个字符"
+  "err.config_too_long": "%s 不能超过 %d 个字符",
+  "err.volume_attach_prefix": "挂载已有频道失败",
+  "err.volume_config_append_prefix": "写入配置失败",
+  "err.volume_chat_id_invalid": "频道 id 不合法，应为 -100... 形式或裸 id",
+  "err.volume_attach_unavailable": "当前入口不支持添加已有频道",
+  "cli.flag.chat_id": "频道 id：-100... 或裸 id"
 }

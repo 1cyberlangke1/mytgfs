@@ -638,6 +638,23 @@ func runWeb(args []string) {
 				}
 				return nil
 			},
+			// 添加已有频道：用 bot 会话校验频道可见性与发言权
+			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
+				res, aerr := volume.Attach(ctx, api, volume.AttachRequest{Name: name, ChatID: chatID})
+				if aerr != nil {
+					return nil, aerr
+				}
+				vol := config.Volume{Name: res.Name, ChatID: res.ChannelID, Enabled: true}
+				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
+					return nil, werr
+				}
+				return map[string]any{
+					"name":       res.Name,
+					"channel_id": res.ChannelID,
+					"chat_id":    res.ChatID,
+					"title":      res.Title,
+				}, nil
+			},
 			// 卷用量：面板卷标签直接显示文件数与占用
 			Stats: func(name string) (int64, int64, bool) {
 				v, ok := vols[name]

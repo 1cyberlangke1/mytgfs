@@ -13,7 +13,7 @@
   "err.bot_not_ready": "bot session is not ready yet; check the connection and try again",
   "err.volume_name_required": "--name is required",
   "err.volume_create_prefix": "create volume failed",
-  "err.volume_exists": "a volume with this name already exists in the config",
+  "err.volume_exists": "a volume named %s already exists",
   "err.volume_not_found": "no volume named %s in the config",
   "err.volume_no_channel": "volume %s has no channel id configured",
   "err.check_prefix": "check failed",
@@ -331,5 +331,10 @@
   "err.config_range": "%s must be between %d and %d (got %d)",
   "err.config_enum": "%s must be one of %s (got %s)",
   "err.config_addr": "%s is not a valid address, expected host:port such as 127.0.0.1:8080",
-  "err.config_too_long": "%s must be at most %d characters"
+  "err.config_too_long": "%s must be at most %d characters",
+  "err.volume_attach_prefix": "cannot attach existing channel",
+  "err.volume_config_append_prefix": "cannot write config",
+  "err.volume_chat_id_invalid": "invalid channel id, expected -100... or bare id",
+  "err.volume_attach_unavailable": "attaching an existing channel is unavailable here",
+  "cli.flag.chat_id": "channel id: -100... or bare id"
 }

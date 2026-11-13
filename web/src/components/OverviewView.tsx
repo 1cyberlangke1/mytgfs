@@ -245,9 +245,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes }) => {
               const isSelected = volume.id === activeVolumeId;
 
-              const sharePct = Math.round(
-                (totalBytes / Math.max(1, summary.totalBytes)) * 100
-              );
+              const sharePct = (totalBytes / Math.max(1, summary.totalBytes)) * 100;
 
               // Compute file-type composition segments inside this volume
               const volFiles = files.filter((f) => f.volumeId === volume.id && !f.isDir);
@@ -296,7 +294,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           </h3>
                         </div>
                         <span dir="ltr" className="text-xs font-mono font-semibold tabular-nums text-white/90 shrink-0">
-                          {formatPercent(sharePct, locale)}
+                          {formatPercent(sharePct, locale, 2)}
                         </span>
                       </div>
                     </div>

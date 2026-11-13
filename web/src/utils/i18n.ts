@@ -78,16 +78,17 @@ export function formatNumber(
 /**
  * Formats percentage (0..100) using locale-specific conventions.
  */
-export function formatPercent(pct: number, locale: Locale = 'zh'): string {
+export function formatPercent(pct: number, locale: Locale = 'zh', digits = 0): string {
   if (!Number.isFinite(pct)) return '0%';
   const meta = getLocaleMeta(locale);
   try {
     return new Intl.NumberFormat(meta.htmlLang, {
       style: 'percent',
-      maximumFractionDigits: 0,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     }).format(pct / 100);
   } catch {
-    return `${Math.round(pct)}%`;
+    return `${pct.toFixed(digits)}%`;
   }
 }
 

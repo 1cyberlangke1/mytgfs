@@ -44,6 +44,7 @@ import {
   ApiQueueItem,
   ApiState,
   ApiTransfer,
+  attachVolume,
   cacheFile,
   createVolume,
   deleteVolume,
@@ -218,10 +219,11 @@ export default function App() {
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   // 卷管理能力来自服务端：桌面壳可建/删卷，纯网页模式可能只读
-  const [caps, setCaps] = useState<{ createVolume: boolean; deleteVolume: boolean }>({
-    createVolume: false,
-    deleteVolume: false,
-  });
+  const [caps, setCaps] = useState<{
+    createVolume: boolean;
+    deleteVolume: boolean;
+    attachVolume: boolean;
+  }>({ createVolume: false, deleteVolume: false, attachVolume: false });
   // 封面图地址带版本号，改完封面立刻刷新，不依赖浏览器缓存过期
   const [coverVersion, setCoverVersion] = useState(0);
 
@@ -229,6 +231,9 @@ export default function App() {
   const localeMeta = getLocaleMeta(locale);
   const summary = computeOverviewSummary(volumes, files);
   const viewSpring = useInterruptibleViewSpring(activeTab);
+  // 离线缓存依赖 Service Worker：桌面壳内没有 SW，整块功能不展示，避免假按钮
+  const offlineAvailable =
+    typeof window !== 'undefined' && !('_wails' in window) && 'caches' in window;
 
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
   const uploadAbort = useRef(new Map<string, AbortController>());
@@ -309,6 +314,7 @@ export default function App() {
     setCaps({
       createVolume: Boolean(st.caps?.createVolume),
       deleteVolume: Boolean(st.caps?.deleteVolume),
+      attachVolume: Boolean(st.caps?.attachVolume),
     });
     if (st.mount) {
       setSettings((prev) => ({
@@ -387,7 +393,14 @@ export default function App() {
         );
         setActiveVolumeId((cur) => cur || st.volumes[0]?.name || '');
         const lists = await Promise.all(st.volumes.map((v) => listFiles(v.name, true)));
-        if (alive) setFiles(lists.flat().map(toFileItem));
+        const flat = lists.flat();
+        // 卷已列出但索引还没读到内容（挂载/重建进行中）：按状态里的 entries 继续重试
+        const expectEntries = st.volumes.some((v) => v.entries > 0);
+        if (flat.length === 0 && expectEntries && attempt < 40) {
+          timer = window.setTimeout(() => void tick(attempt + 1), 1500);
+          return;
+        }
+        if (alive) setFiles(flat.map(toFileItem));
       } catch (err) {
         if (alive) pushToast(err instanceof Error ? err.message : String(err), 'error');
       }
@@ -725,6 +738,14 @@ export default function App() {
     createVolume(name, title, point)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => pushToast(t.volume.createSuccess.replace('{name}', name), 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleAttachVolume 挂载已有频道：名称 + chat_id，后端只读校验后写配置
+  const handleAttachVolume = (name: string, chatId: number) => {
+    attachVolume(name, chatId)
+      .then(() => Promise.all([reloadState(), reloadFiles()]))
+      .then(() => pushToast(t.volume.attachSuccess.replace('{name}', name), 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
@@ -1209,6 +1230,8 @@ export default function App() {
                 onPreviewFile={setPreviewFile}
                 canCreateVolume={caps.createVolume}
                 canDeleteVolume={caps.deleteVolume}
+                canAttachVolume={caps.attachVolume}
+                onAttachVolume={handleAttachVolume}
                 onCreateVolume={handleCreateVolume}
                 onDeleteVolume={handleDeleteVolume}
                 onSetCover={handleSetCover}

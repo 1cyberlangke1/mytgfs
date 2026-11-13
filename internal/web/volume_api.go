@@ -14,6 +14,50 @@ import (
 	"mytgfs/internal/i18n"
 )
 
+// handleAPIAttachVolume 把已有频道挂成卷。
+//
+// 输入：POST {"name","chat_id"}（chat_id 可为字符串或数字）
+// 输出：卷信息；失败 400/500
+// 预期：能力未注入 501；卷名重复 409
+func handleAPIAttachVolume(opts Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+			return
+		}
+		if opts.AttachVolume == nil {
+			replyJSONError(w, http.StatusNotImplemented, i18n.T("err.volume_attach_unavailable"))
+			return
+		}
+		var in struct {
+			Name   string `json:"name"`
+			ChatID int64  `json:"chat_id"`
+		}
+		if !decodeBody(w, r, &in) {
+			return
+		}
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			replyJSONError(w, http.StatusBadRequest, i18n.T("err.volume_name_required"))
+			return
+		}
+		if !validVolumeName(name) {
+			replyJSONError(w, http.StatusBadRequest, i18n.T("err.volume_name_invalid"))
+			return
+		}
+		res, err := opts.AttachVolume(r.Context(), name, in.ChatID)
+		if err != nil {
+			if errors.Is(err, config.ErrVolumeExists) {
+				replyJSONError(w, http.StatusConflict, i18n.T("err.volume_exists", name))
+				return
+			}
+			replyJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		replyJSON(w, http.StatusOK, res)
+	}
+}
+
 // handleAPIVolumes 新建或删除卷。
 //
 // 输入：
