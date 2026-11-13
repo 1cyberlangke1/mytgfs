@@ -185,7 +185,12 @@
     "detailThumbnail": "Thumbnail",
     "detailPlay": "Play",
     "detailZoom": "Zoom",
-    "closeDetail": "Close"
+    "closeDetail": "Close",
+    "nameRequired": "Name cannot be empty",
+    "nameNoSeparator": "Name cannot contain / or \\",
+    "nameExists": "A file or folder with this name already exists in the target folder",
+    "moveTargetTree": "Choose target folder",
+    "movePreview": "Move to"
   },
   "preview": {
     "rawLosslessImage": "RAW / Lossless Image",

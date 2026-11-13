@@ -185,7 +185,12 @@
     "detailThumbnail": "缩略图",
     "detailPlay": "播放",
     "detailZoom": "放大",
-    "closeDetail": "关闭"
+    "closeDetail": "关闭",
+    "nameRequired": "名称不能为空",
+    "nameNoSeparator": "名称不能包含 / 或 \\",
+    "nameExists": "目标目录里已有同名文件或文件夹",
+    "moveTargetTree": "选择目标目录",
+    "movePreview": "将移动到"
   },
   "preview": {
     "rawLosslessImage": "无损图像原片",

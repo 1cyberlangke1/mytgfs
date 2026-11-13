@@ -25,12 +25,6 @@ export interface FileItem {
 export interface VolumeInfo {
   id: string;
   name: string;
-  alias: string;
-  aliasEn?: string;
-  channelHint: string;
-  description: string;
-  descriptionEn?: string;
-  createdAt: string;
   /** 卷根目录是否存在 cover.jpg/.cover.png，只有为 true 才请求封面图 */
   hasCover?: boolean;
 }

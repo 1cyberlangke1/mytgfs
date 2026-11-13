@@ -41,6 +41,7 @@ import {
 } from './utils/i18n';
 import {
   ApiFile,
+  ApiQueueItem,
   ApiState,
   ApiTransfer,
   cacheFile,
@@ -155,6 +156,34 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
   };
 }
 
+// queueFromServer 把服务端串行队列快照转成传输任务。
+//
+// 输入：q 队列项（name 形如 "demo:/path/a.txt"）；index 序号
+// 输出：state=queued 的上传任务
+// 预期：与正在上传的同名任务去重，避免面板出现两行
+function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
+  const volumeId = q.name.includes(':') ? q.name.slice(0, q.name.indexOf(':')) : '';
+  const name = q.name.includes(':') ? q.name.slice(q.name.indexOf(':') + 1) : q.name;
+  return {
+    id: `q-${index}-${q.id}`,
+    fileName: name.split('/').pop() || name,
+    volumeId,
+    targetParentId: null,
+    direction: 'upload',
+    size: 0,
+    transferredBytes: 0,
+    state: q.state === 'running' ? 'transferring' : q.state === 'failed' ? 'failed' : 'queued',
+    speedBps: 0,
+    isChunkedResume: false,
+    chunkSize: 0,
+    currentChunk: 0,
+    totalChunks: 0,
+    createdAt: new Date().toISOString(),
+    category: inferFileCategory(name, false),
+    errorMessage: q.error,
+  };
+}
+
 export default function App() {
   const globalUploadRef = useRef<HTMLInputElement | null>(null);
 
@@ -175,6 +204,7 @@ export default function App() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
+  const [serverQueue, setServerQueue] = useState<TransferTask[]>([]);
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
   const [offlineFiles, setOfflineFiles] = useState<OfflineSavedFile[]>(() =>
     loadFromStorage<OfflineSavedFile[]>(STORAGE_KEYS.offline, [])
@@ -203,11 +233,20 @@ export default function App() {
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
   const uploadAbort = useRef(new Map<string, AbortController>());
   const uploadInputs = useRef(new Map<string, { file: File; volumeId: string; parentId: string | null }>());
+  // 速度采样：只展示真实测得的字节增量，不编造速率
+  const uploadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
+  const downloadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
 
-  const transfers = useMemo(
-    () => [...uploadTasks, ...serverTransfers],
-    [uploadTasks, serverTransfers]
-  );
+  // 合并上传中、下载中与服务端排队任务；同名的活动上传优先，避免重复行
+  const transfers = useMemo(() => {
+    const active = new Set(
+      uploadTasks
+        .filter((t) => t.state === 'transferring' || t.state === 'queued')
+        .map((t) => `${t.volumeId}:${t.fileName}`)
+    );
+    const queued = serverQueue.filter((q) => !active.has(`${q.volumeId}:${q.fileName}`));
+    return [...uploadTasks, ...serverTransfers, ...queued];
+  }, [uploadTasks, serverTransfers, serverQueue]);
 
   const cycleNextLocale = () => {
     const idx = LOCALE_OPTIONS.findIndex((o) => o.id === locale);
@@ -240,23 +279,33 @@ export default function App() {
     }
   };
 
+  // sampleDownloads 把服务端进度转成任务，并按两次采样的字节差算真实速率
+  const sampleDownloads = useCallback((items: ApiTransfer[]): TransferTask[] => {
+    const now = performance.now();
+    return items.map((t, i) => {
+      const task = transferFromServer(t, i);
+      const prev = downloadSpeed.current.get(task.id);
+      if (prev && now > prev.at && task.transferredBytes >= prev.bytes) {
+        task.speedBps = ((task.transferredBytes - prev.bytes) * 1000) / (now - prev.at);
+      }
+      downloadSpeed.current.set(task.id, { bytes: task.transferredBytes, at: now });
+      return task;
+    });
+  }, []);
+
   // reloadState 只刷新卷摘要与传输进度（轻量，用于轮询）
   const reloadState = useCallback(async () => {
     const st = await getState();
-    setVolumes((prev) => {
-      const next = st.volumes.map((v) => ({
+    setVolumes(
+      st.volumes.map((v) => ({
         id: v.name,
         name: v.name,
-        alias: prev.find((p) => p.id === v.name)?.alias || v.name,
-        channelHint: prev.find((p) => p.id === v.name)?.channelHint || '',
-        description: prev.find((p) => p.id === v.name)?.description || '',
-        createdAt: prev.find((p) => p.id === v.name)?.createdAt || '',
         hasCover: Boolean(v.cover),
-      }));
-      return next;
-    });
+      }))
+    );
     setConnectionStatus(connOf(st.status));
-    setServerTransfers((st.status?.transfers ?? []).map(transferFromServer));
+    setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
+    setServerQueue((st.status?.queue ?? []).map(queueFromServer));
     setCaps({
       createVolume: Boolean(st.caps?.createVolume),
       deleteVolume: Boolean(st.caps?.deleteVolume),
@@ -268,7 +317,7 @@ export default function App() {
         webdavPath: st.mount!.addr || prev.webdavPath,
       }));
     }
-  }, []);
+  }, [sampleDownloads]);
 
   // reloadFiles 拉取所有卷的完整条目（索引查询，不进 Telegram）
   const volumesRef = useRef<VolumeInfo[]>([]);
@@ -321,7 +370,8 @@ export default function App() {
         const st = await getState();
         if (!alive) return;
         setConnectionStatus(connOf(st.status));
-        setServerTransfers((st.status?.transfers ?? []).map(transferFromServer));
+        setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
+        setServerQueue((st.status?.queue ?? []).map(queueFromServer));
         if (st.volumes.length === 0) {
           if (attempt < 40) {
             timer = window.setTimeout(() => void tick(attempt + 1), 1500);
@@ -332,10 +382,6 @@ export default function App() {
           st.volumes.map((v) => ({
             id: v.name,
             name: v.name,
-            alias: v.name,
-            channelHint: '',
-            description: '',
-            createdAt: '',
             hasCover: Boolean(v.cover),
           }))
         );
@@ -440,13 +486,20 @@ export default function App() {
         '',
         file,
         (ratio) => {
-          setUploadTasks((prev) =>
-            prev.map((tr) =>
+          const bytes = Math.round(task.size * ratio);
+          const now = performance.now();
+          const prev = uploadSpeed.current.get(task.id);
+          const bps =
+            prev && now > prev.at ? Math.max(0, ((bytes - prev.bytes) * 1000) / (now - prev.at)) : 0;
+          uploadSpeed.current.set(task.id, { bytes, at: now });
+          setUploadTasks((prevTasks) =>
+            prevTasks.map((tr) =>
               tr.id === task.id
                 ? {
                     ...tr,
-                    transferredBytes: Math.round(tr.size * ratio),
-                    speedBps: 0,
+                    transferredBytes: bytes,
+                    // 间隔太短时沿用上次速率，避免数字乱跳
+                    speedBps: bps > 0 ? bps : tr.speedBps,
                   }
                 : tr
             )
@@ -745,10 +798,11 @@ export default function App() {
         multiple
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
-            const targetVol =
-              volumes.find((v) => v.id === activeVolumeId)?.id ||
-              volumes[0]?.id ||
-              'vol-archive';
+            const targetVol = volumes.find((v) => v.id === activeVolumeId)?.id || volumes[0]?.id || '';
+            if (!targetVol) {
+              e.target.value = '';
+              return;
+            }
             handleUploadFiles(e.target.files, targetVol, currentFolderId);
             e.target.value = '';
           }

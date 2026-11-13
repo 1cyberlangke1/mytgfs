@@ -80,7 +80,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
   const summary = computeOverviewSummary(volumes, files);
   const targetVolumeId =
-    volumes.find((v) => v.id === activeVolumeId)?.id || volumes[0]?.id || 'vol-archive';
+    volumes.find((v) => v.id === activeVolumeId)?.id || volumes[0]?.id || '';
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -248,8 +248,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes }) => {
               const isSelected = volume.id === activeVolumeId;
-              const displayAlias = volume.alias;
-
 
               const sharePct = Math.round(
                 (totalBytes / Math.max(1, summary.totalBytes)) * 100
@@ -300,9 +298,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           <h3 dir="ltr" className="text-base font-semibold text-white font-mono truncate">
                             {volume.name}
                           </h3>
-                          <p className="text-xs text-zinc-200 truncate">
-                            {displayAlias}
-                          </p>
                         </div>
                         <span dir="ltr" className="text-xs font-mono font-semibold tabular-nums text-white/90 shrink-0">
                           {formatPercent(sharePct, locale)}
@@ -362,6 +357,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-zinc-950 dark:text-white">
             {t.overview.recentTransfersHeading}
+            {transfers.length > 0 && (
+              <span className="ms-2 text-xs font-normal text-zinc-500 dark:text-zinc-400 tabular-nums">
+                {formatNumber(transfers.length, locale)}
+              </span>
+            )}
           </h2>
           {transfers.some((tr) => tr.state === 'completed') && (
             <Button
@@ -388,10 +388,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <div className="surface-card rounded-2xl divide-y divide-zinc-200/80 dark:divide-zinc-800/80 overflow-hidden">
             <AnimatePresence initial={false}>
               {transfers.map((task) => {
-                const pct =
-                  task.size > 0
-                    ? Math.min(100, Math.round((task.transferredBytes / task.size) * 100))
-                    : 100;
+                const unknownSize = task.size === 0;
+                const pct = unknownSize
+                  ? 0
+                  : Math.min(100, Math.round((task.transferredBytes / task.size) * 100));
                 const stateLabel =
                   task.state === 'transferring'
                     ? task.direction === 'upload'
@@ -447,8 +447,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           </span>
                           <span aria-hidden="true">·</span>
                           <span dir="ltr">
-                            {formatBytes(task.transferredBytes, 2, locale)} /{' '}
-                            {formatBytes(task.size, 2, locale)} ({formatPercent(pct, locale)})
+                            {unknownSize
+                              ? '—'
+                              : `${formatBytes(task.transferredBytes, 2, locale)} / ${formatBytes(
+                                  task.size,
+                                  2,
+                                  locale
+                                )} (${formatPercent(pct, locale)})`}
                           </span>
                           {task.isChunkedResume && (
                             <>
@@ -483,7 +488,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {task.direction === 'upload' &&
+                      {!task.id.startsWith('q-') &&
+                        task.direction === 'upload' &&
                         (task.state === 'transferring' ||
                           task.state === 'paused' ||
                           task.state === 'queued') && (
@@ -518,7 +524,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                         onClick={() => onCancelTransfer(task.id)}
                         aria-label={`${t.overview.cancelBtn} ${task.fileName}`}
                         className={`text-zinc-400 hover:text-red-600 dark:hover:text-red-400 ${
-                          task.direction === 'download' ? 'hidden' : ''
+                          task.direction === 'download' || task.id.startsWith('q-') ? 'hidden' : ''
                         }`}
                       >
                         <X className="w-4 h-4" />

@@ -38,6 +38,14 @@ export interface ApiMount {
   volume: string;
 }
 
+export interface ApiQueueItem {
+  id: number;
+  name: string;
+  state: string;
+  attempt: number;
+  error?: string;
+}
+
 export interface ApiState {
   volumes: ApiVolume[];
   caps?: { createVolume?: boolean; deleteVolume?: boolean };
@@ -45,7 +53,7 @@ export interface ApiState {
     state?: string;
     state_code?: string;
     transfers?: ApiTransfer[];
-    queue?: number;
+    queue?: ApiQueueItem[];
   };
   mount?: ApiMount;
 }

@@ -51,6 +51,7 @@ import {
 } from '../utils/i18n';
 import { motion } from 'motion/react';
 import { RichFileTypeEmblem } from './VisualAssets';
+import { FolderTree } from './FolderTree';
 import { Button, IOS_BOUNCE_SPRING, Input, Select, useInterruptibleViewSpring } from './ui';
 
 interface FilesViewProps {
@@ -79,6 +80,45 @@ interface FilesViewProps {
   onDeleteVolume: (name: string) => void;
   onSetCover: (volumeId: string, file: File) => void;
   onRemoveCover: (volumeId: string) => void;
+}
+
+// validateEntryName 校验重命名输入，返回错误文案或空串。
+//
+// 输入：name 输入值；item 原条目；targetId 目标目录；all 当前卷条目；t 文案
+// 输出：可读错误；合法返回空串
+// 预期：空名、含路径分隔符、目标目录重名都在提交前拦住
+function validateEntryName(
+  name: string,
+  item: FileItem,
+  targetId: string | null,
+  all: FileItem[],
+  t: Translations
+): string {
+  const trimmed = name.trim();
+  if (!trimmed) return t.files.nameRequired;
+  if (/[\\/]/.test(trimmed)) return t.files.nameNoSeparator;
+  if (trimmed === '.' || trimmed === '..') return t.files.nameNoSeparator;
+  const clash = all.some(
+    (f) =>
+      f.volumeId === item.volumeId &&
+      f.id !== item.id &&
+      f.parentId === targetId &&
+      f.name.toLowerCase() === trimmed.toLowerCase()
+  );
+  return clash ? t.files.nameExists : '';
+}
+
+// joinPath 拼接目录与文件名，根目录不产生双斜杠。
+function joinPath(dir: string, name: string): string {
+  if (dir === '/' || dir === '') return `/${name}`;
+  return `${dir}/${name}`;
+}
+
+// targetPathText 把目标目录转成可读路径，用于弹窗预览。
+function targetPathText(all: FileItem[], volumeId: string, targetId: string | null): string {
+  if (!targetId) return '/';
+  const dir = all.find((f) => f.id === targetId && f.volumeId === volumeId);
+  return dir ? getItemFullPath(all, dir) : '/';
 }
 
 const PAGE_SIZE = 50;
@@ -253,8 +293,10 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
   const submitRenameMove = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingItem || !editName.trim()) return;
-    onRenameMoveItem(editingItem.id, editName.trim(), editTargetFolderId);
+    if (!editingItem) return;
+    const name = editName.trim();
+    if (validateEntryName(name, editingItem, editTargetFolderId, files, t)) return;
+    onRenameMoveItem(editingItem.id, name, editTargetFolderId);
     setEditingItem(null);
   };
 
@@ -338,18 +380,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
             onChange={(e) => handleVolumeSelect(e.target.value)}
             className="min-w-0 max-w-full sm:w-auto font-semibold"
           >
-            {volumes.map((v) => {
-              const labelAlias = v.alias;
-              return (
-                <option
-                  key={v.id}
-                  value={v.id}
-                  className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-                >
-                  {v.name} — {labelAlias}
-                </option>
-              );
-            })}
+            {volumes.map((v) => (
+              <option
+                key={v.id}
+                value={v.id}
+                className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+              >
+                {v.name}
+              </option>
+            ))}
           </Select>
         </div>
 
@@ -1098,36 +1137,43 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 type="text"
                 required
                 value={editName}
+                aria-invalid={Boolean(
+                  validateEntryName(editName, editingItem, editTargetFolderId, files, t)
+                )}
                 onChange={(e) => setEditName(e.target.value)}
               />
+              {validateEntryName(editName, editingItem, editTargetFolderId, files, t) && (
+                <p className="text-[11px] text-red-600 dark:text-red-400">
+                  {validateEntryName(editName, editingItem, editTargetFolderId, files, t)}
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">
-              <label
-                htmlFor="move-target-select"
-                className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
-              >
-                {t.files.modalMoveTargetLabel}
-              </label>
-              <Select
-                id="move-target-select"
-                value={editTargetFolderId ?? '__ROOT__'}
-                onChange={(e) =>
-                  setEditTargetFolderId(e.target.value === '__ROOT__' ? null : e.target.value)
+              <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                {t.files.moveTargetTree}
+              </span>
+              <FolderTree
+                dirs={volumeDirectories}
+                value={editTargetFolderId}
+                onChange={setEditTargetFolderId}
+                disabledIds={
+                  new Set(
+                    volumeDirectories
+                      .filter((d) => !canMoveItemsToFolder(files, [editingItem.id], d.id))
+                      .map((d) => d.id)
+                  )
                 }
-                className="w-full"
-              >
-                <option value="__ROOT__" className="bg-white dark:bg-zinc-900">
-                  /{currentVolume?.name} ({t.files.rootCrumb})
-                </option>
-                {volumeDirectories
-                  .filter((dir) => canMoveItemsToFolder(files, [editingItem.id], dir.id))
-                  .map((dir) => (
-                    <option key={dir.id} value={dir.id} className="bg-white dark:bg-zinc-900">
-                      {getItemFullPath(files, dir)}
-                    </option>
-                  ))}
-              </Select>
+                rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
+                ariaLabel={t.files.modalMoveTargetLabel}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                {t.files.movePreview}:{' '}
+                {joinPath(
+                  targetPathText(files, editingItem.volumeId, editTargetFolderId),
+                  editName.trim() || '…'
+                )}
+              </p>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
@@ -1165,31 +1211,30 @@ export const FilesView: React.FC<FilesViewProps> = ({
               {t.files.modalBatchMoveTitle}
             </h3>
             <div className="space-y-1.5">
-              <label
-                htmlFor="batch-move-target-select"
-                className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
-              >
-                {t.files.modalMoveTargetLabel}
-              </label>
-              <Select
-                id="batch-move-target-select"
-                value={batchTargetFolderId ?? '__ROOT__'}
-                onChange={(e) =>
-                  setBatchTargetFolderId(e.target.value === '__ROOT__' ? null : e.target.value)
+              <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                {t.files.moveTargetTree}
+              </span>
+              <FolderTree
+                dirs={volumeDirectories}
+                value={batchTargetFolderId}
+                onChange={setBatchTargetFolderId}
+                disabledIds={
+                  new Set(
+                    volumeDirectories
+                      .filter(
+                        (d) => !canMoveItemsToFolder(files, Array.from(selectedIds), d.id)
+                      )
+                      .map((d) => d.id)
+                  )
                 }
-                className="w-full"
-              >
-                <option value="__ROOT__" className="bg-white dark:bg-zinc-900">
-                  /{currentVolume?.name} ({t.files.rootCrumb})
-                </option>
-                {volumeDirectories
-                  .filter((dir) => canMoveItemsToFolder(files, Array.from(selectedIds), dir.id))
-                  .map((dir) => (
-                    <option key={dir.id} value={dir.id} className="bg-white dark:bg-zinc-900">
-                      {getItemFullPath(files, dir)}
-                    </option>
-                  ))}
-              </Select>
+                rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
+                ariaLabel={t.files.modalMoveTargetLabel}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                {t.files.movePreview}:{' '}
+                {targetPathText(files, activeVolumeId, batchTargetFolderId)} ·{' '}
+                {formatPlural(selectedIds.size, t.plurals.selectedItems, locale)}
+              </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
               <Button

@@ -39,6 +39,7 @@ import (
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/version"
+	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
 
@@ -564,6 +565,78 @@ func runWeb(args []string) {
 					}
 				}
 				return names
+			},
+			// 建卷需要 user 会话：临时开一条，建完就关
+			CreateVolume: func(ctx context.Context, name, title, point string) (any, error) {
+				bn := readBotUsername(ctx, cfg, cfg.APIHash(), key)
+				if bn == "" {
+					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
+				}
+				uc := tgclient.New(cfg.Telegram.APIID, cfg.APIHash(),
+					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key}, tgclient.Options{})
+				var res volume.Result
+				rerr := uc.Run(ctx, func(ctx context.Context) error {
+					r, cerr := volume.Create(ctx, uc.API(), volume.Request{
+						Name: name, Title: title, BotUsername: bn,
+					})
+					res = r
+					return cerr
+				})
+				if rerr != nil {
+					return nil, rerr
+				}
+				vol := config.Volume{
+					Name:    res.Name,
+					ChatID:  res.ChannelID,
+					Point:   strings.TrimSpace(point),
+					Enabled: true,
+				}
+				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
+					return nil, aerr
+				}
+				return map[string]any{
+					"name":       res.Name,
+					"channel_id": res.ChannelID,
+					"chat_id":    res.ChatID,
+					"muted":      res.Muted,
+				}, nil
+			},
+			// 删卷：删频道 → 移出配置 → 删索引
+			DeleteVolume: func(ctx context.Context, name string) error {
+				cur, cerr := config.Load(cfgPath)
+				if cerr != nil {
+					return cerr
+				}
+				var target config.Volume
+				found := false
+				for _, v := range cur.Volumes {
+					if strings.EqualFold(v.Name, name) {
+						target, found = v, true
+						break
+					}
+				}
+				if !found {
+					return config.ErrVolumeNotFound
+				}
+				uc := tgclient.New(cfg.Telegram.APIID, cfg.APIHash(),
+					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key}, tgclient.Options{})
+				rerr := uc.Run(ctx, func(ctx context.Context) error {
+					res, e := channel.Resolve(ctx, uc.API(), target.ChatID)
+					if e != nil {
+						return e
+					}
+					return channel.Delete(ctx, uc.API(), res)
+				})
+				if rerr != nil {
+					return rerr
+				}
+				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
+					return rerr
+				}
+				for _, suffix := range []string{"", "-wal", "-shm"} {
+					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
+				}
+				return nil
 			},
 			// 卷用量：面板卷标签直接显示文件数与占用
 			Stats: func(name string) (int64, int64, bool) {

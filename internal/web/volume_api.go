@@ -19,6 +19,7 @@ import (
 // 输入：
 //   - POST {"name","title","point"}
 //   - DELETE ?name=
+//
 // 输出：创建返回卷信息；删除返回 {"removed":true}
 // 预期：能力未注入时返回 501；重名 409；参数缺失 400
 func handleAPIVolumes(opts Options) http.HandlerFunc {
