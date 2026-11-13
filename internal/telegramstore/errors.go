@@ -54,11 +54,11 @@ var messageGoneErrors = map[string]bool{
 // 输出：true 表示需要用户去 Telegram 侧处理（重建频道、加回 bot、恢复权限）
 // 预期：只认 RPC 错误类型，不匹配错误文本
 func IsChannelUnavailable(err error) bool {
-	var e *tgerr.Error
-	if !errors.As(err, &e) {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	if !ok {
 		return false
 	}
-	_, ok := channelErrors[e.Type]
+	_, ok = channelErrors[e.Type]
 	return ok
 }
 
@@ -68,8 +68,8 @@ func IsChannelUnavailable(err error) bool {
 // 输出：true 表示文件消息在 Telegram 侧已不存在
 // 预期：调用方应把索引里的这条记录删掉，而不是反复重试
 func IsMessageGone(err error) bool {
-	var e *tgerr.Error
-	if !errors.As(err, &e) {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	if !ok {
 		return false
 	}
 	return messageGoneErrors[e.Type]
@@ -84,8 +84,7 @@ func DescribeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var e *tgerr.Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*tgerr.Error](err); ok {
 		if key, ok := channelErrors[e.Type]; ok {
 			return fmt.Errorf("%s: %w", i18n.T("err.channel_hint", i18n.T(key), e.Type), err)
 		}

@@ -6,6 +6,7 @@ package uploadcache
 // 写入走临时文件 + rename，进程被杀时不会留下半个 JSON。
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"os"
@@ -85,8 +86,6 @@ func (s *Store) Clear(key string) error {
 // 预期：只保留 key 的安全性无关字符替换，避免出现子目录
 func (s *Store) path(key string) string {
 	safe := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "..", "_").Replace(key)
-	if safe == "" {
-		safe = "unnamed"
-	}
+	safe = cmp.Or(safe, "unnamed")
 	return filepath.Join(s.dir, safe+".json")
 }

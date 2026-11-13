@@ -10,6 +10,7 @@ package web
 // 所有资源都嵌在二进制里，不依赖外网。
 
 import (
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"net/http"
@@ -116,10 +117,7 @@ func handleManifest(pwa config.PWA) http.HandlerFunc {
 //   - 版本号注入到脚本里，作为缓存命名空间
 func handleServiceWorker() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ver := version.Version
-		if ver == "" {
-			ver = "dev"
-		}
+		ver := cmp.Or(version.Version, "dev")
 		ver = strings.NewReplacer(`"`, "", `\`, "", "\n", "", "\r", "").Replace(ver)
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")

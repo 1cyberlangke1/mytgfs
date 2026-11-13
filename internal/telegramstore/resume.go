@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/rand"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -144,8 +145,8 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 // 输出：true 表示清空断点后整份重传可能成功
 // 预期：覆盖临时区过期、片数不符、分片缺失这几类
 func IsUploadStateError(err error) bool {
-	var e *tgerr.Error
-	if !errors.As(err, &e) {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	if !ok {
 		return false
 	}
 	switch e.Type {
@@ -252,12 +253,7 @@ func (s *Store) saveResume(key string, r *UploadResume, done map[int]bool) {
 	if s.resumeStore == nil || key == "" {
 		return
 	}
-	idx := make([]int, 0, len(done))
-	for i := range done {
-		idx = append(idx, i)
-	}
-	sort.Ints(idx)
-	r.Done = idx
+	r.Done = slices.Sorted(maps.Keys(done))
 	if err := s.resumeStore.Save(key, r); err != nil {
 		slog.Debug("保存上传断点失败", "err", err)
 	}
@@ -294,14 +290,9 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	workers := s.workers()
-	if total < workers {
-		workers = total
-	}
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	workers := min(total, s.workers())
+	for range workers {
+		wg.Go(func() {
 			buf := make([]byte, partSize)
 			for idx := range jobs {
 				off := int64(idx) * int64(partSize)
@@ -339,10 +330,10 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 				}
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
-	for idx := 0; idx < total; idx++ {
+	for idx := range total {
 		mu.Lock()
 		skip := done[idx]
 		mu.Unlock()

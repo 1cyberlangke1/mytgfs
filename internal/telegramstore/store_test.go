@@ -124,10 +124,7 @@ func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest)
 	if off >= len(f.fileData) {
 		return &tg.UploadFile{Bytes: nil}, nil
 	}
-	end := off + int(req.Limit)
-	if end > len(f.fileData) {
-		end = len(f.fileData)
-	}
+	end := min(off+int(req.Limit), len(f.fileData))
 	return &tg.UploadFile{Bytes: f.fileData[off:end]}, nil
 }
 

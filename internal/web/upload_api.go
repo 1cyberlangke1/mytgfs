@@ -13,6 +13,7 @@ package web
 //   DELETE /api/upload       放弃并清理
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -69,9 +70,7 @@ func newUploadAPI(manager func(volume string) (fm.Files, bool), tmpDir string) *
 	if manager == nil {
 		return nil
 	}
-	if tmpDir == "" {
-		tmpDir = os.TempDir()
-	}
+	tmpDir = cmp.Or(tmpDir, os.TempDir())
 	return &uploadAPI{manager: manager, tmpDir: tmpDir, sess: map[string]*uploadSession{}}
 }
 

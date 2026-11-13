@@ -64,10 +64,7 @@ func Run(ctx context.Context, idx *index.Index, api API, channelID, accessHash i
 	}
 	rep.Checked = len(files)
 	for start := 0; start < len(files); start += batchSize {
-		end := start + batchSize
-		if end > len(files) {
-			end = len(files)
-		}
+		end := min(start+batchSize, len(files))
 		batch := files[start:end]
 		byID, ferr := fetch(ctx, api, channelID, accessHash, batch)
 		if ferr != nil {

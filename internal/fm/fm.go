@@ -10,12 +10,13 @@ package fm
 // 所有路径都是卷内绝对路径（以 / 开头），越界（含 ..）一律拒绝。
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -90,11 +91,14 @@ func (m *Manager) List(ctx context.Context, dir string) ([]Entry, error) {
 	for _, fi := range infos {
 		out = append(out, Entry{Name: fi.Name(), Dir: fi.IsDir(), Size: fi.Size(), Mod: fi.ModTime()})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Dir != out[j].Dir {
-			return out[i].Dir
+	slices.SortFunc(out, func(a, b Entry) int {
+		if a.Dir != b.Dir {
+			if a.Dir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 	return out, nil
 }
@@ -274,7 +278,7 @@ func (m *Manager) Remove(ctx context.Context, p string) error {
 		}
 	}
 	// 先删深的目录记录，最后删目标自身（walk 已把目标放进 dirs，这里跳过）
-	sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
+	slices.SortFunc(dirs, func(a, b string) int { return cmp.Compare(b, a) })
 	for _, d := range dirs {
 		if d == c {
 			continue
@@ -351,7 +355,7 @@ func (m *Manager) Move(ctx context.Context, from, to string) error {
 			return err
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
+	slices.SortFunc(dirs, func(a, b string) int { return cmp.Compare(b, a) })
 	for _, d := range dirs {
 		if d == src {
 			continue
@@ -425,10 +429,8 @@ func relPath(base, p string) (string, error) {
 // 预期：出现 .. 段直接拒绝，防止越出卷根
 func clean(p string) (string, error) {
 	p = strings.ReplaceAll(p, `\`, "/")
-	if p == "" {
-		p = "/"
-	}
-	for _, seg := range strings.Split(p, "/") {
+	p = cmp.Or(p, "/")
+	for seg := range strings.SplitSeq(p, "/") {
 		if seg == ".." {
 			return "", ErrBadPath
 		}

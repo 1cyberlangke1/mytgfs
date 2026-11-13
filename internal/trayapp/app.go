@@ -6,6 +6,7 @@ package trayapp
 // GUI 子系统的 `mytgfs-tray.exe` 共用同一套逻辑。
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -106,10 +107,7 @@ func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *
 //
 //	Web 面板只在菜单「打开面板」时启动，「关闭面板」立即停止
 func Run(opts Options) error {
-	cfgPath := opts.ConfigPath
-	if cfgPath == "" {
-		cfgPath = "config.toml"
-	}
+	cfgPath := cmp.Or(opts.ConfigPath, "config.toml")
 	port := opts.Port
 	if port <= 0 {
 		port = 8720
@@ -583,11 +581,9 @@ func Run(opts Options) error {
 
 		var vwg sync.WaitGroup
 		if interval := SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
-			vwg.Add(1)
-			go func() {
-				defer vwg.Done()
+			vwg.Go(func() {
 				AutoSync(vctx, fsys.NotifyPaths, idx, differ, interval, &tv.mu)
-			}()
+			})
 		}
 
 		mu.Lock()
@@ -595,9 +591,7 @@ func Run(opts Options) error {
 		mu.Unlock()
 
 		// 卷常驻到退出：FUSE 挂载已移除，这里不再有内核挂载点需要等待
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-vctx.Done()
 			vwg.Wait()
 			_ = idx.Close()
@@ -610,12 +604,11 @@ func Run(opts Options) error {
 				}
 			}
 			volMu.Unlock()
-		}()
+		})
 	}
 
 	// mountAll 在连接就绪后执行一次：卷初始化需要已登录的 MTProto 客户端
 	// （PooledAPI 在未初始化时会空指针），所以不能提前调用。
-	var mountOnce sync.Once
 	mountAll := func() {
 		if len(cfg.Volumes) == 0 {
 			mountOne("mytgfs", cfg.Telegram.ChannelID, point)
@@ -638,17 +631,16 @@ func Run(opts Options) error {
 			}
 		}
 	}
+	mountOnce := sync.OnceFunc(mountAll)
 
 	// 连接循环：断网由 gotd 内部无限重连；Run 只在永久错误或 ctx 取消时返回
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		rerr := client.Run(rootCtx, func(ctx context.Context) error {
 			// 连接就绪后读一次 bot 用户名，建卷时用它拉 bot 进新频道
 			if self, serr := client.Self(ctx); serr == nil {
 				setBotUsername(self.Username)
 			}
-			mountOnce.Do(mountAll)
+			mountOnce()
 			<-ctx.Done()
 			return nil
 		})
@@ -664,7 +656,7 @@ func Run(opts Options) error {
 		// 其它永久错误（app id 无效等）无法自愈，保持托盘可退出
 		setState(i18n.T("tray.state.reconnecting"))
 		fmt.Fprintf(os.Stderr, "Telegram 连接结束: %v\n", rerr)
-	}()
+	})
 
 	// 开机自启：状态以系统注册项为准，默认关闭
 	autoOn, aerr := autostart.Enabled()

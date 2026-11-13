@@ -92,7 +92,7 @@ func Rebuild(ctx context.Context, idx *index.Index, f Pager, limit, maxPages int
 	}
 	offset := 0
 	total := 0
-	for page := 0; page < maxPages; page++ {
+	for range maxPages {
 		msgs, next, err := f.HistoryBefore(ctx, offset, limit)
 		if err != nil {
 			return total, err

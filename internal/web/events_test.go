@@ -48,8 +48,8 @@ func TestEventsStreamsTopic(t *testing.T) {
 				done <- ""
 				return
 			}
-			if strings.HasPrefix(l, "event: ") {
-				done <- strings.TrimSpace(strings.TrimPrefix(l, "event: "))
+			if after, ok := strings.CutPrefix(l, "event: "); ok {
+				done <- strings.TrimSpace(after)
 				return
 			}
 		}

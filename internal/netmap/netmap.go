@@ -29,7 +29,7 @@ func Cleanup(addr string) {
 		return
 	}
 	patterns := []string{addr, strings.Replace(addr, ":", "@", 1)}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		matched := false
 		for _, p := range patterns {
 			if p != "" && strings.Contains(line, p) {
@@ -41,7 +41,7 @@ func Cleanup(addr string) {
 			continue
 		}
 		// 盘符是形如 "Y:" 的两字符字段
-		for _, f := range strings.Fields(line) {
+		for f := range strings.FieldsSeq(line) {
 			if len(f) == 2 && strings.HasSuffix(f, ":") {
 				_ = exec.Command("net", "use", f, "/delete", "/y").Run()
 			}

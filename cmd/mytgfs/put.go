@@ -12,6 +12,7 @@ package main
 //   - 索引同时写入 sha256，后续可用 cp 做引用复制
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,7 +23,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"mytgfs/internal/config"
@@ -214,7 +215,7 @@ func collectPutItems(args []string, remoteBase string) ([]putItem, error) {
 			return nil, err
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].remote < items[j].remote })
+	slices.SortFunc(items, func(a, b putItem) int { return cmp.Compare(a.remote, b.remote) })
 	return items, nil
 }
 

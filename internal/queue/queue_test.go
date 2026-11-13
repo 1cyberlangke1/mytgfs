@@ -20,10 +20,8 @@ func TestSerialExecution(t *testing.T) {
 	var mu sync.Mutex
 	running, maxRunning := 0, 0
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 4 {
+		wg.Go(func() {
 			_ = q.Do(context.Background(), "job", func(context.Context) error {
 				mu.Lock()
 				running++
@@ -37,7 +35,7 @@ func TestSerialExecution(t *testing.T) {
 				mu.Unlock()
 				return nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 	if maxRunning != 1 {

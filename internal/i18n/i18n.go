@@ -17,30 +17,31 @@ import (
 //go:embed locales/*.json
 var localeFS embed.FS
 
-var (
-	once    sync.Once
-	current map[string]string
-	langTag string
-)
+// locale 是一次加载后的语言包快照。
+type locale struct {
+	tag  string
+	msgs map[string]string
+}
+
+// load 只解析一次语言包，之后复用同一份快照。
+var load = sync.OnceValue(func() locale {
+	tag := detect()
+	m, ok := readLocale(tag)
+	if !ok {
+		tag = "en"
+		m, _ = readLocale("en")
+	}
+	return locale{tag: tag, msgs: m}
+})
 
 // Init 检测并加载语言包；多次调用只生效一次。
 func Init() {
-	once.Do(func() {
-		tag := detect()
-		m, ok := readLocale(tag)
-		if !ok {
-			tag = "en"
-			m, _ = readLocale("en")
-		}
-		langTag = tag
-		current = m
-	})
+	load()
 }
 
 // Lang 返回当前语言标签。
 func Lang() string {
-	Init()
-	return langTag
+	return load().tag
 }
 
 // T 按 key 取翻译。
@@ -49,8 +50,7 @@ func Lang() string {
 // 输出：翻译文本；key 不存在时返回 key
 // 预期：无 args 返回原文，便于 fmt.Errorf 自行格式化
 func T(key string, args ...any) string {
-	Init()
-	s, ok := current[key]
+	s, ok := load().msgs[key]
 	if !ok {
 		return key
 	}

@@ -515,11 +515,9 @@ func runWeb(args []string) {
 					continue
 				}
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
-				vwg.Add(1)
-				go func() {
-					defer vwg.Done()
+				vwg.Go(func() {
 					trayapp.AutoSync(vsync, nil, wv.idx, differ, interval, nil)
-				}()
+				})
 			}
 		}
 		// 先停自动同步再关索引：顺序反了会写已关闭的库

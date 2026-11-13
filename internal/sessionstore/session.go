@@ -5,6 +5,7 @@ package sessionstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -34,7 +35,7 @@ func (s *Encrypted) LoadSession(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	plain, derr := crypto.Decrypt(s.Key, raw)
-	if derr == crypto.ErrLegacyPlain {
+	if errors.Is(derr, crypto.ErrLegacyPlain) {
 		if err := s.StoreSession(ctx, raw); err != nil {
 			return nil, err
 		}

@@ -22,6 +22,6 @@ func IsAuthLost(err error) bool {
 	if telegram.IsAuthLost(err) {
 		return true
 	}
-	var lost *telegram.AuthLostError
-	return errors.As(err, &lost)
+	_, ok := errors.AsType[*telegram.AuthLostError](err)
+	return ok
 }

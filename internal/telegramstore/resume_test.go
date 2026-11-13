@@ -48,7 +48,7 @@ func TestUploadResumableSkipsDoneParts(t *testing.T) {
 	rs := newMemResume()
 	s.SetResumeStore(rs)
 	done := make([]int, 0, total-1)
-	for i := 0; i < total-1; i++ {
+	for i := range total - 1 {
 		done = append(done, i)
 	}
 	if err := rs.Save("k", &UploadResume{FileID: 7, PartSize: partSize, TotalParts: total, Done: done}); err != nil {

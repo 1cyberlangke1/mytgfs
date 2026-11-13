@@ -108,7 +108,7 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 		_ = srv.Shutdown(context.Background())
 	}()
 	err := srv.ListenAndServe()
-	if err == http.ErrServerClosed {
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
@@ -607,10 +607,7 @@ func viewOf(v any, l pageLabels) statusView {
 	for _, t := range rs.Transfers {
 		tv := transferView{Path: t.Path, Done: t.Done, Total: t.Total}
 		if t.Total > 0 {
-			tv.Pct = int(t.Done * 100 / t.Total)
-			if tv.Pct > 100 {
-				tv.Pct = 100
-			}
+			tv.Pct = min(int(t.Done*100/t.Total), 100)
 		}
 		view.Transfers = append(view.Transfers, tv)
 	}

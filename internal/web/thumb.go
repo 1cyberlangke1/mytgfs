@@ -59,7 +59,7 @@ func newThumbCache(dir string) *thumbCache {
 //
 // 文件被覆盖后大小或时间会变，键随之变化，旧缩略图自然失效。
 func thumbKey(vol, p string, e fm.Entry) string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d", vol, p, e.Size, e.Mod.UnixNano())))
+	h := sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%d\x00%d", vol, p, e.Size, e.Mod.UnixNano()))
 	return hex.EncodeToString(h[:16])
 }
 
@@ -196,7 +196,7 @@ func writeThumb(w http.ResponseWriter, data []byte) {
 
 // etagMatches 处理 If-None-Match：支持逗号分隔与 W/ 弱校验前缀。
 func etagMatches(header, key string) bool {
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		part = strings.TrimSpace(part)
 		part = strings.TrimPrefix(part, "W/")
 		if part == `"`+key+`"` || part == key {

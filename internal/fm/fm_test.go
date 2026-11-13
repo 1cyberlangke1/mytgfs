@@ -134,8 +134,8 @@ func (m *memFS) children(dir string) []fs.FileInfo {
 			continue
 		}
 		rest := strings.TrimPrefix(p, prefix)
-		if i := strings.IndexByte(rest, '/'); i >= 0 {
-			name := rest[:i]
+		if before, _, ok := strings.Cut(rest, "/"); ok {
+			name := before
 			if !seen[name] {
 				seen[name] = true
 				out = append(out, fileInfo{name: name, dir: true})

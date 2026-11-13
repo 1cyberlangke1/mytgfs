@@ -17,8 +17,7 @@ func TestRoundTrip(t *testing.T) {
 		return map[string]string{"action": action}, nil
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = srv.Serve(ctx) }()
 
 	callCtx, callCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -47,8 +46,7 @@ func TestRejectsBadToken(t *testing.T) {
 		return "ok", nil
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = srv.Serve(ctx) }()
 
 	callCtx, callCancel := context.WithTimeout(ctx, 2*time.Second)

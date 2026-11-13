@@ -15,7 +15,7 @@ import (
 // manyFiles 往假后端塞 n 个文件到根目录。
 func manyFiles(f *fakeFiles, n int) {
 	list := make([]fm.Entry, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		list = append(list, fm.Entry{Name: fmt.Sprintf("f%04d.txt", i), Size: int64(i)})
 	}
 	f.entries["/"] = list

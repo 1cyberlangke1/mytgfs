@@ -6,13 +6,14 @@ package web
 // 交互仍然走 htmx：每个操作返回浏览器片段，就地替换 #browser。
 
 import (
+	"cmp"
 	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -242,7 +243,7 @@ func cleanRelPath(rel string) (string, bool) {
 	rel = strings.ReplaceAll(rel, `\`, "/")
 	rel = strings.TrimPrefix(rel, "/")
 	var segs []string
-	for _, seg := range strings.Split(rel, "/") {
+	for seg := range strings.SplitSeq(rel, "/") {
 		switch seg {
 		case "", ".", "..":
 			if seg == ".." {
@@ -514,19 +515,13 @@ func (api *filesAPI) browser(r *http.Request, vol, dir, msg, kind string) browse
 		page = n
 	}
 	data.Total = len(rows)
-	data.Pages = (data.Total + filesPageSize - 1) / filesPageSize
-	if data.Pages < 1 {
-		data.Pages = 1
-	}
+	data.Pages = max((data.Total+filesPageSize-1)/filesPageSize, 1)
 	if page > data.Pages {
 		page = data.Pages
 	}
 	data.Page = page
 	start := (page - 1) * filesPageSize
-	end := start + filesPageSize
-	if end > data.Total {
-		end = data.Total
-	}
+	end := min(start+filesPageSize, data.Total)
 	if start > data.Total {
 		start = data.Total
 	}
@@ -611,28 +606,27 @@ func normalizeSort(s string) string {
 // 输出：无（原地排序）
 // 预期：倒序也不把目录混进文件里
 func sortEntries(entries []fm.Entry, key string, desc bool) {
-	less := func(a, b fm.Entry) bool {
-		switch key {
-		case "size":
-			if a.Size != b.Size {
-				return a.Size < b.Size
-			}
-		case "mod":
-			if !a.Mod.Equal(b.Mod) {
-				return a.Mod.Before(b.Mod)
-			}
-		}
-		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		a, b := entries[i], entries[j]
+	slices.SortStableFunc(entries, func(a, b fm.Entry) int {
 		if a.Dir != b.Dir {
-			return a.Dir
+			if a.Dir {
+				return -1
+			}
+			return 1
 		}
 		if desc {
-			return less(b, a)
+			a, b = b, a
 		}
-		return less(a, b)
+		switch key {
+		case "size":
+			if n := cmp.Compare(a.Size, b.Size); n != 0 {
+				return n
+			}
+		case "mod":
+			if n := a.Mod.Compare(b.Mod); n != 0 {
+				return n
+			}
+		}
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 }
 
@@ -682,13 +676,13 @@ func renderBrowser(w http.ResponseWriter, data browserData) {
 // 预期：路径非法时退化成只有根
 func crumbsOf(dir string) []crumb {
 	out := []crumb{{Name: "/", Path: "/"}}
-	cur := ""
-	for _, seg := range strings.Split(strings.Trim(dir, "/"), "/") {
+	var cur strings.Builder
+	for seg := range strings.SplitSeq(strings.Trim(dir, "/"), "/") {
 		if seg == "" {
 			continue
 		}
-		cur += "/" + seg
-		out = append(out, crumb{Name: seg, Path: cur})
+		cur.WriteString("/" + seg)
+		out = append(out, crumb{Name: seg, Path: cur.String()})
 	}
 	return out
 }

@@ -96,7 +96,7 @@ func SyncChannel(ctx context.Context, idx *index.Index, d ChannelDiffer, limit i
 	res.Pts = pts
 
 	retried := false
-	for round := 0; round < maxDiffRounds; round++ {
+	for range maxDiffRounds {
 		diff, err := d.ChannelDifference(ctx, pts, limit)
 		if err != nil {
 			// 本地 pts 与服务端对不上：重置一次再试

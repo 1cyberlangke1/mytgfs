@@ -6,11 +6,13 @@ package index
 // 同 path 只保留 message_id 最大的版本（后写赢）。
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,7 +231,7 @@ SELECT path, message_id, document_id, access_hash, file_reference, size, sha256,
 FROM pending_done WHERE path = ?`, path)
 	var p PendingDone
 	err := row.Scan(&p.Path, &p.MessageID, &p.DocumentID, &p.AccessHash, &p.FileReference, &p.Size, &p.Sha256, &p.Mtime)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return PendingDone{}, false, nil
 	}
 	if err != nil {
@@ -300,7 +302,7 @@ SELECT path, message_id, document_id, access_hash, file_reference, size, mtime, 
 FROM files WHERE path = ?`, path)
 	var f File
 	err := row.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return File{}, false, nil
 	}
 	if err != nil {
@@ -329,7 +331,7 @@ ORDER BY CASE WHEN path LIKE ? THEN 0 ELSE 1 END, message_id DESC
 LIMIT 1`, size, sha, prefix+"%")
 	var f File
 	err := row.Scan(&f.Path, &f.MessageID, &f.DocumentID, &f.AccessHash, &f.FileReference, &f.Size, &f.Mtime, &f.Sha256)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return File{}, false, nil
 	}
 	if err != nil {
@@ -378,8 +380,8 @@ FROM files WHERE path LIKE ?`, prefix+"%")
 		if rest == "" {
 			continue
 		}
-		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
-			name := rest[:idx]
+		if before, _, ok := strings.Cut(rest, "/"); ok {
+			name := before
 			if seen[name] {
 				continue
 			}
@@ -543,11 +545,14 @@ func (i *Index) Search(ctx context.Context, dir, query string, limit int) ([]Sea
 		}
 		out = append(out, SearchHit{Path: f.Path, Size: f.Size, Mtime: f.Mtime})
 	}
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].IsDir != out[b].IsDir {
-			return out[a].IsDir
+	slices.SortFunc(out, func(a, b SearchHit) int {
+		if a.IsDir != b.IsDir {
+			if a.IsDir {
+				return -1
+			}
+			return 1
 		}
-		return out[a].Path < out[b].Path
+		return cmp.Compare(a.Path, b.Path)
 	})
 	if len(out) > limit {
 		out = out[:limit]
@@ -604,7 +609,7 @@ func (i *Index) PathByMessageID(ctx context.Context, messageID int) (string, boo
 	}
 	var p string
 	err := i.db.QueryRowContext(ctx, `SELECT path FROM files WHERE message_id = ? LIMIT 1`, messageID).Scan(&p)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
@@ -621,7 +626,7 @@ func (i *Index) PathByMessageID(ctx context.Context, messageID int) (string, boo
 func (i *Index) GetMeta(ctx context.Context, key string) (int64, bool, error) {
 	var v int64
 	err := i.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {
