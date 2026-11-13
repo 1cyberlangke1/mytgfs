@@ -442,3 +442,63 @@ func TestSearchFallsBackToList(t *testing.T) {
 		t.Fatal("越界路径应被拒绝")
 	}
 }
+
+// davLikeFS 模拟 dav.FileSystem 的目录语义：
+// 子项删光之后路径不再能被推断成目录，RemoveAll 会报 os.ErrNotExist。
+// 用它确认 fm 走 RemoveDir 而不是靠 RemoveAll 猜类型。
+type davLikeFS struct {
+	*memFS
+	removedDirs []string
+}
+
+func (d *davLikeFS) RemoveAll(ctx context.Context, name string) error {
+	if _, ok := d.files[name]; !ok {
+		return os.ErrNotExist
+	}
+	return d.memFS.RemoveAll(ctx, name)
+}
+
+func (d *davLikeFS) RemoveDir(_ context.Context, p string) error {
+	delete(d.dirs, p)
+	d.removedDirs = append(d.removedDirs, p)
+	return nil
+}
+
+// TestRemoveDirUsesRemoveDir 子项删光后仍能删掉目录记录，不报不存在。
+func TestRemoveDirUsesRemoveDir(t *testing.T) {
+	mfs := newMemFS()
+	mfs.dirs["/d"] = true
+	mfs.dirs["/d/sub"] = true
+	mfs.files["/d/sub/a.txt"] = []byte("a")
+	fsys := &davLikeFS{memFS: mfs}
+	m := New(fsys)
+
+	if err := m.Remove(context.Background(), "/d"); err != nil {
+		t.Fatalf("删目录不应报错: %v", err)
+	}
+	if _, ok := mfs.files["/d/sub/a.txt"]; ok {
+		t.Fatal("目录内文件应被删除")
+	}
+	if len(fsys.removedDirs) != 2 {
+		t.Fatalf("应删除 2 个目录记录，实际 %v", fsys.removedDirs)
+	}
+}
+
+// TestMoveDirUsesRemoveDir 目录移动结束后用 RemoveDir 收尾，不报不存在。
+func TestMoveDirUsesRemoveDir(t *testing.T) {
+	mfs := newMemFS()
+	mfs.dirs["/src"] = true
+	mfs.files["/src/a.txt"] = []byte("a")
+	fsys := &davLikeFS{memFS: mfs}
+	m := New(fsys)
+
+	if err := m.Move(context.Background(), "/src", "/dst"); err != nil {
+		t.Fatalf("移动目录不应报错: %v", err)
+	}
+	if string(mfs.files["/dst/a.txt"]) != "a" {
+		t.Fatalf("文件未迁移: %v", mfs.files)
+	}
+	if len(fsys.removedDirs) == 0 {
+		t.Fatal("旧目录记录应被删除")
+	}
+}

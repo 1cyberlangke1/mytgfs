@@ -217,6 +217,22 @@ func (d *FileSystem) RemoveAll(_ context.Context, name string) error {
 	return d.idx.Delete(d.ctx, name)
 }
 
+// RemoveDir 删除目录记录。
+//
+// 输入：name 卷内目录路径
+// 输出：error
+// 预期：
+//   - 与 RemoveAll 的区别：不依赖「目录现在还存在」的推断，
+//     子项删光之后目录在索引里已经不可推导，仍能把记录删掉
+//   - 不递归删内容，内容由调用方（fm）按 WebDAV 语义处理
+func (d *FileSystem) RemoveDir(ctx context.Context, name string) error {
+	name = clean(name)
+	if name == "/" {
+		return errors.New(i18n.T("err.dav_root_delete"))
+	}
+	return d.idx.DeleteDir(ctx, name)
+}
+
 // Rename 改名：文件的 caption 跟着改，索引同步迁移。
 func (d *FileSystem) Rename(_ context.Context, oldName, newName string) error {
 	oldName, newName = clean(oldName), clean(newName)

@@ -203,5 +203,9 @@
   "web.files_select_required": "先勾选要操作的条目",
   "web.files_deleted_n": "已删除 %d 项",
   "web.files_moved_n": "已移动 %d 项",
-  "web.files_action_required": "请选择批量操作"
+  "web.files_action_required": "请选择批量操作",
+  "err.upload_bad_request": "上传参数不合法",
+  "err.upload_no_session": "上传会话不存在或已过期",
+  "err.upload_offset": "分片位置不连续，请重新同步进度",
+  "err.upload_incomplete": "文件还没传完，不能提交"
 }

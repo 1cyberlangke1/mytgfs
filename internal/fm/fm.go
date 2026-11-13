@@ -226,6 +226,22 @@ func (m *Manager) Upload(ctx context.Context, p string, r io.Reader) error {
 	return f.Close()
 }
 
+// dirRemover 是「删目录记录」的可选能力。
+//
+// dav.FileSystem 在子项删光后无法再把路径推断成目录，
+// 需要直接删 dirs 表的实现；没有实现时退回 RemoveAll。
+type dirRemover interface {
+	RemoveDir(ctx context.Context, p string) error
+}
+
+// removeDir 删除目录记录，优先用底层的 RemoveDir。
+func (m *Manager) removeDir(ctx context.Context, p string) error {
+	if dr, ok := m.fs.(dirRemover); ok {
+		return dr.RemoveDir(ctx, p)
+	}
+	return m.fs.RemoveAll(ctx, p)
+}
+
 // Remove 删除文件或目录。
 //
 // 输入：p 路径
@@ -263,11 +279,11 @@ func (m *Manager) Remove(ctx context.Context, p string) error {
 		if d == c {
 			continue
 		}
-		if err := m.fs.RemoveAll(ctx, d); err != nil {
+		if err := m.removeDir(ctx, d); err != nil {
 			return err
 		}
 	}
-	return m.fs.RemoveAll(ctx, c)
+	return m.removeDir(ctx, c)
 }
 
 // Move 移动/改名，文件和目录都支持。
@@ -340,11 +356,11 @@ func (m *Manager) Move(ctx context.Context, from, to string) error {
 		if d == src {
 			continue
 		}
-		if err := m.fs.RemoveAll(ctx, d); err != nil {
+		if err := m.removeDir(ctx, d); err != nil {
 			return err
 		}
 	}
-	return m.fs.RemoveAll(ctx, src)
+	return m.removeDir(ctx, src)
 }
 
 // Open 以只读方式打开文件，供下载流式读取。

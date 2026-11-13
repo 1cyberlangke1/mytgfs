@@ -295,6 +295,84 @@ function sendOne(url: string, fd: FormData, onPct: (pct: number) => void): Promi
   });
 }
 
+/** 分片大小与走分片的阈值：小文件直传更省一次往返。 */
+const CHUNK_SIZE = 4 * 1024 * 1024;
+const CHUNK_THRESHOLD = 8 * 1024 * 1024;
+
+/** 按毫秒等待，重试间隔用。 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 分片上传单个文件。
+ *
+ * 输入：vol/dir 目标位置；item 文件与相对路径；onPct 0..100 回调
+ * 输出：成功后 resolve
+ * 预期：
+ *   - 每片失败重试 3 次，仍失败就放弃会话
+ *   - 服务端回 409 表示 offset 不一致，按它给的进度续传
+ *   - commit 阶段把整份内容交给服务端入库，期间进度停在 100%
+ */
+async function uploadChunked(
+  vol: string,
+  dir: string,
+  item: UploadItem,
+  onPct: (pct: number) => void,
+): Promise<void> {
+  const init = await fetch("/api/upload/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vol,
+      dir,
+      rel: item.rel,
+      name: item.file.name,
+      size: item.file.size,
+    }),
+  });
+  if (!init.ok) {
+    throw new Error("init " + init.status);
+  }
+  const { id } = (await init.json()) as { id: string };
+  let off = 0;
+  while (off < item.file.size) {
+    const end = Math.min(off + CHUNK_SIZE, item.file.size);
+    let tries = 0;
+    for (;;) {
+      try {
+        const res = await fetch(`/api/upload/chunk?id=${id}&offset=${off}`, {
+          method: "PUT",
+          body: item.file.slice(off, end),
+        });
+        if (res.status === 409) {
+          const cur = (await res.json()) as { offset: number };
+          off = cur.offset;
+          break;
+        }
+        if (!res.ok) {
+          throw new Error("chunk " + res.status);
+        }
+        const cur = (await res.json()) as { offset: number };
+        off = cur.offset;
+        break;
+      } catch (err) {
+        tries++;
+        if (tries >= 3) {
+          await fetch(`/api/upload?id=${id}`, { method: "DELETE" });
+          throw err;
+        }
+        await sleep(400 * tries);
+      }
+    }
+    onPct(Math.round((off * 100) / item.file.size));
+  }
+  const done = await fetch(`/api/upload/commit?id=${id}`, { method: "POST" });
+  if (!done.ok) {
+    throw new Error("commit " + done.status);
+  }
+}
+
 /**
  * 逐条上传并刷新列表。
  *
@@ -321,22 +399,27 @@ async function uploadItems(items: UploadItem[]): Promise<void> {
   }
   let done = 0;
   for (const it of items) {
-    const fd = new FormData();
-    fd.set("vol", vol);
-    fd.set("dir", dir);
-    fd.set("rel", it.rel);
-    fd.set("quiet", "1");
-    fd.set("file", it.file);
+    const report = (pct: number) => {
+      const overall = Math.round((done * 100 + pct) / items.length);
+      if (out) {
+        out.textContent = progressText(out, overall);
+      }
+      if (bar) {
+        bar.style.width = overall + "%";
+      }
+    };
     try {
-      await sendOne("/frag/files/upload", fd, (pct) => {
-        const overall = Math.round((done * 100 + pct) / items.length);
-        if (out) {
-          out.textContent = progressText(out, overall);
-        }
-        if (bar) {
-          bar.style.width = overall + "%";
-        }
-      });
+      if (it.file.size > CHUNK_THRESHOLD) {
+        await uploadChunked(vol, dir, it, report);
+      } else {
+        const fd = new FormData();
+        fd.set("vol", vol);
+        fd.set("dir", dir);
+        fd.set("rel", it.rel);
+        fd.set("quiet", "1");
+        fd.set("file", it.file);
+        await sendOne("/frag/files/upload", fd, report);
+      }
     } catch {
       document.getElementById("neterr")?.classList.add("show");
       break;

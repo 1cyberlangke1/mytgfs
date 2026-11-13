@@ -84,6 +84,8 @@ type Options struct {
 	Volumes func() []string
 	// Stats 返回卷内文件数与已用字节；nil 时卷标签不显示用量
 	Stats func(volume string) (files, used int64, ok bool)
+	// TempDir 是上传临时文件目录；空则 data/tmp
+	TempDir string
 	// Mount 控制 WebDAV 挂盘开关；nil 表示不支持
 	Mount *MountControl
 	// Bus 用于把配置/挂载变更推给所有页面；nil 时 /events 返回 501
@@ -123,6 +125,22 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 	mux.HandleFunc("/files/thumb", handleFileThumb(api))
 	mux.HandleFunc("/frag/details", handleFragDetails(api))
 	mux.HandleFunc("/frag/play", handleFragPlay(api))
+	// 浏览器分片上传：大文件断线只重传当前分片
+	if up := newUploadAPI(opts.Files, opts.TempDir); up != nil {
+		mux.HandleFunc("/api/upload/init", up.handleInit)
+		mux.HandleFunc("/api/upload/chunk", up.handleChunk)
+		mux.HandleFunc("/api/upload/commit", up.handleCommit)
+		mux.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				up.handleStatus(w, r)
+			case http.MethodDelete:
+				up.handleAbort(w, r)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+	}
 	mux.HandleFunc("/api/status", handleStatus(opts.Status))
 	mux.HandleFunc("/api/sync", handleSync(opts.Sync))
 	mux.HandleFunc("/api/volumes", handleVolumes(opts.CreateVolume))

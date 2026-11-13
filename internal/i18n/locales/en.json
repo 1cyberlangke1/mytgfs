@@ -203,5 +203,9 @@
   "web.files_select_required": "Select at least one item first",
   "web.files_deleted_n": "Deleted %d items",
   "web.files_moved_n": "Moved %d items",
-  "web.files_action_required": "Choose a batch action"
+  "web.files_action_required": "Choose a batch action",
+  "err.upload_bad_request": "Invalid upload request",
+  "err.upload_no_session": "Upload session is missing or expired",
+  "err.upload_offset": "Chunk offset mismatch, resync and retry",
+  "err.upload_incomplete": "Upload is incomplete and cannot be committed"
 }

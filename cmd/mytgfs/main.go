@@ -526,6 +526,8 @@ func runWeb(args []string) {
 			},
 			Mount: mount,
 			Bus:   bus,
+			// 分片上传的临时文件与 WebDAV 写路径共用同一目录，统一按时间清扫
+			TempDir: datadir.Path("tmp"),
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil

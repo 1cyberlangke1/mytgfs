@@ -498,6 +498,8 @@ func Run(opts Options) error {
 				}
 				return 0, 0, false
 			},
+			// 分片上传的临时文件与 WebDAV 写路径共用同一目录，统一按时间清扫
+			TempDir: datadir.Path("tmp"),
 			// 挂盘开关：与托盘菜单共用同一套启停逻辑
 			Mount: &web.MountControl{
 				Status: davState,
