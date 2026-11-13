@@ -35,10 +35,10 @@ var (
 
 // Entry 是一条目录项。
 type Entry struct {
-	Name string
-	Dir  bool
-	Size int64
-	Mod  time.Time
+	Name string    `json:"name"`
+	Dir  bool      `json:"dir"`
+	Size int64     `json:"size"`
+	Mod  time.Time `json:"mod"`
 }
 
 // Files 是面板需要的文件管理能力。
@@ -107,10 +107,10 @@ func (m *Manager) List(ctx context.Context, dir string) ([]Entry, error) {
 //
 // 与 Entry 的区别：Path 是卷内绝对路径，命中项可能不在当前目录。
 type SearchHit struct {
-	Path string
-	Dir  bool
-	Size int64
-	Mod  time.Time
+	Path string    `json:"path"`
+	Dir  bool      `json:"dir"`
+	Size int64     `json:"size"`
+	Mod  time.Time `json:"mod"`
 }
 
 // Searcher 是底层文件系统的可选能力：索引级递归搜索。

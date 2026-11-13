@@ -87,6 +87,20 @@ func main() {
 		runCopy(os.Args[2:])
 	case "put":
 		runPut(os.Args[2:])
+	case "ls":
+		runLs(os.Args[2:])
+	case "mkdir":
+		runMkdir(os.Args[2:])
+	case "rm":
+		runRm(os.Args[2:])
+	case "mv":
+		runMv(os.Args[2:])
+	case "get":
+		runGet(os.Args[2:])
+	case "search":
+		runSearch(os.Args[2:])
+	case "config":
+		runConfig(os.Args[2:])
 	case "volume":
 		runVolume(os.Args[2:])
 	case "mount":
@@ -435,36 +449,51 @@ func runMount(_ []string) {
 
 // runWeb 启动本地面板。
 //
-// 输入：--port 端口（0 = 随机）、--no-open 不自动开浏览器
+// 输入：--port 端口（不传则用 config.toml [web].port，传 0 用随机端口）、
+// --no-open 不自动开浏览器
 // 输出：无（阻塞到 Ctrl+C）
 // 预期：
 //   - 有可用 bot 凭证时，每个启用的卷都能在面板里浏览/上传/移动/删除
 //   - 凭证失效也不影响面板启动，只是没有文件管理
+//   - [web].auto_open=false 时不自动开浏览器，只启动服务
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	port := fs.Int("port", 0, "port (0 = random)")
 	noOpen := fs.Bool("no-open", false, "do not open browser")
 	_ = fs.Parse(args)
+	portSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portSet = true
+		}
+	})
 
-	addr := fmt.Sprintf("127.0.0.1:%d", *port)
-	if *port == 0 {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			fatal(err.Error())
+	const cfgPath = "config.toml"
+	cfg, err := config.Load(cfgPath)
+
+	// 端口优先级：命令行 --port > config.toml [web].port > 默认 8720
+	portNum := cfg.Web.ListenPort()
+	if portSet {
+		portNum = *port
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", portNum)
+	if portNum == 0 {
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			fatal(lerr.Error())
 		}
 		addr = ln.Addr().String()
 		_ = ln.Close()
 	}
 	url := "http://" + addr
 	fmt.Println("web:", url)
-	if !*noOpen {
+	if !*noOpen && cfg.Web.OpensBrowser() {
 		trayapp.OpenBrowser(url)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	const cfgPath = "config.toml"
 	// PWA 默认启用；配置读出来后覆盖（含用户显式关闭）。零值即好用配置。
 	pwaCfg := config.PWA{}
 	serve := func(opts web.Options) error {
@@ -472,7 +501,6 @@ func runWeb(args []string) {
 		return web.ServeWith(ctx, addr, cfgPath, opts)
 	}
 
-	cfg, err := config.Load(cfgPath)
 	pwaCfg = cfg.PWA
 	bus := eventbus.New()
 	if err != nil || cfg.APIHash() == "" {
