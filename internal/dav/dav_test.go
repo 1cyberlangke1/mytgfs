@@ -32,6 +32,28 @@ type fakeStore struct {
 	refreshedRef   []byte
 	refreshErr     error
 	afterRefresh   func()
+	copiedSrc      []int64
+	copyErr        error
+	copyPart       *telegramstore.Part
+}
+
+// Copy 记录被复用的 document ID，返回预置 Part 或默认新消息。
+func (f *fakeStore) Copy(_ context.Context, src *telegramstore.Part, _, _, _ string) (*telegramstore.Part, error) {
+	if f.copyErr != nil {
+		return nil, f.copyErr
+	}
+	f.copiedSrc = append(f.copiedSrc, src.DocumentID)
+	if f.copyPart != nil {
+		return f.copyPart, nil
+	}
+	f.nextID++
+	return &telegramstore.Part{
+		MessageID:     f.nextID,
+		DocumentID:    src.DocumentID,
+		AccessHash:    src.AccessHash,
+		FileReference: src.FileReference,
+		Size:          src.Size,
+	}, nil
 }
 
 // Refresh 返回预置的新引用，并可选地在刷新后改变读取行为。
