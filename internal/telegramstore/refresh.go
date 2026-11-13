@@ -6,7 +6,6 @@ package telegramstore
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
@@ -36,7 +35,7 @@ func (s *Store) Refresh(ctx context.Context, messageID int) (*Part, error) {
 		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}},
 	})
 	if err != nil {
-		return nil, DescribeError(fmt.Errorf("getMessages: %w", s.noteErr(err)))
+		return nil, DescribeError(s.noteErr(err))
 	}
 	for _, mc := range messagesOf(res) {
 		msg, ok := mc.(*tg.Message)

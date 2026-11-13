@@ -9,7 +9,6 @@ package davsvc
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -57,7 +56,7 @@ func (s *Service) Start(addr, volume string, fs webdav.FileSystem) (State, error
 		// 默认端口常被其它软件占用：退到随机端口，实际地址由 UI 展示
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			return State{}, fmt.Errorf("listen %s: %w", addr, err)
+			return State{}, err
 		}
 	}
 	handler := dav.NewHandler(fs, nil)

@@ -4,7 +4,6 @@ package channel
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gotd/td/tg"
 )
@@ -30,7 +29,7 @@ func List(ctx context.Context, api API) ([]Item, error) {
 		Limit:      200,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getDialogs: %w", err)
+		return nil, err
 	}
 
 	var chats []tg.ChatClass

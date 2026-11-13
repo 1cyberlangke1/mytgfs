@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"path"
 	"slices"
 	"strings"
@@ -112,7 +111,7 @@ func Open(path string) (*Index, error) {
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
+		return nil, err
 	}
 	return &Index{db: db}, nil
 }

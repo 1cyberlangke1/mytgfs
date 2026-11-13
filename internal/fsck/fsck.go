@@ -7,7 +7,6 @@ package fsck
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gotd/td/tg"
 
@@ -127,7 +126,7 @@ func fetch(ctx context.Context, api API, channelID, accessHash int64, batch []in
 		ID:      ids,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getMessages: %w", err)
+		return nil, err
 	}
 	out := make(map[int]*tg.Message, len(batch))
 	for _, mc := range messagesOf(res) {

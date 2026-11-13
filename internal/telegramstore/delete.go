@@ -2,7 +2,6 @@ package telegramstore
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gotd/td/tg"
 )
@@ -28,7 +27,7 @@ func (s *Store) Delete(ctx context.Context, ids ...int) error {
 		ID:      ids,
 	})
 	if err != nil {
-		return DescribeError(fmt.Errorf("deleteMessages: %w", s.noteErr(err)))
+		return DescribeError(s.noteErr(err))
 	}
 	return nil
 }

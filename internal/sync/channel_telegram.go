@@ -50,7 +50,7 @@ func (d *TelegramChannelDiffer) ChannelDifference(ctx context.Context, pts, limi
 		Limit:   limit,
 	})
 	if err != nil {
-		return Difference{}, fmt.Errorf("getChannelDifference: %w", err)
+		return Difference{}, err
 	}
 
 	switch v := res.(type) {
@@ -102,7 +102,7 @@ func (d *TelegramChannelDiffer) channelOf(ctx context.Context) (*tg.Channel, err
 		&tg.InputChannel{ChannelID: d.ChannelID, AccessHash: 0},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getChannels: %w", err)
+		return nil, err
 	}
 	var chats []tg.ChatClass
 	switch m := res.(type) {

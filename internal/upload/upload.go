@@ -12,7 +12,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"log/slog"
 	"path"
@@ -23,7 +22,12 @@ import (
 )
 
 // ErrNoResult 表示上传流程没有产出消息（不应发生，防御性返回）。
-var ErrNoResult = errors.New("upload produced no message")
+// 用类型而不是包级变量：文案要按当前语言惰性求值。
+type errNoResult struct{}
+
+func (errNoResult) Error() string { return i18n.T("err.upload_no_result") }
+
+var ErrNoResult error = errNoResult{}
 
 // Index 是本包需要的索引能力：查同内容、写记录。
 type Index interface {

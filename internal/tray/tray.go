@@ -183,7 +183,7 @@ func onReady(a Actions, initial string) {
 				}
 				next := !mAuto.Checked()
 				if err := a.SetAutostart(next); err != nil {
-					fmt.Fprintf(os.Stderr, "autostart: %v\n", err)
+					fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_toggle_failed"), err)
 					continue
 				}
 				// 菜单勾选状态跟随系统写入结果，不提前翻转
@@ -198,7 +198,7 @@ func onReady(a Actions, initial string) {
 				}
 				next := !mDAV.Checked()
 				if err := a.SetWebDAV(next); err != nil {
-					fmt.Fprintf(os.Stderr, "webdav: %v\n", err)
+					fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.webdav_toggle_failed"), err)
 					continue
 				}
 				// 勾选状态跟随实际启停结果，不提前翻转
@@ -213,7 +213,7 @@ func onReady(a Actions, initial string) {
 				}
 				next := !mSync.Checked()
 				if err := a.SetAutoSync(next); err != nil {
-					fmt.Fprintf(os.Stderr, "autosync: %v\n", err)
+					fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autosync_toggle_failed"), err)
 					continue
 				}
 				// 勾选状态跟随配置写入结果，不提前翻转

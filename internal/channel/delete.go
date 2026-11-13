@@ -35,7 +35,7 @@ func Resolve(ctx context.Context, api ResolveAPI, channelID int64) (*Result, err
 		&tg.InputChannel{ChannelID: channelID, AccessHash: 0},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getChannels: %w", err)
+		return nil, err
 	}
 	var chats []tg.ChatClass
 	switch m := res.(type) {
@@ -65,7 +65,7 @@ func Delete(ctx context.Context, api DeleteAPI, res *Result) error {
 		ChannelID:  res.ChannelID,
 		AccessHash: res.AccessHash,
 	}); err != nil {
-		return fmt.Errorf("deleteChannel: %w", err)
+		return err
 	}
 	return nil
 }

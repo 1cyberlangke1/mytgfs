@@ -145,7 +145,7 @@ func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 		&tg.InputChannel{ChannelID: s.channelID, AccessHash: 0},
 	})
 	if err != nil {
-		return nil, DescribeError(fmt.Errorf("getChannels: %w", err))
+		return nil, DescribeError(err)
 	}
 	var chats []tg.ChatClass
 	switch m := res.(type) {

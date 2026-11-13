@@ -431,7 +431,7 @@ func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume
 		RandomID: rand.Int63(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("sendMedia: %w", err)
+		return nil, err
 	}
 	doc, msgID, err := extractDocument(updates)
 	if err != nil {

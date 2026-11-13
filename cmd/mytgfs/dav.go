@@ -53,7 +53,7 @@ func runWebDAV(args []string) {
 		fsys.SetTempDir(datadir.Path("tmp"))
 		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
 		if rerr := fsys.ResumePending(); rerr != nil {
-			fmt.Fprintf(os.Stderr, "pending resume: %v\n", rerr)
+			fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)
 		}
 		handler := dav.NewHandler(fsys, nil)
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -65,7 +65,7 @@ func runWebDAV(args []string) {
 			_ = srv.Shutdown(shutdown)
 		})
 
-		fmt.Printf("webdav listening on http://%s/ (volume %s)\n", *addr, volName)
+		fmt.Printf("%s\n", i18n.T("cli.webdav_listen", *addr, volName))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}

@@ -15,6 +15,7 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/telegramstore"
@@ -44,7 +45,12 @@ type ErrVolumeNotFound struct{ Name string }
 func (e ErrVolumeNotFound) Error() string { return "volume not found: " + e.Name }
 
 // ErrMissingAPIHash 表示配置里没写 api_hash。
-var ErrMissingAPIHash = fmt.Errorf("missing api_hash")
+// 用类型而不是包级变量：文案要按当前语言惰性求值。
+type errMissingAPIHash struct{}
+
+func (errMissingAPIHash) Error() string { return i18n.T("err.missing_api_hash") }
+
+var ErrMissingAPIHash error = errMissingAPIHash{}
 
 // App 持有已读取的配置，后续所有装配都基于它。
 type App struct {
@@ -157,7 +163,7 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 	}
 	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
 	if err != nil {
-		return fmt.Errorf("load session key: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
 	}
 	idx, err := a.Index(volName)
 	if err != nil {

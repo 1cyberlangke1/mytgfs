@@ -561,7 +561,7 @@ func Run(opts Options) error {
 		}
 		go func() {
 			if serr := web.ServeWith(ctx, addr, cfgPath, webOpts); serr != nil {
-				fmt.Fprintf(os.Stderr, "web: %v\n", serr)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.web_failed"), serr)
 			}
 			webMu.Lock()
 			if webAddr == addr {

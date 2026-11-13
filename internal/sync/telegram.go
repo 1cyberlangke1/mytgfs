@@ -146,7 +146,7 @@ func (f TelegramFetcher) history(ctx context.Context, minID, limit int) ([]Messa
 	}
 	res, err := f.API.MessagesGetHistory(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("getHistory: %w", err)
+		return nil, err
 	}
 	msgs := messagesOf(res)
 	out := make([]Message, 0, len(msgs))
@@ -182,7 +182,7 @@ func (f TelegramFetcher) HistoryBefore(ctx context.Context, offsetID, limit int)
 	}
 	res, err := f.API.MessagesGetHistory(ctx, req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("getHistory: %w", err)
+		return nil, 0, err
 	}
 	raw := messagesOf(res)
 	next := 0

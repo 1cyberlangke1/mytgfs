@@ -39,7 +39,7 @@ func Check(ctx context.Context, api CheckAPI, channelID int64) (*Health, error) 
 		&tg.InputChannel{ChannelID: channelID, AccessHash: 0},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getChannels: %w", err)
+		return nil, err
 	}
 	var ch *tg.Channel
 	var chats []tg.ChatClass
@@ -64,7 +64,7 @@ func Check(ctx context.Context, api CheckAPI, channelID int64) (*Health, error) 
 		Participant: &tg.InputPeerSelf{},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getParticipant: %w", err)
+		return nil, err
 	}
 	h := &Health{ChannelID: ch.ID, Title: ch.Title}
 	if me == nil || me.Participant == nil {
