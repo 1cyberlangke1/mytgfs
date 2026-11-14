@@ -1,22 +1,18 @@
 import React, { useRef, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowDownToLine,
   ArrowUpFromLine,
   ArrowUpRight,
   Camera,
-  CheckCircle2,
   Database,
   FileStack,
   HardDrive,
-  Loader2,
   Pause,
   Play,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  ConnectionStatus,
   FileCategory,
   FileItem,
   Locale,
@@ -38,7 +34,6 @@ import { CoverDialog } from './CoverDialog';
 interface OverviewViewProps {
   t: Translations;
   locale: Locale;
-  connectionStatus: ConnectionStatus;
   volumes: VolumeInfo[];
   files: FileItem[];
   transfers: TransferTask[];
@@ -66,7 +61,6 @@ const CATEGORY_COLORS: Record<FileCategory, string> = {
 export const OverviewView: React.FC<OverviewViewProps> = ({
   t,
   locale,
-  connectionStatus,
   volumes,
   files,
   transfers,
@@ -91,23 +85,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       onUploadFiles(e.target.files, targetVolumeId, null);
       e.target.value = '';
     }
-  };
-
-  const renderConnectionIcon = () => {
-    if (connectionStatus === 'connected') {
-      return <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />;
-    }
-    if (connectionStatus === 'connecting' || connectionStatus === 'reconnecting') {
-      return <Loader2 className="w-4 h-4 text-amber-600 dark:text-amber-400 animate-spin shrink-0" />;
-    }
-    return <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />;
-  };
-
-  const connectionDescMap: Record<ConnectionStatus, string> = {
-    connected: t.connection.desc_connected,
-    connecting: t.connection.desc_connecting,
-    reconnecting: t.connection.desc_reconnecting,
-    invalid_credentials: t.connection.desc_invalid_credentials,
   };
 
   return (
@@ -193,35 +170,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             <Database className="w-4 h-4 lg:w-5 lg:h-5" />
           </div>
         </motion.div>
-      </section>
-
-      {/* Connection Status & Index Bar with iOS Segmented Control */}
-      <section className="surface-card rounded-2xl overflow-hidden">
-        <div className="px-5 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-start sm:items-center gap-3">
-            {renderConnectionIcon()}
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                  {t.connection.label}: {t.connection[connectionStatus]}
-                </span>
-              </div>
-              {connectionStatus !== 'connected' && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
-                  {connectionDescMap[connectionStatus]}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* 连接状态由服务端给出，这里只展示，不可手动切换 */}
-            <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/60 dark:bg-zinc-900/40 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-              {t.connection[connectionStatus]}
-            </span>
-          </div>
-        </div>
       </section>
 
       {/* Volume List */}

@@ -77,10 +77,6 @@
     "connecting": "连接中",
     "reconnecting": "重连中",
     "invalid_credentials": "凭据失效",
-    "desc_connected": "已连接",
-    "desc_connecting": "正在建立连接...",
-    "desc_reconnecting": "网络中断，正在重连...",
-    "desc_invalid_credentials": "凭据已失效，请在终端重新执行 mytgfs login。",
     "simulateState": "状态切换",
     "retryNow": "立即重连"
   },

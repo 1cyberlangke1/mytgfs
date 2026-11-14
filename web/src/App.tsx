@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   FolderTree,
   Globe,
   HardDrive,
   HardDriveDownload,
   LayoutDashboard,
+  Loader2,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -1175,9 +1177,27 @@ export default function App() {
           {/* Bottom Sidebar Loopback Telemetry + Multi-Language Selector & Theme Controls */}
           <div className="space-y-3 pt-4 border-t border-zinc-200/80 dark:border-zinc-800/80">
             {!sidebarCollapsed && (
-              <div className="p-3 rounded-xl bg-zinc-100/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800/80 space-y-1 text-[11px]">
-                <div className="flex items-center justify-between gap-2 text-zinc-500 dark:text-zinc-400">
-                  <span className="text-emerald-600 dark:text-emerald-400 font-medium truncate">
+              <div className="p-3 rounded-xl bg-zinc-100/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800/80">
+                <div className="flex items-center gap-2 text-xs">
+                  {connectionStatus === 'connected' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                  ) : connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? (
+                    <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                  )}
+                  <span className="text-zinc-500 dark:text-zinc-400 truncate">
+                    {t.connection.label}:
+                  </span>
+                  <span
+                    className={`font-medium truncate ${
+                      connectionStatus === 'connected'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : connectionStatus === 'connecting' || connectionStatus === 'reconnecting'
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-red-600 dark:text-red-400'
+                    }`}
+                  >
                     {t.connection[connectionStatus]}
                   </span>
                 </div>
@@ -1323,7 +1343,6 @@ export default function App() {
               <OverviewView
                 t={t}
                 locale={locale}
-                connectionStatus={connectionStatus}
                 volumes={volumes}
                 files={files}
                 transfers={transfers}

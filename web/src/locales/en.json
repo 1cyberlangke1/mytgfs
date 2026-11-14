@@ -77,10 +77,6 @@
     "connecting": "Connecting",
     "reconnecting": "Reconnecting",
     "invalid_credentials": "Auth Expired",
-    "desc_connected": "Connected",
-    "desc_connecting": "Connecting to Telegram...",
-    "desc_reconnecting": "Connection interrupted, reconnecting...",
-    "desc_invalid_credentials": "Session expired. Run `mytgfs login` in terminal to re-authenticate.",
     "simulateState": "State",
     "retryNow": "Reconnect"
   },
