@@ -133,7 +133,6 @@
     "uploadFileBtn": "Upload Files",
     "uploadDirBtn": "Upload Folder",
     "newFolderBtn": "New Folder",
-    "dropzoneHint": "Drag and drop files or folders here to upload (Max 2GB per file)",
     "colName": "Name",
     "colSize": "Size",
     "colUpdated": "Modified",

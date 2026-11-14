@@ -133,7 +133,6 @@
     "uploadFileBtn": "上传文件",
     "uploadDirBtn": "上传目录",
     "newFolderBtn": "新建文件夹",
-    "dropzoneHint": "拖拽文件或文件夹到此处上传（单文件上限 2GB）",
     "colName": "名称",
     "colSize": "大小",
     "colUpdated": "修改时间",
