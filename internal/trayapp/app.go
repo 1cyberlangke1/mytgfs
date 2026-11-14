@@ -240,6 +240,15 @@ func Run(opts Options) error {
 		e.Cancel()
 		win.Hide()
 	})
+	// 运行时就绪回调在 Hub 创建之前注册，用变量延迟绑定发布动作
+	var onRuntimeReady func()
+	// WebView 运行时就绪后才可安全 Emit：此前 Hub 发出的 status 事件没有接收者，
+	// 首屏会永久停在挂载前的空状态。就绪时补推一次，让面板重取完整快照。
+	win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+		if onRuntimeReady != nil {
+			onRuntimeReady()
+		}
+	})
 	// 调试用：设置 MYTGFS_DEBUG_SHOW=1 时启动直接显示主窗口
 	if os.Getenv("MYTGFS_DEBUG_SHOW") != "" {
 		go func() {
@@ -332,6 +341,7 @@ func Run(opts Options) error {
 	// pushHub 是面板推送的唯一入口：配置/状态变更立刻推给 WebView
 	pushHub := push.NewHub(rootCtx)
 	defer pushHub.Close()
+	onRuntimeReady = func() { pushHub.Publish(push.TopicStatus) }
 
 	// 装配根复用：开卷与写频道头像都走同一套配置/会话
 	appRoot := app.New(cfg, app.Options{Push: pushHub})

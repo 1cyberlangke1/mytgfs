@@ -53,6 +53,8 @@ export function subscribePush(
       const handler = handlers[topic];
       return handler ? desktop.On(desktopEvent(topic), handler) : () => {};
     });
+    // 订阅建立即视为通道就绪：补拉一次，覆盖订阅前发生的挂载/配置推送
+    opts.onConnect?.();
     return () => offs.forEach((off) => off());
   }
 
