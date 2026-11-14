@@ -119,7 +119,7 @@ func TestSameVolumeSerial(t *testing.T) {
 			maxTotal = total
 		}
 		mu.Unlock()
-		time.Sleep(80 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 		mu.Lock()
 		running[j.Volume]--
 		mu.Unlock()
@@ -153,9 +153,9 @@ func TestSameVolumeSerial(t *testing.T) {
 	if maxTotal < 2 {
 		t.Fatalf("max concurrent = %d, want >= 2 (不同卷应并行)", maxTotal)
 	}
-	// 领取已事件驱动：总耗时接近串行下限（2×150ms），轮询延迟不应叠加
-	if elapsed := time.Since(start); elapsed >= 240*time.Millisecond {
-		t.Fatalf("elapsed = %v, want < 240ms (不同卷应并行)", elapsed)
+	// 领取已事件驱动：总耗时接近串行下限（2×200ms），全串行会是 3×200ms
+	if elapsed := time.Since(start); elapsed >= 550*time.Millisecond {
+		t.Fatalf("elapsed = %v, want < 550ms (不同卷应并行)", elapsed)
 	}
 }
 
