@@ -39,6 +39,7 @@ var channelErrors = map[string]string{
 	"USER_BANNED_IN_CHANNEL":   "err.user_banned_in_channel",
 	"CHAT_FORWARDS_RESTRICTED": "err.chat_forwards_restricted",
 	"PEER_ID_INVALID":          "err.peer_id_invalid",
+	"MESSAGE_DELETE_FORBIDDEN": "err.message_delete_forbidden",
 }
 
 // messageGoneErrors 是「消息已经不在了」的错误集合。

@@ -54,6 +54,7 @@
   "err.channel_hint": "%s（%s），请用 mytgfs volume check 检查卷状态",
   "err.channel_id_empty": "频道 id 不能为空",
   "err.channel_inaccessible": "频道不可访问（被封禁或已迁移）",
+  "err.message_delete_forbidden": "没有删除权限，或消息超过 48 小时（bot 会话限制）",
   "err.channel_init_prefix": "建频道失败",
   "err.channel_invalid": "频道 ID 无效或频道已被删除",
   "err.channel_missing": "频道 %d 不存在或无权访问",

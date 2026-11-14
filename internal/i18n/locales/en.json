@@ -54,6 +54,7 @@
   "err.channel_hint": "%s (%s). Run mytgfs volume check to inspect the volume",
   "err.channel_id_empty": "channel id must not be empty",
   "err.channel_inaccessible": "channel is inaccessible (banned or migrated)",
+  "err.message_delete_forbidden": "missing delete permission, or the message is older than 48 hours (bot limitation)",
   "err.channel_init_prefix": "channel init failed",
   "err.channel_invalid": "channel id is invalid or the channel was deleted",
   "err.channel_missing": "channel %d does not exist or is not accessible",

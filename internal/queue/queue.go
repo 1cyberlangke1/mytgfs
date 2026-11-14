@@ -566,7 +566,12 @@ func (q *Queue) run(ctx context.Context, job Job) {
 			return
 		}
 		if !Retryable(err) {
-			q.finish(job.ID, telegramstore.DescribeError(err))
+			// 频道侧错误在 telegramstore 内部已包过一次提示，这里不再重复包
+			if telegramstore.IsChannelUnavailable(err) {
+				q.finish(job.ID, err)
+			} else {
+				q.finish(job.ID, telegramstore.DescribeError(err))
+			}
 			return
 		}
 		wait := backoff(job.Attempt)
