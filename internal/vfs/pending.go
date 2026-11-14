@@ -33,7 +33,8 @@ func (d *FileSystem) ResumePending() error {
 			continue
 		}
 		st, statErr := tmp.Stat()
-		if statErr != nil || st.Size() != p.Size {
+		if statErr != nil || p.Size <= 0 || st.Size() <= 0 || st.Size() != p.Size {
+			// 空文件永远传不上去（Telegram 会回 FILE_PARTS_INVALID），直接清账
 			_ = tmp.Close()
 			_ = d.idx.DeletePending(d.ctx, p.Path)
 			_ = os.Remove(p.Temp)

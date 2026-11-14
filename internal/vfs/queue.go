@@ -245,8 +245,8 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob) error {
 		_ = tmp.Close()
 		return err
 	}
-	if st.Size() != p.Size {
-		// 临时文件被覆盖或截断：这条记账已经没有意义
+	if st.Size() != p.Size || p.Size <= 0 || st.Size() <= 0 {
+		// 临时文件被覆盖、截断或本来就是空文件：这条记账已经没有意义
 		_ = tmp.Close()
 		_ = d.idx.DeletePending(ctx, p.Path)
 		_ = os.Remove(p.Temp)

@@ -223,6 +223,39 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 	}
 }
 
+// TestResumePendingDropsEmptyTemp 0 字节的账本直接清掉，避免每次开卷都重新入队。
+func TestResumePendingDropsEmptyTemp(t *testing.T) {
+	idx := newResumeIndex(t)
+	ctx := context.Background()
+
+	tmp := filepath.Join(t.TempDir(), "empty.bin")
+	if err := os.WriteFile(tmp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.PutPending(ctx, index.PendingUpload{Path: "/empty.bin", Temp: tmp, Size: 0, Mtime: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	fsys := New(ctx, idx, st, 1<<20, push.NewRecorder())
+	q := attachQueue(t, fsys)
+	if err := fsys.ResumePending(); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, q)
+
+	if len(st.uploadKeys) != 0 {
+		t.Fatalf("空文件不应上传，实际 %v", st.uploadKeys)
+	}
+	rows, _ := idx.ListPending(ctx)
+	if len(rows) != 0 {
+		t.Fatalf("空文件账本应清掉，实际 %+v", rows)
+	}
+	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("空临时文件应删除: %v", err)
+	}
+}
+
 // TestResumePendingDropsMissingTemp 临时文件已不存在（被清扫/损坏）时只清账，不上传。
 func TestResumePendingDropsMissingTemp(t *testing.T) {
 	idx := newResumeIndex(t)
