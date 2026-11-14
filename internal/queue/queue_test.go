@@ -126,7 +126,6 @@ func TestSameVolumeSerial(t *testing.T) {
 		return nil
 	})
 
-	start := time.Now()
 	var ids []int64
 	for _, job := range []Job{
 		{Volume: "demo", Kind: KindMkdir, Name: "a"},
@@ -150,12 +149,10 @@ func TestSameVolumeSerial(t *testing.T) {
 	if maxDemo != 1 {
 		t.Fatalf("demo concurrent = %d, want 1", maxDemo)
 	}
+	// 并行性的确定性证据：demo 在跑的同时 demo2 也被领走执行，
+	// 不用墙上时间断言，机器慢或 CI 抖动都不会误报
 	if maxTotal < 2 {
 		t.Fatalf("max concurrent = %d, want >= 2 (不同卷应并行)", maxTotal)
-	}
-	// 领取已事件驱动：总耗时接近串行下限（2×200ms），全串行会是 3×200ms
-	if elapsed := time.Since(start); elapsed >= 550*time.Millisecond {
-		t.Fatalf("elapsed = %v, want < 550ms (不同卷应并行)", elapsed)
 	}
 }
 

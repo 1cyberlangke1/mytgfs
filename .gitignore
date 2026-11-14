@@ -98,3 +98,7 @@ progress.md
 task_plan.md
 .claude/
 .playwright-mcp/
+
+# 前端构建产物：本地构建后由 embed 打进二进制，不入库
+internal/web/dist/*
+!internal/web/dist/index.html

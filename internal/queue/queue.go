@@ -100,7 +100,9 @@ type Queue struct {
 	// onChange 可选：任务入队、开始、结束时各回调一次，供上层推送状态
 	onChange func()
 
-	wake []chan struct{}
+	// wakes 是每个 worker 一个的唤醒通道：Open 时按 workers 固定长度创建，
+	// 之后只读不增删，signal 广播不会与 worker 生命周期竞态
+	wakes []chan struct{}
 	// waitMu/waiters 保护任务完成通知：finish 关闭对应通道，Wait 不再轮询
 	waitMu   sync.Mutex
 	waiters  map[int64][]chan struct{}
@@ -149,9 +151,16 @@ func Open(db *sql.DB, workers int, onChange func()) (*Queue, error) {
 		stateQueued, nowUnix(), stateRunning); err != nil {
 		return nil, err
 	}
+	// 每个 worker 一个容量 1 的唤醒通道：make([]chan, n) 得到的是 nil 通道，
+	// 必须逐个 make，否则 signal 的非阻塞发送全部落空，空闲 worker 睡死
+	wakes := make([]chan struct{}, workers)
+	for i := range wakes {
+		wakes[i] = make(chan struct{}, 1)
+	}
 	return &Queue{
 		db:       db,
 		workers:  workers,
+		wakes:    wakes,
 		waiters:  make(map[int64][]chan struct{}),
 		onChange: onChange,
 	}, nil
@@ -197,9 +206,9 @@ func (q *Queue) Start(ctx context.Context) {
 	q.ctx, q.cancel = runCtx, cancel
 	q.mu.Unlock()
 
-	for range q.workers {
+	for i := range q.wakes {
 		q.wg.Add(1)
-		go q.loop(runCtx, make(chan struct{}, 1))
+		go q.loop(runCtx, q.wakes[i])
 	}
 	q.signal()
 }
@@ -458,12 +467,9 @@ func (q *Queue) Pending() int {
 //
 // 输入：无
 // 输出：无
-// 预期：每个 worker 有自己的 wake 通道，全部非阻塞唤醒；容量 1 保证连发不堆积
+// 预期：wakes 在 Open 时固定创建、只读遍历，无锁无竞态；容量 1 保证连发不堆积
 func (q *Queue) signal() {
-	q.mu.Lock()
-	ws := q.wake
-	q.mu.Unlock()
-	for _, ch := range ws {
+	for _, ch := range q.wakes {
 		select {
 		case ch <- struct{}{}:
 		default:
@@ -473,22 +479,9 @@ func (q *Queue) signal() {
 
 // loop 是单个工作协程：领任务、执行、重试。
 //
-// 预期：自己的 wake 通道注册进 q.wake，退出时注销；signal 广播能立刻唤醒全部空闲 worker
+// 预期：wake 通道来自 Open 时固定创建的 q.wakes，本协程退出即不再接收唤醒
 func (q *Queue) loop(ctx context.Context, wake chan struct{}) {
 	defer q.wg.Done()
-	q.mu.Lock()
-	q.wake = append(q.wake, wake)
-	q.mu.Unlock()
-	defer func() {
-		q.mu.Lock()
-		for i, ch := range q.wake {
-			if ch == wake {
-				q.wake = append(q.wake[:i], q.wake[i+1:]...)
-				break
-			}
-		}
-		q.mu.Unlock()
-	}()
 	for {
 		if ctx.Err() != nil {
 			return
