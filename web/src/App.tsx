@@ -1410,7 +1410,7 @@ export default function App() {
           aria-label={t.a11y.primaryNav}
           className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white/88 dark:bg-[#0C0E14]/92 backdrop-blur-2xl px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
         >
-          <div className="grid grid-cols-5 gap-1 max-w-md mx-auto">
+          <div className="flex gap-1 max-w-md mx-auto">
             {navItems.map((item) => {
               const isActive = activeTab === item.id;
               const badgeCount =
@@ -1430,7 +1430,7 @@ export default function App() {
                     setActiveTab(item.id);
                   }}
                   aria-current={isActive ? 'page' : undefined}
-                  className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${
+                  className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${
                     isActive
                       ? 'text-[#007AFF] dark:text-[#0A84FF] font-semibold'
                       : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
