@@ -17,6 +17,43 @@ import (
 // ErrVolumeExists 表示配置里已经有同名卷（忽略大小写）。
 var ErrVolumeExists = errors.New(i18n.T("err.sentinel_volume_exists"))
 
+// ErrChannelAttached 表示这个频道已经挂成卷了。
+var ErrChannelAttached = errors.New(i18n.T("err.sentinel_channel_attached"))
+
+// VolumeNameExists 判断配置里是否已有同名卷（忽略大小写）。
+//
+// 输入：path 配置文件；name 卷名
+// 输出：true 表示已存在；配置读失败按不存在处理，交给后续写入报错
+func VolumeNameExists(path, name string) bool {
+	cfg, err := Load(path)
+	if err != nil {
+		return false
+	}
+	for _, v := range cfg.Volumes {
+		if strings.EqualFold(v.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// VolumeChatExists 判断频道是否已经挂成某个卷。
+//
+// 输入：path 配置文件；chatID 频道 id（非 -100 形式）
+// 输出：true 表示已被占用
+func VolumeChatExists(path string, chatID int64) bool {
+	cfg, err := Load(path)
+	if err != nil {
+		return false
+	}
+	for _, v := range cfg.Volumes {
+		if v.ChatID == chatID {
+			return true
+		}
+	}
+	return false
+}
+
 // AppendVolume 在配置文件末尾追加一个 [[volumes]] 条目。
 //
 // 输入：path 配置文件；v 卷（Name 必填，ChatID 为频道 id）
@@ -40,6 +77,9 @@ func AppendVolume(path string, v Volume) error {
 	for _, old := range existing.Volumes {
 		if strings.EqualFold(old.Name, name) {
 			return ErrVolumeExists
+		}
+		if v.ChatID != 0 && old.ChatID == v.ChatID {
+			return ErrChannelAttached
 		}
 	}
 

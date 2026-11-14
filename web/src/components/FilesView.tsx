@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CornerLeftUp,
+  Database,
   Download,
   Eye,
   FolderPlus,
@@ -17,6 +18,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   Upload,
@@ -79,6 +81,10 @@ interface FilesViewProps {
   onCreateVolume: (name: string, title: string) => void;
   onAttachVolume: (name: string, chatId: number) => void;
   onDeleteVolume: (name: string) => void;
+  /** 手动刷新状态与列表；由 App 注入 */
+  onRefresh: () => Promise<void>;
+  /** 按频道历史重建索引；nil 表示服务端不支持 */
+  onRebuildVolume?: (volumeId: string) => Promise<void>;
 }
 
 // suggestVolumeName 按频道标题猜一个合法卷名。
@@ -160,9 +166,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onCreateVolume,
   onAttachVolume,
   onDeleteVolume,
+  onRefresh,
+  onRebuildVolume,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
 
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
@@ -402,8 +412,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
         aria-label={t.files.uploadDirBtn}
       />
 
-      {/* Top Row: Volume Switcher */}
-      <div className="flex items-center gap-2.5 min-w-0">
+      {/* Top Row: Volume Switcher + Volume Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
         <label
           htmlFor="volume-select-control"
           className="text-xs font-medium text-zinc-500 dark:text-zinc-400 shrink-0"
@@ -426,6 +437,52 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </option>
           ))}
         </Select>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {canCreateVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setNewVolume({ name: '', title: '' });
+                setShowCreateVolume(true);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t.volume.createBtn}</span>
+            </Button>
+          )}
+
+          {canAttachVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setAttachForm({ name: '', chatId: '' });
+                setChannels([]);
+                setChannelsState('idle');
+                setChannelsError('');
+                setShowAttachVolume(true);
+              }}
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              <span>{t.volume.attachBtn}</span>
+            </Button>
+          )}
+
+          {canDeleteVolume && currentVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowDeleteVolume(true)}
+              className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{t.volume.deleteBtn}</span>
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Unified File Workbench Container */}
@@ -521,86 +578,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
               )}
             </div>
 
-            {/* 文件与卷操作：单图标 + 悬浮提示 */}
-            <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                variant="accent"
-                size="icon"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label={t.files.uploadFileBtn}
-                title={t.files.uploadFileBtn}
-              >
-                <Upload className="w-4 h-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => dirInputRef.current?.click()}
-                aria-label={t.files.uploadDirBtn}
-                title={t.files.uploadDirBtn}
-              >
-                <FolderUp className="w-4 h-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => setShowNewFolderModal(true)}
-                aria-label={t.files.newFolderBtn}
-                title={t.files.newFolderBtn}
-              >
-                <FolderPlus className="w-4 h-4" />
-              </Button>
-              {canCreateVolume && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => {
-                    setNewVolume({ name: '', title: '' });
-                    setShowCreateVolume(true);
-                  }}
-                  aria-label={t.volume.createBtn}
-                  title={t.volume.createBtn}
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
-              )}
-              {canAttachVolume && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => {
-                    setAttachForm({ name: '', chatId: '' });
-                    setChannels([]);
-                    setChannelsState('idle');
-                    setChannelsError('');
-                    setShowAttachVolume(true);
-                  }}
-                  aria-label={t.volume.attachBtn}
-                  title={t.volume.attachBtn}
-                >
-                  <Link2 className="w-4 h-4" />
-                </Button>
-              )}
-              {canDeleteVolume && currentVolume && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setShowDeleteVolume(true)}
-                  aria-label={t.volume.deleteBtn}
-                  title={t.volume.deleteBtn}
-                  className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              )}
-            </div>
-
             <div className="flex items-center gap-1.5">
               <label htmlFor="sort-field-select" className="sr-only">
                 {t.files.sortByLabel}
@@ -636,6 +613,78 @@ export const FilesView: React.FC<FilesViewProps> = ({
                   <ArrowDown className="w-4 h-4" />
                 )}
               </Button>
+
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="accent"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label={t.files.uploadFileHint}
+                title={t.files.uploadFileHint}
+              >
+                <Upload className="w-4 h-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => dirInputRef.current?.click()}
+                aria-label={t.files.uploadDirBtn}
+                title={t.files.uploadDirBtn}
+              >
+                <FolderUp className="w-4 h-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setShowNewFolderModal(true)}
+                aria-label={t.files.newFolderBtn}
+                title={t.files.newFolderBtn}
+              >
+                <FolderPlus className="w-4 h-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await onRefresh();
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+                aria-label={t.files.refreshBtn}
+                title={t.files.refreshBtn}
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              </Button>
+              {onRebuildVolume && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  disabled={rebuilding || !activeVolumeId}
+                  onClick={async () => {
+                    setRebuilding(true);
+                    try {
+                      await onRebuildVolume(activeVolumeId);
+                    } finally {
+                      setRebuilding(false);
+                    }
+                  }}
+                  aria-label={t.files.rebuildBtn}
+                  title={t.files.rebuildBtn}
+                >
+                  <Database className={`w-4 h-4 ${rebuilding ? 'animate-pulse' : ''}`} />
+                </Button>
+              )}
+            </div>
+
 
               {/* View Mode Toggle: List vs Grid */}
               <div className="inline-flex items-center p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80">

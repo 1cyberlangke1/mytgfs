@@ -56,6 +56,7 @@ export interface ApiState {
     login?: boolean;
     autostart?: boolean;
     cover?: boolean;
+    rebuild?: boolean;
   };
   status?: {
     state?: string;
@@ -333,6 +334,12 @@ export function setAutostart(enabled: boolean): Promise<ApiAutostart> {
 // triggerSync 立即增量同步。
 export function triggerSync(): Promise<unknown> {
   return request('/api/sync', { method: 'POST' });
+}
+
+// rebuildVolume 按频道历史全量重建指定卷的本地索引。
+export function rebuildVolume(volume: string): Promise<{ files: number }> {
+  const q = new URLSearchParams({ vol: volume });
+  return request(`/api/rebuild?${q.toString()}`, { method: 'POST' });
 }
 
 // clearQueue 删除服务端已结束（成功/失败）的任务记录。

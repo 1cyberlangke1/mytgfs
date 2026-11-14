@@ -70,6 +70,7 @@ import {
   removeDownload,
   removeItems,
   saveSettings,
+  rebuildVolume,
   setCover,
   triggerSync,
   uploadFile,
@@ -261,6 +262,7 @@ export default function App() {
     login: boolean;
     autostart: boolean;
     cover: boolean;
+    rebuild: boolean;
   }>({
     createVolume: false,
     deleteVolume: false,
@@ -269,6 +271,7 @@ export default function App() {
     login: false,
     autostart: false,
     cover: false,
+    rebuild: false,
   });
 
   const t = DICTIONARY[locale] || DICTIONARY.zh;
@@ -411,6 +414,7 @@ export default function App() {
         login: Boolean(st.caps?.login),
         autostart: Boolean(st.caps?.autostart),
         cover: Boolean(st.caps?.cover),
+        rebuild: Boolean(st.caps?.rebuild),
       });
       clearProblem('state');
       return names;
@@ -503,16 +507,6 @@ export default function App() {
     void reloadDownloads();
   };
 
-  // 首屏：只拉一次状态 + 设置；之后完全由 SSE 事件驱动，不做定时轮询。
-  // 卷可能还在挂载：服务端打开卷后会推 status，前端收到事件后自然刷新。
-  useEffect(() => {
-    void (async () => {
-      const names = await reloadState();
-      if (names && names.length > 0) await reloadFiles(names);
-      await reloadSettings();
-    })();
-  }, [reloadState, reloadFiles, reloadSettings]);
-
   // 事件驱动：服务端有变化时才推送，前端收到后拉最新快照（取代定时轮询）
   useEffect(() => {
     // 状态与文件分别防抖：进度类事件密集，避免每次事件都全量拉取
@@ -555,9 +549,29 @@ export default function App() {
       }
     );
 
+    // 先订阅再首拉：订阅前发生的变化由这次拉取覆盖，订阅后的变化由事件刷新
+    const bootstrap = async () => {
+      const names = await reloadState();
+      if (names && names.length > 0) await reloadFiles(names);
+      await reloadSettings();
+    };
+    void bootstrap();
+
+    // 窗口重新可见 / 重新聚焦：宿主的 webview 可能晚于挂载才显示，补一次状态
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      scheduleState();
+      scheduleFiles();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       window.clearTimeout(stateTimer);
       window.clearTimeout(filesTimer);
+      window.clearTimeout(dlTimer);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
       unsubscribe();
     };
   }, [reloadState, reloadFiles, reloadSettings]);
@@ -895,6 +909,25 @@ export default function App() {
       await setCover(volume, file);
       await reloadState();
       pushToast(t.volume.coverSaved, 'success');
+    } catch (err) {
+      pushToast(errText(err), 'error');
+    }
+  };
+
+  // handleRefresh 手动刷新状态、文件列表与下载任务。
+  const handleRefresh = async (): Promise<void> => {
+    const names = await reloadState();
+    if (names && names.length > 0) await reloadFiles(names);
+    await reloadDownloads();
+  };
+
+  // handleRebuildVolume 触发服务端按频道历史重建索引，完成后刷新当前卷。
+  const handleRebuildVolume = async (volume: string): Promise<void> => {
+    try {
+      const res = await rebuildVolume(volume);
+      await reloadState();
+      await reloadFiles([volume]);
+      pushToast(interpolate(t.files.rebuildDone, { count: res.files }, locale), 'success');
     } catch (err) {
       pushToast(errText(err), 'error');
     }
@@ -1388,6 +1421,8 @@ export default function App() {
                 onAttachVolume={handleAttachVolume}
                 onCreateVolume={handleCreateVolume}
                 onDeleteVolume={handleDeleteVolume}
+                onRefresh={handleRefresh}
+                onRebuildVolume={caps.rebuild ? handleRebuildVolume : undefined}
               />
             )}
 

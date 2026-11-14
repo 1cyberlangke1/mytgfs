@@ -421,6 +421,10 @@ func Run(opts Options) error {
 				return map[string]any{"results": out}, nil
 			},
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
+				// 重名在建频道之前挡掉，避免建出孤儿频道
+				if config.VolumeNameExists(cfgPath, name) {
+					return nil, config.ErrVolumeExists
+				}
 				bn := getBotUsername()
 				if bn == "" {
 					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
@@ -506,6 +510,12 @@ func Run(opts Options) error {
 			},
 			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
+				if config.VolumeNameExists(cfgPath, name) {
+					return nil, config.ErrVolumeExists
+				}
+				if config.VolumeChatExists(cfgPath, volume.NormalizeChatID(chatID)) {
+					return nil, config.ErrChannelAttached
+				}
 				res, aerr := volume.Attach(ctx, client.API(), volume.AttachRequest{Name: name, ChatID: chatID})
 				if aerr != nil {
 					return nil, aerr
@@ -603,6 +613,23 @@ func Run(opts Options) error {
 				}
 				return nil, false
 			}),
+			// 重建索引：user 会话全量拉历史后覆盖本地节点
+			Rebuild: func(ctx context.Context, name string) (any, error) {
+				volMu.Lock()
+				vs := append([]*trayVolume(nil), volumes...)
+				volMu.Unlock()
+				for _, v := range vs {
+					if v.name != name || v.vf == nil {
+						continue
+					}
+					n, rerr := appRoot.RebuildIndex(ctx, v.idx, volume.NormalizeChatID(v.vf.Volume.ChatID))
+					if rerr != nil {
+						return nil, rerr
+					}
+					return map[string]any{"files": n}, nil
+				}
+				return nil, app.ErrVolumeNotFound{Name: name}
+			},
 		}
 		return web.NewHandler(cfgPath, webOpts)
 	}
@@ -612,6 +639,7 @@ func Run(opts Options) error {
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
 			logging.Warn("tray.volume.open_failed", perr, name)
+			pushHub.Publish(push.TopicStatus)
 			return
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
@@ -621,6 +649,7 @@ func Run(opts Options) error {
 			logging.Warn("log.index_open_failed", oerr)
 			vcancel()
 			closePool()
+			pushHub.Publish(push.TopicStatus)
 			return
 		}
 		idx, store, fsys, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
@@ -666,21 +695,61 @@ func Run(opts Options) error {
 		})
 	}
 
-	// mountAll 在连接就绪后执行一次：卷初始化需要已登录的 MTProto 客户端
-	// （PooledAPI 在未初始化时会空指针），所以不能提前调用。
-	mountAll := func() {
-		if len(cfg.Volumes) == 0 {
-			mountOne("mytgfs", cfg.Telegram.ChannelID)
-		} else {
-			for _, v := range cfg.Volumes {
-				if !v.Enabled {
-					continue
-				}
-				mountOne(v.Name, v.ChatID)
+	// isMounted 判断卷是否已经在托盘里。
+	isMounted := func(name string) bool {
+		volMu.Lock()
+		defer volMu.Unlock()
+		for _, v := range volumes {
+			if v.name == name {
+				return true
 			}
 		}
+		return false
 	}
-	mountOnce := sync.OnceFunc(mountAll)
+	// mountAll 尝试挂载所有尚未就绪的卷。
+	mountAll := func() {
+		if len(cfg.Volumes) == 0 {
+			if !isMounted("mytgfs") {
+				mountOne("mytgfs", cfg.Telegram.ChannelID)
+			}
+			return
+		}
+		for _, v := range cfg.Volumes {
+			if !v.Enabled || isMounted(v.Name) {
+				continue
+			}
+			mountOne(v.Name, v.ChatID)
+		}
+	}
+	// allMounted 判断配置里所有启用的卷是否都已挂载。
+	allMounted := func() bool {
+		if len(cfg.Volumes) == 0 {
+			return isMounted("mytgfs")
+		}
+		for _, v := range cfg.Volumes {
+			if v.Enabled && !isMounted(v.Name) {
+				return false
+			}
+		}
+		return true
+	}
+	// mountUntilAll 反复重试直到全部卷挂载成功或进程退出。
+	mountUntilAll := func(ctx context.Context) {
+		wait := 2 * time.Second
+		for {
+			mountAll()
+			if allMounted() || ctx.Err() != nil {
+				return
+			}
+			logging.Warn("log.mount_retry", nil)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return
+			}
+			wait = min(wait*2, 30*time.Second)
+		}
+	}
 
 	// 连接循环：断网由 gotd 内部无限重连；Run 只在永久错误或 ctx 取消时返回
 	wg.Go(func() {
@@ -689,7 +758,7 @@ func Run(opts Options) error {
 			if self, serr := client.Self(ctx); serr == nil {
 				setBotUsername(self.Username)
 			}
-			mountOnce()
+			mountUntilAll(ctx)
 			<-ctx.Done()
 			return nil
 		})

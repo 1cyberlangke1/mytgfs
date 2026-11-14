@@ -207,6 +207,7 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			"login":        opts.Auth != nil,
 			"autostart":    opts.Autostart != nil,
 			"cover":        opts.Cover != nil,
+			"rebuild":      opts.Rebuild != nil,
 		}
 		if opts.Status != nil {
 			if st, err := opts.Status(r.Context()); err == nil {

@@ -504,6 +504,10 @@ func runWeb(args []string) {
 			},
 			// 建卷需要 user 会话：临时开一条，建完就关
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
+				// 重名在建频道之前挡掉，避免建出孤儿频道
+				if config.VolumeNameExists(cfgPath, name) {
+					return nil, config.ErrVolumeExists
+				}
 				bn := readBotUsername(ctx, cfg, cfg.APIHash(), key)
 				if bn == "" {
 					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
@@ -578,6 +582,12 @@ func runWeb(args []string) {
 			},
 			// 添加已有频道：用 bot 会话校验频道可见性与发言权
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
+				if config.VolumeNameExists(cfgPath, name) {
+					return nil, config.ErrVolumeExists
+				}
+				if config.VolumeChatExists(cfgPath, volume.NormalizeChatID(chatID)) {
+					return nil, config.ErrChannelAttached
+				}
 				res, aerr := volume.Attach(ctx, api, volume.AttachRequest{Name: name, ChatID: chatID})
 				if aerr != nil {
 					return nil, aerr
@@ -638,6 +648,18 @@ func runWeb(args []string) {
 				}
 				return wv.vf, true
 			}),
+			// 重建索引：用 user 会话全量拉频道历史后覆盖本地节点
+			Rebuild: func(ctx context.Context, name string) (any, error) {
+				wv, ok := vols[name]
+				if !ok {
+					return nil, app.ErrVolumeNotFound{Name: name}
+				}
+				n, rerr := appRoot.RebuildIndex(ctx, wv.idx, volume.NormalizeChatID(wv.vf.Volume.ChatID))
+				if rerr != nil {
+					return nil, rerr
+				}
+				return map[string]any{"files": n}, nil
+			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil
@@ -684,10 +706,8 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 		}
 		out[v.Name] = &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
 	}
-	// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
-	if len(out) > 0 {
-		a.Events().Publish(push.TopicStatus)
-	}
+	// 卷处理结束就推一条 status：全部失败也要推，面板才能结束等待
+	a.Events().Publish(push.TopicStatus)
 	return out
 }
 

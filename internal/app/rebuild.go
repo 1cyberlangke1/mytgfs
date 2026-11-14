@@ -95,10 +95,25 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 		slog.Info(i18n.T("log.rebuild_empty"), "channel", channelID)
 		return nil
 	}
-	count, err := tgsync.Rebuild(ctx, idx, nodes)
-	if err != nil {
+	if _, err := tgsync.Rebuild(ctx, idx, nodes); err != nil {
 		return err
 	}
-	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID, "files", count)
+	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID)
 	return nil
+}
+
+// RebuildIndex 无条件按远端全量节点重建本地索引。
+//
+// 输入：ctx；idx 索引；channelID 该卷频道 ID
+// 输出：写入的节点数
+// 预期：远端为空时返回 0 且不改本地；没有 user 会话时返回错误
+func (a *App) RebuildIndex(ctx context.Context, idx *index.Index, channelID int64) (int, error) {
+	nodes, err := a.AllNodes(ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+	return tgsync.Rebuild(ctx, idx, nodes)
 }

@@ -83,6 +83,10 @@ func handleAPIAttachVolume(opts Options) http.HandlerFunc {
 				replyJSONError(w, http.StatusConflict, i18n.T("err.volume_exists", name))
 				return
 			}
+			if errors.Is(err, config.ErrChannelAttached) {
+				replyJSONError(w, http.StatusConflict, i18n.T("err.channel_attached"))
+				return
+			}
 			replyJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}

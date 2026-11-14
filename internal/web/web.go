@@ -80,6 +80,8 @@ type Options struct {
 	ClearQueue func(ctx context.Context) (int64, error)
 	// Cover 读写频道头像；nil 时封面接口返回 501、面板不显示封面设置
 	Cover CoverSource
+	// Rebuild 按卷重建本地索引；nil 时接口返回 501
+	Rebuild RebuildFunc
 }
 
 // NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
@@ -136,6 +138,7 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/downloads/open-file", handleAPIDownloadOpenFile(dl))
 	rt.route("/api/thumb", handleFileThumb(api))
 	rt.route("/api/cover", handleVolumeCover(opts.Cover))
+	rt.route("/api/rebuild", handleAPIRebuild(opts))
 	rt.route("/api/volumes", handleAPIVolumes(opts))
 	rt.route("/api/volumes/attach", handleAPIAttachVolume(opts))
 	rt.route("/api/channels", handleAPIChannels(opts))
