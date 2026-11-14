@@ -25,8 +25,8 @@ export interface FileItem {
 export interface VolumeInfo {
   id: string;
   name: string;
-  /** 卷根目录是否存在 cover.jpg/.cover.png，只有为 true 才请求封面图 */
-  hasCover?: boolean;
+  /** 频道头像版本（photo id）；空串表示频道没有头像 */
+  cover?: string;
 }
 
 export type TransferDirection = 'upload' | 'download';

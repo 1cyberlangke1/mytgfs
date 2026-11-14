@@ -38,22 +38,22 @@ func TestStatusNotifierNilEvents(t *testing.T) {
 	}
 }
 
-// TestStatusNotifierPublishesOnChange 有增删才推 status，空轮不打扰面板。
+// TestStatusNotifierPublishesOnChange 每个回调都推 status，含只有封面变化的空列表。
 //
-// 输入：记录器；先空轮再带变更各调一次
-// 输出：只有带变更的两次推送
+// 输入：记录器；空列表与带变更依次调用
+// 输出：三次都推送（调用方已经过滤了真正无变化的轮次）
 func TestStatusNotifierPublishesOnChange(t *testing.T) {
 	rec := push.NewRecorder()
 	fn := StatusNotifier(rec)
 
 	fn(nil, nil)
-	if got := rec.Count(push.TopicStatus); got != 0 {
-		t.Fatalf("空轮不应推送，实际 %d", got)
+	if got := rec.Count(push.TopicStatus); got != 1 {
+		t.Fatalf("封面变化用空列表表达，应推送，实际 %d", got)
 	}
 	fn([]string{"/a"}, nil)
 	fn(nil, []string{"/b"})
-	if got := rec.Count(push.TopicStatus); got != 2 {
-		t.Fatalf("推送 %d 次，期望 2 次", got)
+	if got := rec.Count(push.TopicStatus); got != 3 {
+		t.Fatalf("推送 %d 次，期望 3 次", got)
 	}
 }
 

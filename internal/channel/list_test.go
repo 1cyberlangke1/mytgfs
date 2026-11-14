@@ -42,6 +42,15 @@ func (f *fakeListAPI) ChannelsEditAdmin(context.Context, *tg.ChannelsEditAdminRe
 func (f *fakeListAPI) AccountUpdateNotifySettings(context.Context, *tg.AccountUpdateNotifySettingsRequest) (bool, error) {
 	panic("unused")
 }
+func (f *fakeListAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClass) (tg.MessagesChatsClass, error) {
+	panic("unused")
+}
+func (f *fakeListAPI) ChannelsEditPhoto(context.Context, *tg.ChannelsEditPhotoRequest) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+func (f *fakeListAPI) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequest) (bool, error) {
+	panic("unused")
+}
 
 // mkChannel 造一个频道；admin 为 false 时表示普通成员频道。
 func mkChannel(id int64, creator, admin bool) *tg.Channel {

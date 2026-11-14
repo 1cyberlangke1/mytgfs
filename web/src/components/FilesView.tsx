@@ -11,7 +11,6 @@ import {
   FolderPlus,
   FolderUp,
   HardDrive,
-  Image as ImageIcon,
   LayoutGrid,
   Link2,
   List,
@@ -80,8 +79,6 @@ interface FilesViewProps {
   onCreateVolume: (name: string, title: string) => void;
   onAttachVolume: (name: string, chatId: number) => void;
   onDeleteVolume: (name: string) => void;
-  onSetCover: (volumeId: string, file: File) => void;
-  onRemoveCover: (volumeId: string) => void;
 }
 
 // suggestVolumeName 按频道标题猜一个合法卷名。
@@ -163,12 +160,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onCreateVolume,
   onAttachVolume,
   onDeleteVolume,
-  onSetCover,
-  onRemoveCover,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
-  const coverInputRef = useRef<HTMLInputElement | null>(null);
 
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
@@ -209,7 +203,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   };
   const [showDeleteVolume, setShowDeleteVolume] = useState(false);
   const [deleteVolumeInput, setDeleteVolumeInput] = useState('');
-  const [showRemoveCover, setShowRemoveCover] = useState(false);
 
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [searchQuery, setSearchQuery] = useState('');
@@ -499,29 +492,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </Button>
           )}
 
-          {currentVolume && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => coverInputRef.current?.click()}
-            >
-              <ImageIcon className="w-3.5 h-3.5" />
-              <span>{t.volume.coverBtn}</span>
-            </Button>
-          )}
-
-          {currentVolume?.hasCover && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setShowRemoveCover(true)}
-              className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>{t.volume.removeCoverBtn}</span>
-            </Button>
-          )}
-
           {canDeleteVolume && currentVolume && (
             <Button
               type="button"
@@ -533,19 +503,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
               <span>{t.volume.deleteBtn}</span>
             </Button>
           )}
-
-          {/* 封面选择：限制成图片，选中后由 App 上传为 .cover.<ext> */}
-          <input
-            ref={coverInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp"
-            className="hidden"
-            onChange={(e) => {
-              const picked = e.target.files?.[0];
-              if (picked && currentVolume) onSetCover(currentVolume.id, picked);
-              e.target.value = '';
-            }}
-          />
         </div>
       </div>
 
@@ -1608,43 +1565,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 }}
               >
                 {t.volume.deleteConfirm}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal 7: Remove Cover */}
-      {showRemoveCover && currentVolume && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-remove-cover-title"
-        >
-          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
-            <h3
-              id="modal-remove-cover-title"
-              className="text-base font-semibold text-zinc-950 dark:text-white"
-            >
-              {t.volume.removeCoverTitle}
-            </h3>
-            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-              {interpolate(t.volume.removeCoverDesc, { name: currentVolume.name }, locale)}
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={() => setShowRemoveCover(false)}>
-                {t.files.cancel}
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => {
-                  onRemoveCover(currentVolume.id);
-                  setShowRemoveCover(false);
-                }}
-              >
-                {t.volume.removeCoverBtn}
               </Button>
             </div>
           </div>

@@ -11,7 +11,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"os"
+
+	"github.com/gotd/td/tg"
 
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
@@ -142,34 +143,17 @@ func (a *App) Index(volumeName string) (*index.Index, error) {
 //   - 只返回自己创建或有管理权限的频道/超级群；bot 会话无法列出对话
 //   - user 会话文件不存在时返回 ErrUserSessionMissing
 func (a *App) Channels(ctx context.Context) ([]channel.Item, error) {
-	userSession := a.userSessionPath()
-	if _, err := os.Stat(userSession); err != nil {
-		return nil, ErrUserSessionMissing
-	}
-	apiHash := a.cfg.APIHash()
-	if apiHash == "" {
-		return nil, ErrMissingAPIHash
-	}
-	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
-	}
-	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: userSession, Key: key},
-		tgclient.Options{})
-
 	var items []channel.Item
-	var listErr error
-	runErr := client.Run(ctx, func(ctx context.Context) error {
-		items, listErr = channel.List(ctx, client.API())
-		// 返回 nil 让 gotd 收尾退出；真正的列表错误单独带出去，避免被包成 callback 错误
+	err := a.withUserAPI(ctx, func(ctx context.Context, api *tg.Client) error {
+		list, lerr := channel.List(ctx, api)
+		if lerr != nil {
+			return lerr
+		}
+		items = list
 		return nil
 	})
-	if listErr != nil {
-		return nil, listErr
-	}
-	if runErr != nil {
-		return nil, runErr
+	if err != nil {
+		return nil, err
 	}
 	return items, nil
 }

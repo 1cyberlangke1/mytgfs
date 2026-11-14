@@ -51,6 +51,11 @@ type fakeAPI struct {
 	// partErrOnceAt 让指定分片第一次上传失败（-1 表示不注入）
 	partErrOnceAt int
 	partErrOnce   error
+
+	// 频道头像：fullPhoto 控制 chatPhoto
+	fullCalls int
+	fullPhoto tg.PhotoClass
+	fullErr   error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -113,6 +118,16 @@ func (f *fakeAPI) MessagesEditMessage(_ context.Context, req *tg.MessagesEditMes
 func (f *fakeAPI) ChannelsDeleteMessages(_ context.Context, req *tg.ChannelsDeleteMessagesRequest) (*tg.MessagesAffectedMessages, error) {
 	f.deleteMsgs = append(f.deleteMsgs, req)
 	return &tg.MessagesAffectedMessages{}, nil
+}
+
+func (f *fakeAPI) ChannelsGetFullChannel(context.Context, tg.InputChannelClass) (*tg.MessagesChatFull, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fullCalls++
+	if f.fullErr != nil {
+		return nil, f.fullErr
+	}
+	return &tg.MessagesChatFull{FullChat: &tg.ChannelFull{ChatPhoto: f.fullPhoto}}, nil
 }
 
 func (f *fakeAPI) UploadGetFile(_ context.Context, req *tg.UploadGetFileRequest) (tg.UploadFileClass, error) {

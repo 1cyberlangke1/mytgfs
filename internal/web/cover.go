@@ -1,125 +1,124 @@
 package web
 
-// 卷封面：把卷根目录里特殊命名的图片当作这个「盘」的显示图。
+// 卷封面：直接用 Telegram 频道头像，不再读卷里的特殊命名文件。
 //
-// 命名约定（大小写不敏感，只认卷根目录）：
+// GET  /api/cover?vol=  输出频道头像（ETag = photo id）
+// POST /api/cover?vol=  上传一张原图，服务端裁方压缩后写回频道头像
 //
-//	.cover.jpg / .cover.png / cover.jpg / cover.png ...
-//
-// 服务端把它缩放到 720px 长边后写入磁盘缓存（与缩略图同一目录、同一套 key），
-// 之后启动、切页、刷新都不再回 Telegram 取图。
+// 头像在 Telegram 侧，别的客户端改了头像也会同步过来；
+// 面板只负责展示与发起修改。
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
-	"path"
-	"strings"
+	"strconv"
 
-	"mytgfs/internal/fm"
+	"mytgfs/internal/cover"
 	"mytgfs/internal/i18n"
 )
 
-// coverStems 是允许的封面文件名（不含扩展名）。
-var coverStems = map[string]bool{
-	".cover": true,
-	"cover":  true,
+// CoverSource 是频道头像的读写入口。
+//
+// 输入/输出：
+//   - HasVolume 判断卷是否还挂着
+//   - CoverVersion 返回头像版本（photo id，无头像为空串）
+//   - CoverImage 返回头像字节与版本
+//   - SetCover 写入一张已归一的正方形 JPEG
+type CoverSource interface {
+	HasVolume(name string) bool
+	CoverVersion(ctx context.Context, volume string) (string, error)
+	CoverImage(ctx context.Context, volume string) ([]byte, string, error)
+	SetCover(ctx context.Context, volume string, data []byte) error
 }
 
-// isCoverName 判断文件名是否是保留的封面名。
-//
-// 输入：name 文件名（不含目录）
-// 输出：true 表示可作为卷封面
-// 预期：只认 cover/.cover 加图片扩展名；区分大小写不敏感
-func isCoverName(name string) bool {
-	ext := strings.ToLower(path.Ext(name))
-	if !thumbExts[ext] {
-		return false
-	}
-	stem := strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))
-	return coverStems[stem]
-}
+// maxCoverUpload 是面板上传头像的原始图片上限。
+const maxCoverUpload = 16 << 20
 
-// findCover 在卷根目录里挑出封面文件。
+// handleVolumeCover 读写频道头像。
 //
-// 输入：ctx；m 文件后端
-// 输出：条目与是否找到
-// 预期：多个同名（不同扩展名）时按名字排序取第一个，保证结果稳定
-func findCover(ctx context.Context, m fm.Files) (fm.Entry, bool) {
-	entries, err := m.List(ctx, "/")
-	if err != nil {
-		return fm.Entry{}, false
-	}
-	var best fm.Entry
-	found := false
-	for _, e := range entries {
-		if e.Dir || !isCoverName(e.Name) {
-			continue
-		}
-		if !found || e.Name < best.Name {
-			best, found = e, true
-		}
-	}
-	return best, found
-}
-
-// handleVolumeCover 输出卷封面（GET /api/cover?vol=）。
-//
-// 输入：vol 卷名
-// 输出：image/jpeg；没有封面 404；命中 If-None-Match 时 304
+// 输入：covers 头像源；GET 读图，POST 上传原图
+// 输出：GET image/jpeg；POST {"ok":true}；404 无头像/无卷；501 未接线
 // 预期：
-//   - 首次生成走 Telegram，之后命中 data/thumbs 磁盘缓存
-//   - ETag 由「卷+路径+大小+修改时间」算出，换封面自动失效
-//   - 浏览器按 max-age=604800 缓存，刷新只做 304 校验
-func handleVolumeCover(api *filesAPI) http.HandlerFunc {
+//   - ETag 用 photo id，别人换头像后 URL 版本变化，浏览器不会吃旧缓存
+//   - POST 的 body 是原始图片字节（非 multipart），由 cover.SquareJPEG 归一
+func handleVolumeCover(covers CoverSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, i18n.T("err.http_method"), http.StatusMethodNotAllowed)
-			return
-		}
-		if api == nil {
-			http.Error(w, i18n.T("err.http_no_files"), http.StatusNotImplemented)
+		if covers == nil {
+			http.Error(w, i18n.T("err.http_no_cover"), http.StatusNotImplemented)
 			return
 		}
 		vol := r.URL.Query().Get("vol")
-		m, ok := api.manager(vol)
-		if !ok {
+		if !covers.HasVolume(vol) {
 			http.Error(w, i18n.T("err.http_no_volume"), http.StatusNotFound)
 			return
 		}
-		e, ok := findCover(r.Context(), m)
-		if !ok {
-			http.Error(w, i18n.T("err.http_not_found"), http.StatusNotFound)
-			return
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			serveCover(w, r, covers, vol)
+		case http.MethodPost:
+			uploadCover(w, r, covers, vol)
+		default:
+			http.Error(w, i18n.T("err.http_method"), http.StatusMethodNotAllowed)
 		}
-		if e.Size > thumbMaxSource {
-			http.Error(w, i18n.T("err.http_too_large"), http.StatusUnsupportedMediaType)
-			return
-		}
-		p := path.Join("/", e.Name)
-		key := "cover-" + thumbKey(vol, p, e)
-		w.Header().Set("ETag", `"`+key+`"`)
-		w.Header().Set("Cache-Control", "private, max-age=604800")
-		if etagMatches(r.Header.Get("If-None-Match"), key) {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		if b := api.thumbs.load(key); b != nil {
-			writeThumb(w, b)
-			return
-		}
-		api.thumbs.mu.Lock()
-		b := api.thumbs.load(key)
-		if b == nil {
-			b = generateThumb(r, m, p, coverMaxSide)
-			if b != nil {
-				api.thumbs.save(key, b)
-			}
-		}
-		api.thumbs.mu.Unlock()
-		if b == nil {
-			http.Error(w, i18n.T("err.http_decode_failed"), http.StatusUnsupportedMediaType)
-			return
-		}
-		writeThumb(w, b)
 	}
+}
+
+// serveCover 输出频道头像。
+func serveCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol string) {
+	data, version, err := covers.CoverImage(r.Context(), vol)
+	if err != nil {
+		http.Error(w, i18n.T("err.cover_fetch"), http.StatusBadGateway)
+		return
+	}
+	if len(data) == 0 || version == "" {
+		http.Error(w, i18n.T("err.http_not_found"), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("ETag", `"`+version+`"`)
+	w.Header().Set("Cache-Control", "private, max-age=604800")
+	if etagMatches(r.Header.Get("If-None-Match"), version) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(data)
+}
+
+// uploadCover 接收原图并写回频道头像。
+//
+// 输入：r.Body 原始图片字节
+// 输出：{"ok":true}；400 空体；413 超限；415 不是图片；502 Telegram 拒绝
+// 预期：先本地归一成 512×512 JPEG，Telegram 侧只会收到合规头像
+func uploadCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol string) {
+	body := http.MaxBytesReader(w, r.Body, maxCoverUpload)
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, i18n.T("err.cover_too_large"), http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, i18n.T("err.http_bad_request"), http.StatusBadRequest)
+		return
+	}
+	if len(raw) == 0 {
+		http.Error(w, i18n.T("err.cover_empty"), http.StatusBadRequest)
+		return
+	}
+	jpeg, err := cover.SquareJPEG(raw)
+	if err != nil {
+		http.Error(w, i18n.T("err.cover_decode"), http.StatusUnsupportedMediaType)
+		return
+	}
+	if err := covers.SetCover(r.Context(), vol, jpeg); err != nil {
+		http.Error(w, i18n.T("err.cover_set"), http.StatusBadGateway)
+		return
+	}
+	replyJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

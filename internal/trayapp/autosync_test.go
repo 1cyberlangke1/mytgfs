@@ -101,6 +101,49 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 	}
 }
 
+// coverNodes 在 fakeNodes 基础上报告一次头像变化。
+type coverNodes struct {
+	fakeNodes
+	calls int
+}
+
+func (c *coverNodes) CoverChanged(context.Context) (bool, error) {
+	c.calls++
+	return c.calls == 1, nil
+}
+
+// TestAutoSyncNotifiesCoverChange 头像变化用空列表通知一次。
+//
+// 输入：带 CoverChanged 的节点源
+// 输出：notify 至少收到一次 changed/removed 都为空的调用
+// 预期：封面不参与节点差异，但面板仍要收到刷新信号
+func TestAutoSyncNotifiesCoverChange(t *testing.T) {
+	idx := newTestIndex(t)
+	ctx := t.Context()
+	nodes := &coverNodes{}
+	events := make(chan [2]int, 8)
+	go AutoSyncWhile(ctx, func(changed, removed []string) {
+		events <- [2]int{len(changed), len(removed)}
+	}, idx, &fakeDiffer{}, nodes, 20*time.Millisecond, nil, nil)
+
+	deadline := time.After(3 * time.Second)
+	sawEmpty := false
+	for range 3 {
+		select {
+		case e := <-events:
+			if e[0] == 0 && e[1] == 0 {
+				sawEmpty = true
+			}
+		case <-deadline:
+			t.Fatal("三秒内没有收到通知")
+		}
+		if sawEmpty {
+			return
+		}
+	}
+	t.Fatal("没有收到空列表的封面变化通知")
+}
+
 // TestAutoSyncNilNotify 回调可省略。
 func TestAutoSyncNilNotify(t *testing.T) {
 	idx := newTestIndex(t)

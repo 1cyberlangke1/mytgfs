@@ -68,6 +68,7 @@ import {
   removeDownload,
   removeItems,
   saveSettings,
+  setCover,
   triggerSync,
   uploadFile,
 } from './api';
@@ -257,6 +258,7 @@ export default function App() {
     listChannels: boolean;
     login: boolean;
     autostart: boolean;
+    cover: boolean;
   }>({
     createVolume: false,
     deleteVolume: false,
@@ -264,9 +266,8 @@ export default function App() {
     listChannels: false,
     login: false,
     autostart: false,
+    cover: false,
   });
-  // 封面图地址带版本号，改完封面立刻刷新，不依赖浏览器缓存过期
-  const [coverVersion, setCoverVersion] = useState(0);
 
   const t = DICTIONARY[locale] || DICTIONARY.zh;
   const localeMeta = getLocaleMeta(locale);
@@ -393,7 +394,7 @@ export default function App() {
         st.volumes.map((v) => ({
           id: v.name,
           name: v.name,
-          hasCover: Boolean(v.cover),
+          cover: v.cover ?? '',
         }))
       );
       setActiveVolumeId((cur) => (cur && names.includes(cur) ? cur : names[0] ?? ''));
@@ -407,6 +408,7 @@ export default function App() {
         listChannels: Boolean(st.caps?.listChannels),
         login: Boolean(st.caps?.login),
         autostart: Boolean(st.caps?.autostart),
+        cover: Boolean(st.caps?.cover),
       });
       clearProblem('state');
       return names;
@@ -881,38 +883,19 @@ export default function App() {
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
-  // handleSetCover 把图片以保留名写进卷根目录，服务端据此生成封面
-  const handleSetCover = (volume: string, file: File) => {
-    const dot = file.name.lastIndexOf('.');
-    const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : 'jpg';
-    uploadFile(volume, '/', `.cover.${ext}`, file)
-      .then(() => {
-        setCoverVersion((v) => v + 1);
-        return Promise.all([reloadFiles([volume]), reloadState()]);
-      })
-      .then(() => pushToast(t.volume.coverSaved, 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
-  };
-
-  // handleRemoveCover 删除卷根目录里的保留封面文件
-  const handleRemoveCover = (volume: string) => {
-    const covers = files.filter(
-      (f) => f.volumeId === volume && !f.isDir && /^\.?cover\.(jpe?g|png|gif|webp)$/i.test(f.name)
-    );
-    if (covers.length === 0) {
-      pushToast(t.volume.noCover, 'error');
-      return;
+  // handleSetCover 把原图写成频道头像；成功后重取状态拿到新版本号
+  //
+  // 输入：volume 卷名；file 用户选的原图
+  // 输出：无（错误转 toast，不向弹窗抛）
+  // 预期：失败时弹窗保持打开，用户可换一张再试
+  const handleSetCover = async (volume: string, file: File): Promise<void> => {
+    try {
+      await setCover(volume, file);
+      await reloadState();
+      pushToast(t.volume.coverSaved, 'success');
+    } catch (err) {
+      pushToast(errText(err), 'error');
     }
-    removeItems(
-      volume,
-      covers.map((c) => c.id)
-    )
-      .then(() => {
-        setCoverVersion((v) => v + 1);
-        return Promise.all([reloadFiles([volume]), reloadState()]);
-      })
-      .then(() => pushToast(t.volume.coverRemoved, 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
 
@@ -1354,7 +1337,7 @@ export default function App() {
                 onToggleTransferPause={handleToggleTransferPause}
                 onCancelTransfer={handleCancelTransfer}
                 onClearCompletedTransfers={handleClearCompletedTransfers}
-                coverVersion={coverVersion}
+                onSetCover={caps.cover ? handleSetCover : undefined}
               />
             )}
 
@@ -1386,8 +1369,6 @@ export default function App() {
                 onAttachVolume={handleAttachVolume}
                 onCreateVolume={handleCreateVolume}
                 onDeleteVolume={handleDeleteVolume}
-                onSetCover={handleSetCover}
-                onRemoveCover={handleRemoveCover}
               />
             )}
 

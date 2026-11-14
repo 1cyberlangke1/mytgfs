@@ -85,19 +85,16 @@ func SyncInterval(seconds int) time.Duration {
 	}
 }
 
-// StatusNotifier 把自动同步的增删转成 status 事件，面板据此刷新。
+// StatusNotifier 把自动同步的变更转成 status 事件，面板据此刷新。
 //
 // 输入：events 推送通道；nil 时返回 nil
 // 输出：AutoSyncWhile 的 notify 回调
-// 预期：只有真的增删了条目才推送，空轮不打扰面板
+// 预期：调用方只在真有变化时回调；回调到达就推送，包括只有封面变化（空列表）
 func StatusNotifier(events push.Events) func(changed, removed []string) {
 	if events == nil {
 		return nil
 	}
 	return func(changed, removed []string) {
-		if len(changed) == 0 && len(removed) == 0 {
-			return
-		}
 		events.Publish(push.TopicStatus)
 	}
 }
@@ -115,6 +112,15 @@ func SyncEnabled(cfgPath string, fallback bool) func() bool {
 		}
 		return cur.Mount.SyncOn()
 	}
+}
+
+// coverWatcher 是可选的频道头像变化源。
+//
+// 输入：ctx
+// 输出：true 表示头像相对上次观测变了
+// 预期：NodeSource 不强制实现；实现了就每轮顺带检查一次
+type coverWatcher interface {
+	CoverChanged(ctx context.Context) (bool, error)
 }
 
 // AutoSyncWhile 周期性把频道差异应用进索引并通知挂载点刷新。
@@ -139,6 +145,12 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 				logging.Warn("log.autosync_failed", err)
 			case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
 				notify(res.Changed, res.Removed)
+			}
+			// 别人换了频道头像：推一条空变更，面板据此重取封面
+			if cw, ok := st.(coverWatcher); ok && notify != nil {
+				if changed, cerr := cw.CoverChanged(ctx); cerr == nil && changed {
+					notify(nil, nil)
+				}
 			}
 		}
 		select {
@@ -321,6 +333,9 @@ func Run(opts Options) error {
 	pushHub := push.NewHub(rootCtx)
 	defer pushHub.Close()
 
+	// 装配根复用：开卷与写频道头像都走同一套配置/会话
+	appRoot := app.New(cfg, app.Options{Push: pushHub})
+
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
 		tgclient.Options{
@@ -427,6 +442,9 @@ func Run(opts Options) error {
 						return nil, fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), rerr)
 					}
 					return nil, rerr
+				}
+				if res.AvatarErr != nil {
+					logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
 				}
 				vol := config.Volume{
 					Name:    res.Name,
@@ -573,6 +591,18 @@ func Run(opts Options) error {
 				}
 				return total, nil
 			},
+			// 封面就是频道头像：按卷名找到对应 Store
+			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
+				volMu.Lock()
+				vs := append([]*trayVolume(nil), volumes...)
+				volMu.Unlock()
+				for _, v := range vs {
+					if v.name == name && v.vf != nil {
+						return v.vf, true
+					}
+				}
+				return nil, false
+			}),
 		}
 		return web.NewHandler(cfgPath, webOpts)
 	}
@@ -586,7 +616,7 @@ func Run(opts Options) error {
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、文件系统语义与文件管理统一由装配根给出
-		vf, oerr := app.New(cfg, app.Options{Push: pushHub}).OpenVolume(vctx, name, api)
+		vf, oerr := appRoot.OpenVolume(vctx, name, api)
 		if oerr != nil {
 			logging.Warn("log.index_open_failed", oerr)
 			vcancel()

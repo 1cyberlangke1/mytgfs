@@ -36,8 +36,6 @@ const (
 	thumbMaxSource = 16 << 20
 	// thumbMaxSide 缩略图最长边
 	thumbMaxSide = 320
-	// coverMaxSide 卷封面最长边：卡片头图约 400px 宽，2x 屏取 720
-	coverMaxSide = 720
 )
 
 // thumbExts 是允许生成缩略图的扩展名。

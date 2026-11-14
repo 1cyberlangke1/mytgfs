@@ -22,7 +22,8 @@ export interface ApiVolume {
   name: string;
   entries: number;
   used: number;
-  cover?: boolean;
+  /** 频道头像版本（photo id）；空串表示没有头像 */
+  cover?: string;
 }
 
 export interface ApiTransfer {
@@ -54,6 +55,7 @@ export interface ApiState {
     listChannels?: boolean;
     login?: boolean;
     autostart?: boolean;
+    cover?: boolean;
   };
   status?: {
     state?: string;
@@ -400,10 +402,24 @@ export function thumbURL(volume: string, path: string): string {
   return `/api/thumb?${q.toString()}`;
 }
 
-// coverURL 返回卷封面地址；卷根目录有 .cover.jpg / cover.png 时才会命中。
-export function coverURL(volume: string): string {
+// coverURL 返回频道头像地址；version 是 photo id，换头像后 URL 自然失效。
+export function coverURL(volume: string, version?: string): string {
   const q = new URLSearchParams({ vol: volume });
+  if (version) q.set('v', version);
   return `/api/cover?${q.toString()}`;
+}
+
+// setCover 上传一张原图并写成频道头像（服务端裁方压缩）。
+export async function setCover(volume: string, file: File): Promise<void> {
+  const q = new URLSearchParams({ vol: volume });
+  const res = await fetch(`/api/cover?${q.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  if (!res.ok) {
+    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
+  }
 }
 
 // ---- 下载目录（服务端落盘）----

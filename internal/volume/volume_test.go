@@ -3,8 +3,10 @@ package volume
 // 建卷流程单测：用假 Telegram API 覆盖成功与各失败分支。
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image/jpeg"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -17,11 +19,15 @@ type fakeAPI struct {
 	createReq *tg.ChannelsCreateChannelRequest
 	editReq   *tg.ChannelsEditAdminRequest
 	notifyReq *tg.AccountUpdateNotifySettingsRequest
+	uploadReq *tg.UploadSaveFilePartRequest
+	photoReq  *tg.ChannelsEditPhotoRequest
 
 	createErr  error
 	resolveErr error
 	editErr    error
 	notifyErr  error
+	uploadErr  error
+	photoErr   error
 
 	users []tg.UserClass
 }
@@ -61,6 +67,28 @@ func (f *fakeAPI) AccountUpdateNotifySettings(_ context.Context, req *tg.Account
 
 func (f *fakeAPI) MessagesGetDialogs(_ context.Context, _ *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error) {
 	return &tg.MessagesDialogs{}, nil
+}
+
+func (f *fakeAPI) ChannelsGetChannels(_ context.Context, _ []tg.InputChannelClass) (tg.MessagesChatsClass, error) {
+	return &tg.MessagesChats{Chats: []tg.ChatClass{
+		&tg.Channel{ID: 123, AccessHash: 456},
+	}}, nil
+}
+
+func (f *fakeAPI) ChannelsEditPhoto(_ context.Context, req *tg.ChannelsEditPhotoRequest) (tg.UpdatesClass, error) {
+	f.photoReq = req
+	if f.photoErr != nil {
+		return nil, f.photoErr
+	}
+	return &tg.Updates{}, nil
+}
+
+func (f *fakeAPI) UploadSaveFilePart(_ context.Context, req *tg.UploadSaveFilePartRequest) (bool, error) {
+	f.uploadReq = req
+	if f.uploadErr != nil {
+		return false, f.uploadErr
+	}
+	return true, nil
 }
 
 // newFake 返回带一个 bot 用户的假 API。
@@ -190,6 +218,70 @@ func TestCreateMuteFailureIsNotFatal(t *testing.T) {
 	if res.MuteErr == nil {
 		t.Error("mute error should be kept")
 	}
+}
+
+// TestCreateSetsDefaultAvatar 新卷默认头像使用项目图标。
+//
+// 输入：建卷成功路径
+// 输出：上传分片 0 一次，editPhoto 一次
+// 预期：上传内容为 512×512 JPEG，频道用刚解析出的 access_hash
+func TestCreateSetsDefaultAvatar(t *testing.T) {
+	api := newFake()
+	res, err := Create(context.Background(), api, Request{Name: "work", BotUsername: "mybot"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.AvatarErr != nil {
+		t.Fatalf("默认头像失败: %v", res.AvatarErr)
+	}
+	if api.uploadReq == nil || api.photoReq == nil {
+		t.Fatal("没有调用上传或 editPhoto")
+	}
+	if api.uploadReq.FilePart != 0 {
+		t.Errorf("分片号 = %d，期望 0", api.uploadReq.FilePart)
+	}
+	if len(api.uploadReq.Bytes) == 0 {
+		t.Error("上传内容为空")
+	}
+	if w, h := jpegSize(t, api.uploadReq.Bytes); w != 512 || h != 512 {
+		t.Errorf("默认头像尺寸 = %d×%d，期望 512×512", w, h)
+	}
+	ch, ok := api.photoReq.Channel.(*tg.InputChannel)
+	if !ok || ch.ChannelID != 123 || ch.AccessHash != 456 {
+		t.Errorf("editPhoto 频道 = %+v", api.photoReq.Channel)
+	}
+	up, ok := api.photoReq.Photo.(*tg.InputChatUploadedPhoto)
+	if !ok {
+		t.Fatalf("photo = %T", api.photoReq.Photo)
+	}
+	f, ok := up.File.(*tg.InputFile)
+	if !ok || f.Parts != 1 || f.ID != api.uploadReq.FileID {
+		t.Errorf("上传文件引用不符: %+v", up.File)
+	}
+}
+
+// TestCreateAvatarFailureIsNotFatal 头像设失败不影响卷可用。
+func TestCreateAvatarFailureIsNotFatal(t *testing.T) {
+	api := newFake()
+	api.photoErr = errors.New("no rights")
+	res, err := Create(context.Background(), api, Request{Name: "work", BotUsername: "mybot"})
+	if err != nil {
+		t.Fatalf("头像失败不该中断建卷: %v", err)
+	}
+	if res.AvatarErr == nil {
+		t.Error("AvatarErr 应该保留失败原因")
+	}
+}
+
+// jpegSize 解出 JPEG 的宽高。
+func jpegSize(t *testing.T, data []byte) (int, int) {
+	t.Helper()
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("不是 JPEG: %v", err)
+	}
+	b := img.Bounds()
+	return b.Dx(), b.Dy()
 }
 
 func TestChatID(t *testing.T) {

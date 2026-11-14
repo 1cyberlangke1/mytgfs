@@ -27,7 +27,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"mytgfs/internal/config"
@@ -42,20 +41,7 @@ type filesAPI struct {
 	// stats 可选：返回卷内文件数与已用字节
 	stats  func(volume string) (files, used int64, ok bool)
 	thumbs *thumbCache
-
-	// coverMu/coverCache 缓存「这卷有没有封面」，避免每次状态轮询都列目录
-	coverMu    sync.Mutex
-	coverCache map[string]coverEntry
 }
-
-// coverEntry 是封面探测结果的短缓存。
-type coverEntry struct {
-	at  time.Time
-	has bool
-}
-
-// coverTTL 是封面探测缓存时长：改封面后最多这么久生效，足够短。
-const coverTTL = 15 * time.Second
 
 // newFilesAPI 构造文件 API；缺少卷或后端时返回 nil。
 func newFilesAPI(manager func(volume string) (fm.Files, bool), volumes func() []string, stats func(volume string) (int64, int64, bool), thumbDir string) *filesAPI {
@@ -63,46 +49,6 @@ func newFilesAPI(manager func(volume string) (fm.Files, bool), volumes func() []
 		return nil
 	}
 	return &filesAPI{manager: manager, volumes: volumes, stats: stats, thumbs: newThumbCache(thumbDir)}
-}
-
-// dropCover 让某卷的封面探测缓存立即失效（上传/删除封面后调用）。
-func (api *filesAPI) dropCover(volume string) {
-	if api == nil {
-		return
-	}
-	api.coverMu.Lock()
-	delete(api.coverCache, volume)
-	api.coverMu.Unlock()
-}
-
-// hasCover 判断卷根目录是否有保留封面文件，带 15s 缓存。
-//
-// 输入：ctx；volume 卷名
-// 输出：true 表示存在封面
-// 预期：供 /api/state 告诉前端要不要请求封面图，避免每卷一个 404
-func (api *filesAPI) hasCover(ctx context.Context, volume string) bool {
-	if api == nil {
-		return false
-	}
-	api.coverMu.Lock()
-	ent, ok := api.coverCache[volume]
-	api.coverMu.Unlock()
-	if ok && time.Since(ent.at) < coverTTL {
-		return ent.has
-	}
-	has := false
-	if m, ok := api.manager(volume); ok {
-		if _, found := findCover(ctx, m); found {
-			has = true
-		}
-	}
-	api.coverMu.Lock()
-	if api.coverCache == nil {
-		api.coverCache = make(map[string]coverEntry)
-	}
-	api.coverCache[volume] = coverEntry{at: time.Now(), has: has}
-	api.coverMu.Unlock()
-	return has
 }
 
 // lookup 取指定卷的文件后端。
@@ -221,7 +167,8 @@ type volumeState struct {
 	Name    string `json:"name"`
 	Entries int64  `json:"entries"`
 	Used    int64  `json:"used"`
-	Cover   bool   `json:"cover"`
+	// Cover 是频道头像版本（photo id）；空串表示没有头像
+	Cover string `json:"cover"`
 }
 
 // handleAPIState 返回整页初始化需要的快照。
@@ -238,12 +185,16 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 				if api.stats != nil {
 					files, used, _ = api.stats(name)
 				}
+				coverVer := ""
+				if opts.Cover != nil {
+					coverVer, _ = opts.Cover.CoverVersion(r.Context(), name)
+				}
 				vols = append(vols, volumeState{
 					ID:      name,
 					Name:    name,
 					Entries: files,
 					Used:    used,
-					Cover:   api.hasCover(r.Context(), name),
+					Cover:   coverVer,
 				})
 			}
 		}
@@ -255,6 +206,7 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			"listChannels": opts.Channels != nil,
 			"login":        opts.Auth != nil,
 			"autostart":    opts.Autostart != nil,
+			"cover":        opts.Cover != nil,
 		}
 		if opts.Status != nil {
 			if st, err := opts.Status(r.Context()); err == nil {
@@ -470,7 +422,6 @@ func handleAPIRemove(api *filesAPI) http.HandlerFunc {
 				return
 			}
 		}
-		api.dropCover(body.Vol)
 		replyJSON(w, http.StatusOK, map[string]any{"removed": len(body.Paths)})
 	}
 }

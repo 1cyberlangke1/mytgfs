@@ -453,7 +453,8 @@ func runWeb(args []string) {
 			return perr
 		}
 		defer closePool()
-		vols := openWebVolumes(ctx, app.New(cfg, app.Options{Push: pushHub}), api)
+		appRoot := app.New(cfg, app.Options{Push: pushHub})
+		vols := openWebVolumes(ctx, appRoot, api)
 		defer closeWebVolumes(vols)
 
 		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
@@ -519,6 +520,9 @@ func runWeb(args []string) {
 				})
 				if rerr != nil {
 					return nil, rerr
+				}
+				if res.AvatarErr != nil {
+					logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
 				}
 				vol := config.Volume{
 					Name:    res.Name,
@@ -626,6 +630,14 @@ func runWeb(args []string) {
 				}
 				return total, nil
 			},
+			// 封面就是频道头像：按卷名找到对应 Store
+			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
+				wv, ok := vols[name]
+				if !ok {
+					return nil, false
+				}
+				return wv.vf, true
+			}),
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil

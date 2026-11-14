@@ -21,6 +21,7 @@ import (
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/ui"
@@ -320,6 +321,9 @@ func runVolumeCreate(args []string) {
 	})
 	if err != nil {
 		failErr(i18n.T("err.volume_create_prefix"), err)
+	}
+	if res.AvatarErr != nil {
+		logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
 	}
 
 	vol := config.Volume{

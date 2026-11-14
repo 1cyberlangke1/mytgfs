@@ -45,6 +45,9 @@ type API interface {
 	MessagesEditMessage(ctx context.Context, request *tg.MessagesEditMessageRequest) (tg.UpdatesClass, error)
 	ChannelsDeleteMessages(ctx context.Context, request *tg.ChannelsDeleteMessagesRequest) (*tg.MessagesAffectedMessages, error)
 
+	// 频道头像：channels.getFullChannel 取 chatPhoto
+	ChannelsGetFullChannel(ctx context.Context, channel tg.InputChannelClass) (*tg.MessagesChatFull, error)
+
 	// 以下由 gotd 的 downloader/uploader 直接调用，Store 自己不手写分块与并发
 	UploadGetFile(ctx context.Context, request *tg.UploadGetFileRequest) (tg.UploadFileClass, error)
 	UploadGetFileHashes(ctx context.Context, request *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error)
@@ -69,6 +72,15 @@ type Store struct {
 
 	dl          *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
 	threadCount int                    // 下载工作协程上限，0 用默认值
+
+	// photoMu 保护频道头像元数据缓存；Cover* 方法不额外走网络
+	photoMu sync.Mutex
+	photo   *tg.Photo
+	photoAt time.Time
+	photoOK bool
+	// coverSeen 是上一次观测到的头像 id，用于判断别人换了头像
+	coverSeen int64
+	coverInit bool
 
 	// resumeStore 保存上传断点，nil 表示不做断点续传
 	resumeStore ResumeStore

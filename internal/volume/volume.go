@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"strings"
 
+	"mytgfs/internal/brand"
 	"mytgfs/internal/channel"
+	"mytgfs/internal/cover"
 	"mytgfs/internal/i18n"
 )
 
@@ -33,12 +35,13 @@ type Result struct {
 	BotID      int64
 	Muted      bool  // 通知是否关闭成功；失败不影响卷可用
 	MuteErr    error // 关通知失败原因，Muted 为 true 时是 nil
+	AvatarErr  error // 默认头像设置失败原因；非致命，卷仍可用
 }
 
-// Create 建卷：创建私有频道 → 拉 bot 进频道并提权 → 永久关闭通知。
+// Create 建卷：创建私有频道 → 拉 bot 进频道并提权 → 设默认头像 → 永久关闭通知。
 //
 // 输入：ctx；api 用 user 会话调用的 Telegram API；req 建卷参数
-// 输出：Result；关通知失败不算致命，记在 Muted/MuteErr 里
+// 输出：Result；关通知/设头像失败不算致命，记在 Muted/MuteErr、AvatarErr 里
 // 预期：建频道或拉 bot 失败直接返回 error；频道可能已经建出来，
 //
 //	调用方应把 channel id 提示给用户，便于手动清理
@@ -73,6 +76,13 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 		return partial, fmt.Errorf(i18n.T("err.channel_created_bot_failed")+": %w", ch.ChannelID, err)
 	}
 	partial.BotID = botID
+
+	// 默认头像用项目图标：新卷在 Telegram 里一眼能认出是 mytgfs
+	if avatar, aerr := cover.SquareJPEG(brand.Large); aerr != nil {
+		partial.AvatarErr = aerr
+	} else if aerr := channel.SetPhoto(ctx, api, ch.ChannelID, ch.AccessHash, avatar); aerr != nil {
+		partial.AvatarErr = aerr
+	}
 
 	if err := channel.MuteForever(ctx, api, ch); err != nil {
 		partial.Muted = false

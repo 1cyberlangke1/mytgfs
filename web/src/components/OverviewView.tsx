@@ -1,9 +1,10 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownToLine,
   ArrowUpFromLine,
   ArrowUpRight,
+  Camera,
   CheckCircle2,
   Database,
   FileStack,
@@ -32,6 +33,7 @@ import {
 } from '../utils/i18n';
 import { BrandEmblemSvg, RichFileTypeEmblem } from './VisualAssets';
 import { Button, IOS_SOFT_SPRING, IOS_SPRING } from './ui';
+import { CoverDialog } from './CoverDialog';
 
 interface OverviewViewProps {
   t: Translations;
@@ -46,8 +48,8 @@ interface OverviewViewProps {
   onToggleTransferPause: (taskId: string) => void;
   onCancelTransfer: (taskId: string) => void;
   onClearCompletedTransfers: () => void;
-  /** 封面版本号：改完封面自增，绕过浏览器缓存 */
-  coverVersion: number;
+  /** 设置频道头像；nil 表示服务端不支持（面板隐藏入口） */
+  onSetCover?: (volumeId: string, file: File) => Promise<void>;
 }
 
 
@@ -74,9 +76,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onToggleTransferPause,
   onCancelTransfer,
   onClearCompletedTransfers,
-  coverVersion,
+  onSetCover,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [coverTarget, setCoverTarget] = useState<VolumeInfo | null>(null);
+  const [coverBusy, setCoverBusy] = useState(false);
 
   const summary = computeOverviewSummary(volumes, files);
   const targetVolumeId =
@@ -270,12 +274,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   }`}
                 >
                   <div>
-                    <div className="relative h-28 w-full overflow-hidden bg-gradient-to-br from-[#007AFF] via-[#0284C7] to-[#06B6D4]">
+                    <button
+                      type="button"
+                      disabled={!onSetCover}
+                      onClick={() => onSetCover && setCoverTarget(volume)}
+                      aria-label={onSetCover ? t.volume.coverDialogTitle : undefined}
+                      className="relative block h-28 w-full overflow-hidden bg-gradient-to-br from-[#007AFF] via-[#0284C7] to-[#06B6D4] text-start disabled:cursor-default"
+                    >
                       <BrandEmblemSvg className="absolute -end-4 -bottom-6 w-32 h-32 opacity-25" />
-                      {/* 卷根目录存在 .cover.jpg / cover.png 时显示自定义封面，加载失败保持渐变 */}
-                      {volume.hasCover && (
+                      {/* 封面就是频道头像；加载失败保持品牌渐变 */}
+                      {volume.cover && (
                         <img
-                          src={`${coverURL(volume.id)}&v=${coverVersion}`}
+                          src={coverURL(volume.id, volume.cover)}
                           alt=""
                           aria-hidden="true"
                           loading="lazy"
@@ -297,7 +307,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           {formatPercent(sharePct, locale)}
                         </span>
                       </div>
-                    </div>
+                      {onSetCover && (
+                        <span className="absolute top-2 end-2 inline-flex items-center gap-1 rounded-lg bg-black/45 px-2 py-1 text-[11px] font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Camera className="w-3 h-3" />
+                          {t.volume.coverDialogTitle}
+                        </span>
+                      )}
+                    </button>
 
                     <div className="px-4 pt-3.5 pb-1">
                       <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden flex gap-0.5">
@@ -550,6 +566,26 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         )}
       </section>
+
+      <CoverDialog
+        open={coverTarget !== null}
+        volumeName={coverTarget?.name ?? ''}
+        t={t}
+        busy={coverBusy}
+        onClose={() => {
+          if (!coverBusy) setCoverTarget(null);
+        }}
+        onSubmit={async (file) => {
+          if (!coverTarget || !onSetCover) return;
+          setCoverBusy(true);
+          try {
+            await onSetCover(coverTarget.id, file);
+            setCoverTarget(null);
+          } finally {
+            setCoverBusy(false);
+          }
+        }}
+      />
     </div>
   );
 };
