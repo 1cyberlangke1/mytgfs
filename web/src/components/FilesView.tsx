@@ -210,7 +210,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Modals state
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -311,7 +310,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setIsDraggingOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       onUploadFiles(e.dataTransfer.files, activeVolumeId, currentFolderId);
     }
@@ -380,9 +378,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
       className="space-y-4"
       onDragOver={(e) => {
         e.preventDefault();
-        if (!isDraggingOver) setIsDraggingOver(true);
       }}
-      onDragLeave={() => setIsDraggingOver(false)}
       onDrop={handleDrop}
     >
       {/* Hidden File & Directory Inputs */}
@@ -494,6 +490,37 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
           {/* Search & Sort & View Mode Controls */}
           <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <div className="relative flex-1 sm:w-56 min-w-[160px]">
+              <label htmlFor="recursive-file-search" className="sr-only">
+                {t.files.searchPlaceholder}
+              </label>
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Input
+                id="recursive-file-search"
+                type="search"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder={t.files.searchPlaceholder}
+                className="ps-8 pe-8 text-xs h-8"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setCurrentPage(1);
+                  }}
+                  aria-label={t.files.clearSearch}
+                  className="w-8 h-8 absolute end-0 top-1/2 -translate-y-1/2 inline-flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
             {/* 文件与卷操作：单图标 + 悬浮提示 */}
             <div className="flex items-center gap-1.5">
               <Button
@@ -571,37 +598,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>
-              )}
-            </div>
-
-            <div className="relative flex-1 sm:w-56 min-w-[160px]">
-              <label htmlFor="recursive-file-search" className="sr-only">
-                {t.files.searchPlaceholder}
-              </label>
-              <Search className="w-3.5 h-3.5 text-zinc-400 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <Input
-                id="recursive-file-search"
-                type="search"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder={t.files.searchPlaceholder}
-                className="ps-8 pe-8 text-xs h-8"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setCurrentPage(1);
-                  }}
-                  aria-label={t.files.clearSearch}
-                  className="w-8 h-8 absolute end-0 top-1/2 -translate-y-1/2 inline-flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
               )}
             </div>
 
@@ -1001,29 +997,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
           </motion.div>
         )}
 
-        {/* Bottom Drag-and-Drop Strip + Pagination Footer */}
-        <div className="px-4 py-3 bg-zinc-50/70 dark:bg-zinc-900/40 border-t border-zinc-200/80 dark:border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            role="button"
-            tabIndex={0}
-            title={t.files.uploadFileBtn}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            className={`px-2.5 py-1.5 rounded-lg text-xs cursor-pointer inline-flex items-center gap-2 transition-colors ${
-              isDraggingOver
-                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
-                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
-            }`}
-          >
-            <Upload className="w-3.5 h-3.5 shrink-0" />
-            <span>{t.files.uploadFileBtn}</span>
-          </div>
-
+        {/* Pagination Footer */}
+        <div className="px-4 py-3 bg-zinc-50/70 dark:bg-zinc-900/40 border-t border-zinc-200/80 dark:border-zinc-800/80 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3">
           <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
             <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
               {interpolate(
