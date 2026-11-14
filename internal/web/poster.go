@@ -19,16 +19,16 @@ import (
 const maxPosterBytes = 8 << 20
 
 // posterKey 返回封面的缓存键。
-func posterKey(vol, p string) string {
-	return fmt.Sprintf("poster-%x", sha1.Sum([]byte(vol+"\x00"+p)))
+func posterKey(vol, p, v string) string {
+	return fmt.Sprintf("poster-%x", sha1.Sum([]byte(vol+"\x00"+p+"\x00"+v)))
 }
 
 // posterPath 返回封面文件路径。
-func posterPath(dir, vol, p string) string {
+func posterPath(dir, vol, p, v string) string {
 	if strings.TrimSpace(dir) == "" {
 		dir = "data/thumbs"
 	}
-	return filepath.Join(dir, posterKey(vol, p)+".jpg")
+	return filepath.Join(dir, posterKey(vol, p, v)+".jpg")
 }
 
 // handleAPIPoster 保存浏览器抽出的视频封面。
@@ -54,7 +54,7 @@ func handleAPIPoster(dir string) http.HandlerFunc {
 			replyJSONError(w, http.StatusBadRequest, i18n.T("err.http_bad_request"))
 			return
 		}
-		target := posterPath(dir, vol, p)
+		target := posterPath(dir, vol, p, q.Get("v"))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			replyJSONError(w, http.StatusInternalServerError, i18n.T("err.http_bad_request"))
 			return

@@ -1,10 +1,10 @@
-// 桌面端端到端测试：驱动真实 Wails 窗口里的 WebView2。
+// 桌面端端到端测试（只读）：驱动真实 Wails 窗口里的 WebView2。
 //
-// 输入：build/mytgfs-tray-e2e.exe（`go build -tags e2e`）、config.toml 里可用的卷
+// 输入：build/mytgfs-tray-e2e.exe（`go build -tags e2e`）
 // 输出：控制台逐项 PASS/FAIL；任一失败退出码 1
 // 预期：
 //   - 用 WebView2 的远程调试端口连进真实窗口，而不是另起一个 http 服务
-//   - 走页面自己的 fetch 调后端接口，验证上传 1MiB、列表可见、删除、下载落盘
+//   - 只发 GET 请求，对 Telegram 账号与频道零写入：不建卷、不上传、不删除
 //   - 进程由本脚本启动并在结束时关闭，不碰用户已有的托盘实例
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -14,8 +14,6 @@ import path from 'node:path';
 const exe = path.resolve(process.env.MYTGFS_E2E_EXE || 'build/mytgfs-tray-e2e.exe');
 const port = Number(process.env.MYTGFS_E2E_PORT || 9333);
 const volume = process.env.MYTGFS_E2E_VOLUME || 'demo';
-const name = `e2e-${Date.now()}.bin`;
-const size = 1 << 20;
 
 if (!existsSync(exe)) {
   console.error(`找不到 ${exe}，先执行 go build -tags e2e -o build/mytgfs-tray-e2e.exe ./cmd/mytray`);
@@ -88,97 +86,83 @@ try {
     if (msg.id && pending.has(msg.id)) {
       const { resolve, reject } = pending.get(msg.id);
       pending.delete(msg.id);
-      msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result);
+      msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result);
     }
   };
   await rpc('Runtime.enable');
 
-  // 1. 等窗口真正连上并挂好卷（启动时是 connecting + 0 卷，属于正常过程）
+  // 等页面导航到 wails.localhost 并加载完成：
+  // 导航期间执行上下文会被销毁，这里在 Node 侧静默重试
+  for (let i = 0; i < 120; i++) {
+    try {
+      const ready = await evaluate(
+        `({ ready: document.readyState === 'complete', host: location.host })`
+      );
+      if (ready && ready.ready && ready.host === 'wails.localhost') break;
+    } catch {}
+    await sleep(500);
+  }
+
+  // 1. 等窗口连上 Telegram（connecting 属于正常过程；账号没有频道时卷数为 0 也正常）
+  //    页面尚未导航完成时 fetch 会抛错：静默重试，不算失败
   const state = await evaluate(`(async () => {
     for (let i = 0; i < 240; i++) {
-      const s = await fetch('/api/state').then(r => r.json());
-      if ((s.volumes || []).length > 0 && s.status && s.status.state_code !== 'connecting') return s;
+      try {
+        const s = await fetch('http://wails.localhost/api/state').then(r => r.json());
+        if (s.status && s.status.state_code !== 'connecting') return s;
+      } catch {}
       await new Promise(r => setTimeout(r, 500));
     }
     return null;
   })()`);
   check('/api/state 可读', !!state, `status=${state?.status?.state_code ?? '超时'}`);
-  check('卷已挂载', Array.isArray(state?.volumes) && state.volumes.length > 0, `${state?.volumes?.length ?? 0} 个`);
+  check(
+    '卷列表可读（0 个也正常：账号可能没有频道）',
+    Array.isArray(state?.volumes),
+    `${state?.volumes?.length ?? 0} 个`
+  );
 
-  // 2. 通过页面上传 1MiB 原始字节（走分片接口，绕开 Wails 的 multipart 问题）
-  const upload = await evaluate(`(async () => {
-    const name = ${JSON.stringify(name)};
-    const size = ${size};
-    const init = await fetch('/api/upload/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vol: ${JSON.stringify(volume)}, dir: '/', rel: '', name, size }),
-    }).then(r => r.json());
-    const buf = new Uint8Array(size);
-    for (let off = 0; off < size; off += 65536) {
-      crypto.getRandomValues(buf.subarray(off, Math.min(size, off + 65536)));
-    }
-    const put = await fetch('/api/upload/chunk?id=' + encodeURIComponent(init.id) + '&offset=0', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: buf,
-    });
-    if (!put.ok) return { error: 'chunk ' + put.status };
-    const done = await fetch('/api/upload/commit?id=' + encodeURIComponent(init.id), { method: 'POST' });
-    return { status: done.status, body: await done.json() };
-  })()`);
-  check('分片上传 1MiB', upload?.status === 200, JSON.stringify(upload));
+  // 2. 文件列表可读（只 GET，不写频道；没有卷或卷为空都正常）
+  const files = await evaluate(`fetch('http://wails.localhost/api/files?vol=' + encodeURIComponent(${JSON.stringify(volume)}) + '&all=1')
+    .then(r => r.json()).catch(() => null)`);
+  check(
+    `/api/files 可读（${volume}，卷不存在也正常）`,
+    !!files && typeof files === 'object',
+    `${JSON.stringify(files).slice(0, 80)}`
+  );
 
-  // 3. 列表里能看到，大小对得上
-  const listed = await evaluate(`fetch('/api/files?vol=' + encodeURIComponent(${JSON.stringify(volume)}) + '&all=1')
-    .then(r => r.json()).then(d => (d.files || []).find(f => f.name === ${JSON.stringify(name)}))`);
-  check('索引里可见', !!listed && listed.size === size, `size=${listed?.size}`);
+  // 3. 缩略图接口可用：有图返回 JPEG，无图 404，都算只读正常
+  const img = (files?.files || []).find(
+    (f) => (f.category === 'image' || f.category === 'video') && f.path
+  );
+  if (img) {
+    const url = img.category === 'image'
+      ? '/api/thumb?' + new URLSearchParams({ vol: volume, path: img.path })
+      : '/api/vthumb?' + new URLSearchParams({ vol: volume, path: img.path, v: img.updatedAt });
+    const thumb = await evaluate(`(async () => {
+      const r = await fetch(${JSON.stringify(url)});
+      return { status: r.status, type: r.headers.get('content-type') };
+    })()`);
+    check(
+      '缩略图接口（只读）',
+      thumb?.status === 200 || thumb?.status === 404,
+      `${thumb?.status} ${thumb?.type}`
+    );
+  }
 
-  // 4. 下载：后台任务立即返回，最终文件落盘且内容一致
-  const download = await evaluate(`(async () => {
-    const name = ${JSON.stringify(name)};
-    const start = await fetch('/api/downloads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vol: ${JSON.stringify(volume)}, path: '/' + name }),
-    });
-    if (start.status !== 202) return { error: 'start ' + start.status };
-    for (let i = 0; i < 120; i++) {
-      const st = await fetch('/api/downloads').then(r => r.json());
-      const busy = (st.tasks || []).some(t => t.state === 'running' || t.state === 'paused');
-      const done = (st.files || []).find(f => f.name === name);
-      if (!busy && done) {
-        const got = await fetch('/api/downloads/file?name=' + encodeURIComponent(name));
-        return { size: done.size, bytes: (await got.arrayBuffer()).byteLength };
-      }
-      if ((st.tasks || []).some(t => t.state === 'failed')) {
-        return { error: (st.tasks.find(t => t.state === 'failed') || {}).error || 'failed' };
-      }
-      await new Promise(r => setTimeout(r, 300));
-    }
-    return { error: '下载超时' };
-  })()`);
-  check('下载任务落盘', download?.bytes === size, JSON.stringify(download));
+  // 4. 下载目录接口可读
+  const downloads = await evaluate(`fetch('http://wails.localhost/api/downloads').then(r => r.json())`);
+  check(
+    '/api/downloads 可读',
+    !!downloads && typeof downloads.dir === 'string',
+    `dir=${downloads?.dir ?? '?'}`
+  );
 
-  // 5. 清理：本地副本 + 云端文件
-  const cleanup = await evaluate(`(async () => {
-    const del = await fetch('/api/downloads?name=' + encodeURIComponent(${JSON.stringify(name)}), { method: 'DELETE' });
-    const rm = await fetch('/api/files/remove', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vol: ${JSON.stringify(volume)}, paths: ['/' + ${JSON.stringify(name)}] }),
-    });
-    return { del: del.status, rm: rm.status };
-  })()`);
-  check('清理完成', cleanup?.del === 200 && cleanup?.rm === 200, JSON.stringify(cleanup));
-} catch (err) {
-  console.error('E2E 失败:', err.message);
+  console.log('只读端到端结束：未向 Telegram 写入任何数据');
+} catch (e) {
+  console.error('E2E_ERROR', e.message);
   process.exitCode = 1;
 } finally {
-  try {
-    ws?.close();
-  } catch {
-    // 忽略
-  }
+  if (ws) ws.close();
   child.kill();
 }

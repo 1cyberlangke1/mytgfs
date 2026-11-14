@@ -98,6 +98,9 @@ func (s *Store) coverImage(ctx context.Context, force bool) ([]byte, string, err
 	if !ok {
 		return nil, "", ErrNoCover
 	}
+	if size.Size <= 0 || size.Size > maxCoverBytes {
+		return nil, "", fmt.Errorf("%s", i18n.T("err.cover_fetch"))
+	}
 	buf := make([]byte, size.Size)
 	loc := &tg.InputPhotoFileLocation{
 		ID:            photo.ID,
@@ -112,6 +115,19 @@ func (s *Store) coverImage(ctx context.Context, force bool) ([]byte, string, err
 		return nil, "", DescribeError(fmt.Errorf("%s: %w", i18n.T("err.cover_fetch"), s.noteErr(err)))
 	}
 	return buf, strconv.FormatInt(id, 10), nil
+}
+
+// InvalidateCover 让头像元数据缓存立即失效。
+//
+// 输入：无
+// 输出：无
+// 预期：外部会话写头像后调用，下一次 CoverVersion/CoverImage 强制回源
+func (s *Store) InvalidateCover() {
+	s.photoMu.Lock()
+	s.photoOK = false
+	s.photo = nil
+	s.photoAt = time.Time{}
+	s.photoMu.Unlock()
 }
 
 // coverPhoto 返回头像 id 与元数据，带 TTL 缓存。

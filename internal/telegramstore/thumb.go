@@ -12,6 +12,12 @@ import (
 	"mytgfs/internal/i18n"
 )
 
+// 远端返回的尺寸分配上限，避免异常值触发 OOM。
+const (
+	maxThumbBytes = 8 << 20
+	maxCoverBytes = 16 << 20
+)
+
 // Thumb 按文件消息 ID 取 document 最大缩略图字节。
 //
 // 输入：ctx；messageID 频道里的文件消息 ID
@@ -53,6 +59,9 @@ func (s *Store) Thumb(ctx context.Context, messageID int) ([]byte, error) {
 		AccessHash:    doc.AccessHash,
 		FileReference: doc.FileReference,
 		ThumbSize:     size.typ,
+	}
+	if size.bytes <= 0 || size.bytes > maxThumbBytes {
+		return nil, fmt.Errorf("%s", i18n.T("err.thumb_fetch"))
 	}
 	buf := make([]byte, size.bytes)
 	b := s.dl.Download(s.api, loc).

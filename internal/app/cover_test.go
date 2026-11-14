@@ -12,9 +12,10 @@ import (
 
 // fakeCoverStore 记录读取调用并按需返回。
 type fakeCoverStore struct {
-	version string
-	data    []byte
-	err     error
+	version     string
+	data        []byte
+	err         error
+	invalidated bool
 }
 
 func (f *fakeCoverStore) CoverVersion(context.Context) (string, error) { return f.version, f.err }
@@ -22,6 +23,8 @@ func (f *fakeCoverStore) CoverVersion(context.Context) (string, error) { return 
 func (f *fakeCoverStore) CoverImage(context.Context) ([]byte, string, error) {
 	return f.data, f.version, f.err
 }
+
+func (f *fakeCoverStore) InvalidateCover() { f.invalidated = true }
 
 // newFakeProvider 构造只认 demo（频道 id 42）的封面路由。
 func newFakeProvider(store *fakeCoverStore, set func(context.Context, int64, []byte) error) *CoverProvider {
@@ -61,6 +64,9 @@ func TestCoverProviderRoutes(t *testing.T) {
 	}
 	if gotID != 42 || string(gotData) != "x" {
 		t.Errorf("写入 channel=%d data=%q", gotID, gotData)
+	}
+	if !store.invalidated {
+		t.Error("写头像成功后应清掉本卷封面缓存")
 	}
 }
 

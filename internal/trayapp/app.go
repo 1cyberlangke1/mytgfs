@@ -632,7 +632,9 @@ func Run(opts Options) error {
 					if v.name != name || v.vf == nil {
 						continue
 					}
+					v.mu.Lock()
 					n, rerr := appRoot.RebuildIndex(ctx, v.idx, volume.NormalizeChatID(v.vf.Volume.ChatID))
+					v.mu.Unlock()
 					if rerr != nil {
 						return nil, rerr
 					}

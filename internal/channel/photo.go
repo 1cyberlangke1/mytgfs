@@ -115,5 +115,6 @@ func randomFileID() (int64, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return 0, err
 	}
-	return int64(binary.LittleEndian.Uint64(b[:])), nil
+	id := binary.LittleEndian.Uint64(b[:]) >> 1
+	return int64(id), nil
 }

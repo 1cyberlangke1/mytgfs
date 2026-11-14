@@ -193,7 +193,9 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 				}
 				coverVer := ""
 				if opts.Cover != nil {
-					coverVer, _ = opts.Cover.CoverVersion(r.Context(), name)
+					if v, cerr := opts.Cover.CoverVersion(r.Context(), name); cerr == nil {
+						coverVer = v
+					}
 				}
 				vols = append(vols, volumeState{
 					ID:      name,

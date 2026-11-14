@@ -14,6 +14,7 @@ import (
 type CoverStore interface {
 	CoverVersion(ctx context.Context) (string, error)
 	CoverImage(ctx context.Context) ([]byte, string, error)
+	InvalidateCover()
 }
 
 // coverVolume 是封面路由需要的最小卷信息。
@@ -88,5 +89,11 @@ func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) e
 	if !ok {
 		return ErrVolumeNotFound{Name: vol}
 	}
-	return p.set(ctx, v.chatID, data)
+	if err := p.set(ctx, v.chatID, data); err != nil {
+		return err
+	}
+	// 独立 user 会话写成功后清掉本卷 Store 的头像元数据缓存，
+	// 使下一次 CoverVersion 立即拿到新的 photo id
+	v.store.InvalidateCover()
+	return nil
 }

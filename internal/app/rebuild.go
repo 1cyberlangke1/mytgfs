@@ -103,8 +103,11 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 //
 // 输入：ctx；idx 索引；channelID 该卷频道 ID
 // 输出：写入的节点数
-// 预期：远端为空或没有 user 会话时返回 0 且不改本地
+// 预期：远端为空时返回 0 且不改本地；没有 user 会话时返回错误，不静默成功
 func (a *App) RebuildIndex(ctx context.Context, idx *index.Index, channelID int64) (int, error) {
+	if _, serr := os.Stat(a.userSessionPath()); serr != nil {
+		return 0, ErrUserSessionMissing
+	}
 	nodes, err := a.AllNodes(ctx, channelID)
 	if err != nil {
 		return 0, err

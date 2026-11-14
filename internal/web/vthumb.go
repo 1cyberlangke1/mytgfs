@@ -48,7 +48,7 @@ func handleFileVideoThumb(dir string, fn VideoThumbFunc) http.HandlerFunc {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		if b, rerr := os.ReadFile(posterPath(dir, vol, p)); rerr == nil && len(b) > 0 {
+		if b, rerr := os.ReadFile(posterPath(dir, vol, p, q.Get("v"))); rerr == nil && len(b) > 0 {
 			writeThumb(w, b)
 			return
 		}
@@ -59,10 +59,6 @@ func handleFileVideoThumb(dir string, fn VideoThumbFunc) http.HandlerFunc {
 				return
 			}
 			http.Error(w, i18n.T("err.thumb_fetch"), http.StatusBadGateway)
-			return
-		}
-		if len(data) == 0 {
-			http.Error(w, i18n.T("err.thumb_missing"), http.StatusNotFound)
 			return
 		}
 		if len(data) == 0 {
