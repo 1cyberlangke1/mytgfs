@@ -78,6 +78,8 @@ const (
 
 // Mount 是挂载配置。
 type Mount struct {
+	// AutoSync 是自动增量同步开关：缺省（nil）视为开启，显式 false 关闭。
+	AutoSync *bool `toml:"auto_sync"`
 	// SyncSeconds 是托盘自动增量同步的间隔秒数：0 用 DefaultSyncSeconds，负数关闭。
 	SyncSeconds int `toml:"sync_seconds"`
 	// DownloadParallel 是下载并发连接数：0 用 DefaultDownloadParallel，范围 1..8。
@@ -86,6 +88,18 @@ type Mount struct {
 	ReadChunkMB int `toml:"read_chunk_mb"`
 	// UploadParallel 是上传并发分片数：0 用 DefaultUploadParallel，范围 1..16。
 	UploadParallel int `toml:"upload_parallel"`
+}
+
+// SyncOn 返回是否启用自动增量同步。
+//
+// 输入：无
+// 输出：sync_seconds 非负且 auto_sync 未显式关闭时为 true
+// 预期：面板开关与托盘共用这一判断；负数间隔仍然优先表示关闭
+func (m Mount) SyncOn() bool {
+	if m.SyncSeconds < 0 {
+		return false
+	}
+	return m.AutoSync == nil || *m.AutoSync
 }
 
 // UploadParallelism 返回上传并发分片数。

@@ -10,9 +10,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +51,24 @@ type Options struct {
 	SingleInstance bool
 }
 
+// volumeMenuLabel 返回托盘卷入口的文字。
+//
+// 输入：name 卷名；used 已用字节
+// 输出：形如 "demo · 159.1 MB"
+// 预期：托盘一眼看清是哪个盘、占多少
+func volumeMenuLabel(name string, used int64) string {
+	return fmt.Sprintf("%s · %s", name, humanBytes(used))
+}
+
+// volumeURL 返回面板按卷快速打开的地址。
+//
+// 输入：name 卷名
+// 输出：带 tab/vol 查询参数的站内路径
+// 预期：前端首屏读参数直接切到该卷文件页；卷名做 URL 转义
+func volumeURL(name string) string {
+	return "/?tab=files&vol=" + url.QueryEscape(name)
+}
+
 // SyncInterval 把配置里的秒数换算成自动同步间隔。
 //
 // 输入：seconds 配置值
@@ -67,23 +85,10 @@ func SyncInterval(seconds int) time.Duration {
 	}
 }
 
-// AutoSync 周期性把频道差异应用进索引并通知挂载点刷新。
-//
-// 输入：ctx；notify 路径变更回调（可为 nil，纯面板模式没有挂载点要通知）；
-//
-//	idx 索引；d 差异源；interval 间隔；
-//	mu 与手动同步共用的互斥锁（可为 nil）
-//
-// 输出：无（ctx 取消时返回）
-// 预期：启动即同步一次；单轮失败只记日志不退出；有变化才回调
-func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex) {
-	AutoSyncWhile(ctx, notify, idx, d, st, interval, mu, nil)
-}
-
 // StatusNotifier 把自动同步的增删转成 status 事件，面板据此刷新。
 //
 // 输入：events 推送通道；nil 时返回 nil
-// 输出：AutoSync 的 notify 回调
+// 输出：AutoSyncWhile 的 notify 回调
 // 预期：只有真的增删了条目才推送，空轮不打扰面板
 func StatusNotifier(events push.Events) func(changed, removed []string) {
 	if events == nil {
@@ -97,36 +102,23 @@ func StatusNotifier(events push.Events) func(changed, removed []string) {
 	}
 }
 
-// SyncSwitch 是自动同步的运行开关。
+// SyncEnabled 返回一个读取配置文件的自动同步判断。
 //
-// 输入：由托盘菜单切换；nil 等价于常开
-// 输出：On() 当前状态
-// 预期：关掉后只跳过同步，不动卷与索引
-type SyncSwitch struct {
-	on atomic.Bool
-}
-
-// NewSyncSwitch 创建开关并设定初始状态。
-func NewSyncSwitch(on bool) *SyncSwitch {
-	s := &SyncSwitch{}
-	s.on.Store(on)
-	return s
-}
-
-// On 返回当前是否启用。
-func (s *SyncSwitch) On() bool {
-	return s == nil || s.on.Load()
-}
-
-// Set 设置开关状态。
-func (s *SyncSwitch) Set(on bool) {
-	if s != nil {
-		s.on.Store(on)
+// 输入：cfgPath 配置文件；fallback 读失败时沿用的启动状态
+// 输出：每次调用都重新读取 mount.auto_sync / mount.sync_seconds
+// 预期：面板改设置后下一轮同步即生效，不需要重启桌面壳
+func SyncEnabled(cfgPath string, fallback bool) func() bool {
+	return func() bool {
+		cur, err := config.Load(cfgPath)
+		if err != nil {
+			return fallback
+		}
+		return cur.Mount.SyncOn()
 	}
 }
 
-// AutoSyncWhile 与 AutoSync 相同，但每轮先问 enabled：
-// 返回 false 时跳过本轮（只等下一个 tick），用于托盘菜单里随时开关。
+// AutoSyncWhile 周期性把频道差异应用进索引并通知挂载点刷新。
+// 每轮先问 enabled：返回 false 时跳过本轮（只等下一个 tick）。
 func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool) {
 	tick := time.Tick(interval)
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
@@ -261,7 +253,9 @@ func Run(opts Options) error {
 		application.InvokeSync(fn)
 	}
 
-	var statusItem, syncItem, autoItem *application.MenuItem
+	var statusItem *application.MenuItem
+	// rebuildMenu 由下方菜单构建逻辑赋值；卷挂载/卸载后重建卷入口
+	rebuildMenu := func() {}
 
 	// trayVolume 是一个已挂载卷的运行时句柄，供状态展示与手动同步使用。
 	type trayVolume struct {
@@ -277,8 +271,8 @@ func Run(opts Options) error {
 	var volMu sync.Mutex
 	var volumes []*trayVolume
 
-	// 自动同步总开关：默认跟随配置，托盘菜单可即时开/关并写回 config.toml
-	syncSwitch := NewSyncSwitch(cfg.Mount.SyncSeconds >= 0)
+	// 自动同步开关：每轮读配置，面板改设置后下一轮生效
+	syncOn := SyncEnabled(cfgPath, cfg.Mount.SyncOn())
 
 	var stateMu sync.Mutex
 	// connKey 是状态对应的语言包键，state_code 由它映射；connText 只用于展示
@@ -608,6 +602,7 @@ func Run(opts Options) error {
 		volMu.Unlock()
 		// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
 		pushHub.Publish(push.TopicStatus)
+		rebuildMenu()
 
 		var vwg sync.WaitGroup
 		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
@@ -616,7 +611,7 @@ func Run(opts Options) error {
 			interval = SyncInterval(0)
 		}
 		vwg.Go(func() {
-			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncSwitch.On)
+			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncOn)
 		})
 
 		mu.Lock()
@@ -637,6 +632,7 @@ func Run(opts Options) error {
 				}
 			}
 			volMu.Unlock()
+			rebuildMenu()
 		})
 	}
 
@@ -681,72 +677,54 @@ func Run(opts Options) error {
 		logging.Warn("log.conn_closed", rerr)
 	})
 
-	// 开机自启：状态以系统注册项为准，默认关闭
-	autoOn, aerr := autostart.Enabled()
-	if aerr != nil {
-		autoOn = false
-		logging.Warn("log.autostart_read_failed", aerr)
-	}
-	exePath, exeErr := os.Executable()
-
 	// ---- 托盘菜单 ----
-	// 状态行只做展示；开关项点击后立即落盘，并回写勾选状态
-	menu := wailsApp.NewMenu()
-	statusItem = menu.Add(connText)
-	statusItem.SetEnabled(false)
-	menu.AddSeparator()
-	menu.Add(i18n.T("tray.menu.open")).OnClick(func(*application.Context) {
+	// 开关项已移入面板设置；托盘只保留状态、转卷快捷入口与退出。
+	openVolume := func(name string) {
 		win.Show()
 		win.Focus()
-	})
-	menu.AddSeparator()
+		win.SetURL(volumeURL(name))
+	}
+	buildMenu := func() *application.Menu {
+		menu := wailsApp.NewMenu()
+		stateMu.Lock()
+		text := connText
+		stateMu.Unlock()
+		statusItem = menu.Add(text)
+		statusItem.SetEnabled(false)
 
-	autoItem = menu.AddCheckbox(i18n.T("tray.menu.autostart"), autoOn)
-	autoItem.OnClick(func(*application.Context) {
-		on := !autoOn
-		if exeErr != nil {
-			logging.Warn("log.autostart_toggle_failed", exeErr)
-			return
+		volMu.Lock()
+		vs := append([]*trayVolume(nil), volumes...)
+		volMu.Unlock()
+		if len(vs) > 0 {
+			menu.AddSeparator()
+			// 每卷一项：名字 + 已用容量，点击直接打开该卷文件页
+			for _, v := range vs {
+				used, _ := v.idx.Used(rootCtx)
+				menu.Add(volumeMenuLabel(v.name, used)).OnClick(func(*application.Context) {
+					openVolume(v.name)
+				})
+			}
 		}
-		var terr error
-		if on {
-			terr = autostart.Enable(exePath)
-		} else {
-			terr = autostart.Disable()
-		}
-		if terr != nil {
-			logging.Warn("log.autostart_toggle_failed", terr)
-			return
-		}
-		autoOn = on
-		autoItem.SetChecked(on)
-	})
 
-	syncItem = menu.AddCheckbox(i18n.T("tray.menu.autosync"), syncSwitch.On())
-	syncItem.OnClick(func(*application.Context) {
-		on := !syncSwitch.On()
-		// 写回配置：打开用默认 15s，关闭写 -1
-		secs := 0
-		if !on {
-			secs = -1
-		}
-		if werr := config.SetKey(cfgPath, "mount.sync_seconds", strconv.Itoa(secs)); werr != nil {
-			logging.Warn("log.autosync_toggle_failed", werr)
-			return
-		}
-		syncSwitch.Set(on)
-		syncItem.SetChecked(on)
-	})
+		menu.AddSeparator()
+		menu.Add(i18n.T("tray.menu.open")).OnClick(func(*application.Context) {
+			win.Show()
+			win.Focus()
+		})
+		menu.AddSeparator()
+		menu.Add(i18n.T("tray.menu.quit")).OnClick(func(*application.Context) {
+			// 先停卷协程再退出，避免关到一半的索引
+			unmountAll()
+			rootCancel()
+			wailsApp.Quit()
+		})
+		return menu
+	}
+	rebuildMenu = func() {
+		uiUpdate(func() { sysTray.SetMenu(buildMenu()) })
+	}
 
-	menu.AddSeparator()
-	menu.Add(i18n.T("tray.menu.quit")).OnClick(func(*application.Context) {
-		// 先停卷协程再退出，避免关到一半的索引
-		unmountAll()
-		rootCancel()
-		wailsApp.Quit()
-	})
-
-	sysTray.SetMenu(menu)
+	sysTray.SetMenu(buildMenu())
 	sysTray.OnClick(func() {
 		win.Show()
 		win.Focus()
@@ -778,11 +756,6 @@ func Run(opts Options) error {
 		if downloads > 0 || queued > 0 {
 			lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.tasks"), downloads, queued))
 		}
-		if syncSwitch.On() {
-			lines = append(lines, i18n.T("tray.tip.sync_on"))
-		} else {
-			lines = append(lines, i18n.T("tray.tip.sync_off"))
-		}
 		return strings.Join(lines, "\n")
 	}
 	wg.Go(func() {
@@ -800,6 +773,7 @@ func Run(opts Options) error {
 	// 主循环起来之后才能安全操作窗口与托盘对象
 	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		ready.Store(true)
+		sysTray.SetMenu(buildMenu())
 		sysTray.SetTooltip(tooltipText())
 	})
 

@@ -173,6 +173,30 @@ func TestGetKeyMissing(t *testing.T) {
 	}
 }
 
+// TestSyncOn 自动同步开关：缺省开启，显式关闭与负数间隔都表示关闭。
+//
+// 输入：auto_sync 的三种取值 × sync_seconds 的正负
+// 输出：SyncOn
+// 预期：面板开关与托盘共用同一判断，不会出现 UI 开而实际不同步
+func TestSyncOn(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		m    Mount
+		want bool
+	}{
+		{"缺省视为开", Mount{SyncSeconds: 15}, true},
+		{"显式开", Mount{AutoSync: &yes, SyncSeconds: 15}, true},
+		{"显式关", Mount{AutoSync: &no, SyncSeconds: 15}, false},
+		{"负数间隔优先关", Mount{AutoSync: &yes, SyncSeconds: -1}, false},
+	}
+	for _, c := range cases {
+		if got := c.m.SyncOn(); got != c.want {
+			t.Errorf("%s: SyncOn() = %v，期望 %v", c.name, got, c.want)
+		}
+	}
+}
+
 // TestKeysSorted 键列表按字典序返回，方便脚本读取。
 func TestKeysSorted(t *testing.T) {
 	keys := Keys()
@@ -213,6 +237,7 @@ func TestDefaultValueMatchesRuntime(t *testing.T) {
 		{"web.port", strconv.Itoa(DefaultWebPort)},
 		{"downloads.dir", DefaultDir},
 		{"mount.sync_seconds", strconv.Itoa(DefaultSyncSeconds)},
+		{"mount.auto_sync", strconv.FormatBool(m.SyncOn())},
 		{"mount.download_parallel", strconv.Itoa(m.DownloadConnections())},
 		{"mount.upload_parallel", strconv.Itoa(m.UploadParallelism())},
 		{"mount.read_chunk_mb", strconv.Itoa(DefaultReadChunkMB)},

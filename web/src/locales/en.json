@@ -229,7 +229,7 @@
   },
   "settingLabels": {
     "web.port": "Panel port",
-    "web.auto_open": "Open browser on start",
+    "mount.auto_sync": "Auto sync",
     "mount.sync_seconds": "Auto sync interval (s)",
     "mount.download_parallel": "Download connections",
     "mount.upload_parallel": "Upload chunk concurrency",
@@ -239,7 +239,7 @@
   },
   "settingHints": {
     "web.port": "0 uses default 8720; falls back to a random port if busy",
-    "web.auto_open": "Web build only; the desktop shell never opens a browser",
+    "mount.auto_sync": "When off, channel changes are not pulled; local actions still persist immediately",
     "mount.sync_seconds": "0 means 15s default, negative disables auto sync",
     "mount.download_parallel": "One MTProto connection cannot saturate; about 4 is best",
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",

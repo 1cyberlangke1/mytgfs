@@ -367,7 +367,7 @@ func (q *Queue) Wait(ctx context.Context, id int64) error {
 	}
 }
 
-// Snapshot 返回最近的任务快照，按提交顺序。
+// Snapshot 返回最近的任务快照，最新的排在最前。
 func (q *Queue) Snapshot() []Item {
 	rows, err := q.db.Query(`
 SELECT id, volume, kind, name, state, attempt, err FROM jobs
@@ -383,10 +383,6 @@ ORDER BY id DESC LIMIT ?`, keepFinished)
 			return out
 		}
 		out = append(out, it)
-	}
-	// 转回升序，面板从上到下就是执行顺序
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
 	}
 	return out
 }

@@ -121,7 +121,8 @@ go build -o mytgfs ./cmd/mytgfs
 
 - `[telegram]`：`api_id` 填这里；`api_hash_file` / `bot_token_file` 指向 `secrets/` 下的文件。
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
-  `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
+  `upload_parallel`（上传并发分片，默认 4）、`auto_sync`（自动同步开关，缺省开启）、
+  `sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
 - `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）。`mytgfs web` 只打印地址，不改浏览器；桌面托盘由 Wails 直接显示面板窗口。
 - `[downloads]`：`dir` 是面板「下载」页的落盘目录，默认 `data/downloads`；相对路径按配置文件所在目录解析，绝对路径原样使用。可用 `mytgfs config set downloads.dir <路径>` 修改。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
@@ -224,8 +225,10 @@ packaging/      安装/卸载脚本
 `mytgfs-tray.exe`（或 `mytgfs tray`）常驻任务栏，菜单里的常用项：
 
 - **打开面板 / 关闭面板**：按需显示/隐藏 Wails 面板窗口（桌面壳不监听端口）。
-- **自动同步**：即时开关频道增量同步，状态写回 `config.toml` 的 `[mount].sync_seconds`。
-- **开机自启**：写当前用户的系统注册项，默认关闭。
+- **按卷快速打开**：每个卷一项，显示「卷名 · 已用容量」，点击直接切到该卷的文件页。
+- **退出**：先停卷协程再退出。
+
+开机自启与自动同步开关在面板「设置」页，改完立即生效（自动同步每轮重新读取配置）。
 
 鼠标悬停在图标上会显示连接状态、每个卷的文件数与占用、正在下载/排队的任务数。
 

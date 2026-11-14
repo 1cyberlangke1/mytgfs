@@ -386,7 +386,8 @@ func TestSnapshotOrderAndPending(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("items = %d, want 3", len(items))
 	}
-	for i, want := range []string{"a", "b", "c"} {
+	// 面板从上到下按最新优先：最后入队的 c 排第一
+	for i, want := range []string{"c", "b", "a"} {
 		if items[i].Name != want {
 			t.Fatalf("items[%d].Name = %q, want %q", i, items[i].Name, want)
 		}

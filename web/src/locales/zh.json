@@ -229,7 +229,7 @@
   },
   "settingLabels": {
     "web.port": "面板端口",
-    "web.auto_open": "启动时自动打开浏览器",
+    "mount.auto_sync": "自动同步",
     "mount.sync_seconds": "自动同步间隔（秒）",
     "mount.download_parallel": "下载连接数",
     "mount.upload_parallel": "上传并发分片",
@@ -239,7 +239,7 @@
   },
   "settingHints": {
     "web.port": "0 表示用默认 8720；被占用会自动换端口",
-    "web.auto_open": "仅网页版启动时生效，桌面壳不弹浏览器",
+    "mount.auto_sync": "关闭后不再拉取频道变更，手动操作仍会即时落盘",
     "mount.sync_seconds": "0 用默认 15 秒，负数关闭自动同步",
     "mount.download_parallel": "单条 MTProto 连接吃不满带宽，4 左右最佳",
     "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",

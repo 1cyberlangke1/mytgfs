@@ -459,7 +459,8 @@ func runWeb(args []string) {
 		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
 		vsync, vstop := context.WithCancel(ctx)
 		var vwg sync.WaitGroup
-		if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); interval > 0 {
+		if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); cfg.Mount.SyncOn() {
+			syncOn := trayapp.SyncEnabled(cfgPath, cfg.Mount.SyncOn())
 			for _, vol := range cfg.Volumes {
 				if !vol.Enabled {
 					continue
@@ -470,7 +471,7 @@ func runWeb(args []string) {
 				}
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
 				vwg.Go(func() {
-					trayapp.AutoSync(vsync, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil)
+					trayapp.AutoSyncWhile(vsync, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil, syncOn)
 				})
 			}
 		}

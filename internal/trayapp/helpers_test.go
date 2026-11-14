@@ -3,6 +3,8 @@ package trayapp
 // 托盘纯逻辑的单测：不启动 systray、不连 Telegram。
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -55,24 +57,61 @@ func TestStatusNotifierPublishesOnChange(t *testing.T) {
 	}
 }
 
-// TestSyncSwitchToggle 开关默认值与切换都按 atomic 语义生效。
-func TestSyncSwitchToggle(t *testing.T) {
-	on := NewSyncSwitch(true)
-	if !on.On() {
-		t.Fatal("初始应为开")
+// TestSyncEnabledReadsConfig 自动同步开关每轮重新读配置，读失败回退启动值。
+//
+// 输入：临时配置里 auto_sync 的 true/false 与一份损坏文件
+// 输出：SyncEnabled 返回的判断结果
+// 预期：面板改设置后无需重启即可生效；配置坏掉时保持启动时的行为
+func TestSyncEnabledReadsConfig(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("[mount]\nauto_sync = false\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	on.Set(false)
-	if on.On() {
-		t.Fatal("关闭后仍为开")
+	on := SyncEnabled(p, true)
+	if on() {
+		t.Fatal("auto_sync=false 仍返回开启")
 	}
-	on.Set(true)
-	if !on.On() {
-		t.Fatal("重新开启失败")
+	if err := os.WriteFile(p, []byte("[mount]\nauto_sync = true\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	if !on() {
+		t.Fatal("auto_sync=true 未生效")
+	}
+	if err := os.WriteFile(p, []byte("not = [toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !SyncEnabled(p, true)() {
+		t.Fatal("损坏配置未回退到 fallback=true")
+	}
+	if SyncEnabled(p, false)() {
+		t.Fatal("损坏配置未回退到 fallback=false")
+	}
+}
 
-	off := NewSyncSwitch(false)
-	if off.On() {
-		t.Fatal("初始应为关")
+// TestVolumeMenuLabel 托盘卷入口显示「卷名 · 已用容量」。
+func TestVolumeMenuLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		used int64
+		want string
+	}{
+		{"demo", 166787473, "demo · 159.1 MB"},
+		{"demo2", 8192, "demo2 · 8.0 KB"},
+	}
+	for _, c := range cases {
+		if got := volumeMenuLabel(c.name, c.used); got != c.want {
+			t.Errorf("volumeMenuLabel(%q, %d) = %q，期望 %q", c.name, c.used, got, c.want)
+		}
+	}
+}
+
+// TestVolumeURL 快速打开地址带 tab/vol 且卷名经过转义。
+func TestVolumeURL(t *testing.T) {
+	if got := volumeURL("demo2"); got != "/?tab=files&vol=demo2" {
+		t.Errorf("volumeURL = %q", got)
+	}
+	if got := volumeURL("a b&c"); got != "/?tab=files&vol=a+b%26c" {
+		t.Errorf("volumeURL 未转义: %q", got)
 	}
 }
 

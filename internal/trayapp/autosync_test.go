@@ -5,6 +5,7 @@ package trayapp
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,13 +68,13 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		AutoSync(ctx, func(changed, _ []string) {
+		AutoSyncWhile(ctx, func(changed, _ []string) {
 			paths = changed
 			select {
 			case notified <- struct{}{}:
 			default:
 			}
-		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil)
+		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil)
 	}()
 
 	select {
@@ -85,7 +86,7 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 	select {
 	case <-finished:
 	case <-time.After(3 * time.Second):
-		t.Fatal("取消后 AutoSync 没有退出")
+		t.Fatal("取消后 AutoSyncWhile 没有退出")
 	}
 
 	n, ok, err := idx.NodeByPath(context.Background(), "/a.txt")
@@ -107,14 +108,14 @@ func TestAutoSyncNilNotify(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		AutoSync(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil)
+		AutoSyncWhile(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil)
 	}()
 	time.Sleep(60 * time.Millisecond)
 	cancel()
 	select {
 	case <-finished:
 	case <-time.After(3 * time.Second):
-		t.Fatal("取消后 AutoSync 没有退出")
+		t.Fatal("取消后 AutoSyncWhile 没有退出")
 	}
 }
 
@@ -122,9 +123,9 @@ func TestAutoSyncNilNotify(t *testing.T) {
 func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
 	idx := newTestIndex(t)
 	ctx := t.Context()
-	sw := NewSyncSwitch(false)
+	var on atomic.Bool
 	d := &fakeDiffer{}
-	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, sw.On)
+	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, on.Load)
 
 	time.Sleep(60 * time.Millisecond)
 	d.mu.Lock()
@@ -133,7 +134,7 @@ func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
 	if closed != 0 {
 		t.Fatalf("关闭时不该同步，实际 %d 轮", closed)
 	}
-	sw.Set(true)
+	on.Store(true)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		d.mu.Lock()

@@ -106,6 +106,16 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   }
 }
 
+// urlParam 读取托盘「按卷快速打开」带进来的查询参数。
+//
+// 输入：name 参数名
+// 输出：参数值；没有则为空串
+// 预期：只用于首屏初始化，之后切页仍由本地状态与 localStorage 决定
+function urlParam(name: string): string {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get(name) ?? '';
+}
+
 interface ToastMessage {
   id: string;
   type: 'success' | 'error';
@@ -199,9 +209,13 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
 export default function App() {
   const globalUploadRef = useRef<HTMLInputElement | null>(null);
 
-  const [activeTab, setActiveTab] = useState<NavTab>(() =>
-    loadFromStorage<NavTab>(STORAGE_KEYS.tab, 'overview')
-  );
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    const tab = urlParam('tab');
+    if (tab === 'overview' || tab === 'files' || tab === 'settings' || tab === 'downloads') {
+      return tab;
+    }
+    return loadFromStorage<NavTab>(STORAGE_KEYS.tab, 'overview');
+  });
   const [locale, setLocale] = useState<Locale>(() => {
     const saved = loadFromStorage<Locale | null>(STORAGE_KEYS.locale, null);
     if (saved && DICTIONARY[saved]) return saved;
@@ -224,7 +238,7 @@ export default function App() {
   const [downloadsDir, setDownloadsDir] = useState('');
 
   const [activeVolumeId, setActiveVolumeId] = useState<string>(() =>
-    loadFromStorage<string>(STORAGE_KEYS.activeVol, '')
+    urlParam('vol') || loadFromStorage<string>(STORAGE_KEYS.activeVol, '')
   );
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
 
@@ -686,7 +700,8 @@ export default function App() {
       uploadInputs.current.set(id, { file, volumeId, parentId, rel: rels[index] ?? '' });
       return task;
     });
-    setUploadTasks((prev) => [...prev, ...plan]);
+    // 最新的任务排在最上面，与操作队列显示顺序一致
+    setUploadTasks((prev) => [...plan, ...prev]);
     pushToast(
       interpolate(t.files.uploadStartedToast, { name: plan[0].fileName }, locale),
       'success'
