@@ -335,7 +335,7 @@ export const WebdavTopologyIllustration: React.FC<{
           SQLite + Chunk Stream
         </text>
         <text x="58" y="71" fill="#64748B" fontSize="9" fontFamily="JetBrains Mono">
-          127.0.0.1 Loopback
+          Local Desktop
         </text>
       </g>
 

@@ -30,6 +30,8 @@ import (
 	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/logging"
+	"mytgfs/internal/ui"
 	"mytgfs/internal/upload"
 )
 
@@ -98,7 +100,7 @@ func runCopy(args []string) {
 		if hadOld && !*force {
 			// 目标已有同内容的文件：不发消息，直接跳过
 			if sameContent(old, source) {
-				fmt.Printf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
+				ui.Outf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
 					volName, src, dstName, dst, old.DocumentID, old.Size)
 				return nil
 			}
@@ -126,13 +128,13 @@ func runCopy(args []string) {
 			updated.FileReference = refreshed.FileReference
 			updated.Size = refreshed.Size
 			if perr := idx.PutNode(ctx, updated); perr != nil {
-				fmt.Fprintln(os.Stderr, i18n.T("err.index_read", perr))
+				logging.Warn("err.index_read", perr)
 			}
 		}
 		if ierr := dstFS.Import(ctx, dst, part, source.Sha256, source.Mtime, true); ierr != nil {
 			return ierr
 		}
-		fmt.Printf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
+		ui.Outf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
 			volName, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
 		return nil
 	})

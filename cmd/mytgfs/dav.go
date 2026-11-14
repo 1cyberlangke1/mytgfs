@@ -20,8 +20,10 @@ import (
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/netmap"
 	"mytgfs/internal/queue"
+	"mytgfs/internal/ui"
 )
 
 // runWebDAV 启动 WebDAV 服务。
@@ -53,7 +55,7 @@ func runWebDAV(args []string) {
 		fsys.SetTempDir(datadir.Path("tmp"))
 		// 重启后按账本补传上次未提交的文件，只处理本程序记下的记录
 		if rerr := fsys.ResumePending(); rerr != nil {
-			fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)
+			logging.Warn("log.volume_warn", rerr, volName)
 		}
 		handler := dav.NewHandler(fsys, nil)
 		srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -65,7 +67,7 @@ func runWebDAV(args []string) {
 			_ = srv.Shutdown(shutdown)
 		})
 
-		fmt.Printf("%s\n", i18n.T("cli.webdav_listen", *addr, volName))
+		ui.Outf("%s\n", i18n.T("cli.webdav_listen", *addr, volName))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}
@@ -87,5 +89,5 @@ func runUnmap(args []string) {
 	addr := fs.String("addr", "127.0.0.1:8080", i18n.T("cli.flag.addr"))
 	_ = fs.Parse(args)
 	netmap.Cleanup(*addr)
-	fmt.Println(i18n.T("dav.cleanup_done", *addr))
+	ui.Out(i18n.T("dav.cleanup_done", *addr))
 }

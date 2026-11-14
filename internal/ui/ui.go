@@ -74,3 +74,27 @@ func Printf(format string, args ...any) {
 	}
 	fmt.Printf(format, args...)
 }
+
+// Out 在非 JSON 模式下把一行人读结果写到 stdout；JSON 模式下不下发冗余文案。
+func Out(args ...any) {
+	if JSONMode() {
+		return
+	}
+	fmt.Println(args...)
+}
+
+// Outf 在非 JSON 模式下把格式化结果写到 stdout；JSON 模式下不下发冗余文案。
+func Outf(format string, args ...any) {
+	if JSONMode() {
+		return
+	}
+	fmt.Printf(format, args...)
+}
+
+// Errf 在非 JSON 模式下把一行人读错误写到 stderr；JSON 模式由 Error 负责。
+func Errf(format string, args ...any) {
+	if JSONMode() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, format, args...)
+}

@@ -6,11 +6,11 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/davsvc"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/web"
 )
 
@@ -59,7 +59,7 @@ func newMountControl(cfgPath string, vols map[string]*webVolume) (*davsvc.Servic
 		cur.WebDAV.Enabled = on
 		if werr := config.SetWebDAV(cfgPath, cur.WebDAV); werr != nil {
 			// 服务已经启停成功，配置失败只提醒
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("err.webdav_config"), werr)
+			logging.Warn("err.webdav_config", werr)
 		}
 		return nil
 	}
@@ -73,7 +73,7 @@ func newMountControl(cfgPath string, vols map[string]*webVolume) (*davsvc.Servic
 	// 用户会以为开关没保存
 	if cur, lerr := config.Load(cfgPath); lerr == nil && cur.WebDAV.Enabled {
 		if _, err := ctl.Enable(); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
+			logging.Warn("err.webdav_start", err)
 		}
 	}
 	return svc, ctl

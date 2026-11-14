@@ -18,8 +18,9 @@ func runTray(args []string) {
 	_ = fs.Parse(args)
 
 	if err := trayapp.Run(trayapp.Options{
-		ConfigPath: "config.toml",
-		Point:      *point,
+		ConfigPath:     "config.toml",
+		Point:          *point,
+		SingleInstance: true,
 	}); err != nil {
 		fatal(err.Error())
 	}

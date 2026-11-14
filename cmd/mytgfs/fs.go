@@ -22,6 +22,7 @@ import (
 	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/ui"
 )
 
@@ -46,7 +47,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		// 索引是缓存：空了就重建，否则 ls/search 会给出空白结果
 		if rerr := a.RebuildIndexIfEmpty(ctx, s.Index, s.Volume.ChatID); rerr != nil {
-			fmt.Fprintln(os.Stderr, i18n.T("err.fs_rebuild", rerr))
+			logging.Warn("err.fs_rebuild", rerr)
 		}
 		davfs := dav.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
 		davfs.SetTempDir(datadir.Path("tmp"))

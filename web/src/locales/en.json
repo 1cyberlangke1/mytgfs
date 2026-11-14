@@ -15,7 +15,6 @@
   },
   "appName": "mytgfs",
   "pageTitle": "mytgfs · Local Volume Manager",
-  "loopbackOnlyBadge": "127.0.0.1 Local",
   "a11y": {
     "primaryNav": "Primary Navigation",
     "dismissToast": "Dismiss notification",
@@ -57,7 +56,6 @@
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
     "totalUsed": "Total Used",
-    "loopback": "Loopback",
     "webdavActive": "WebDAV: on",
     "webdavOff": "WebDAV: Off",
     "languageLabel": "Language"
@@ -206,7 +204,6 @@
     "endpointLabel": "Listen URL",
     "copyBtn": "Copy",
     "copiedToast": "Copied to clipboard",
-    "loopbackNotice": "Listens on localhost (127.0.0.1) only.",
     "guideTitle": "How to Map Drive",
     "tabWindows": "Windows",
     "tabMacos": "macOS",
@@ -235,17 +232,6 @@
     "resetDefaultsBtn": "Reset",
     "saveSuccessToast": "Settings saved",
     "saveErrorPrefix": "Failed to save: ",
-    "errors": {
-      "SYNTAX_MISSING_EQ": "Line {line}: Invalid syntax (missing \"=\" assignment)",
-      "INVALID_HOST": "Line {line}: Security policy requires listen_host to remain 127.0.0.1",
-      "INVALID_PORT": "Line {line}: panel_port must be an integer between 1024 and 65535",
-      "INVALID_SYNC_INTERVAL": "Line {line}: auto_sync_interval_sec must be between 10 and 86400",
-      "INVALID_DL_CONN": "Line {line}: download_connections must be between 1 and 16",
-      "INVALID_UL_CONC": "Line {line}: upload_concurrency must be between 1 and 8",
-      "INVALID_CHUNK_SIZE": "Line {line}: read_chunk_size_mb must be 1, 2, 4, 8, or 16 MB",
-      "INVALID_BOOL": "Line {line}: boolean option must be true or false",
-      "INVALID_PWA_LIMIT": "Line {line}: pwa_offline_max_file_mb must be between 10 and 2048 MB"
-    },
     "boolOn": "On",
     "boolOff": "Off",
     "invalidNumber": "{field} must be an integer",

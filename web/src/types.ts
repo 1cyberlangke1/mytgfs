@@ -60,7 +60,6 @@ export interface AppSettingDef {
 }
 
 export interface AppSettings {
-  listenHost: '127.0.0.1';
   panelPort: number;
   autoSyncIntervalSec: number;
   downloadConnections: number;

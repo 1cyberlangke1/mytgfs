@@ -46,7 +46,7 @@ import (
 )
 
 func main() {
-	initLogging()
+	logging.SetupFromConfig("config.toml")
 	os.Args = append([]string{os.Args[0]}, stripJSONFlag(os.Args[1:])...)
 	if len(os.Args) < 2 {
 		usage()
@@ -121,21 +121,6 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-}
-
-// initLogging 按配置初始化 slog 与轮转日志。
-func initLogging() {
-	cfg, err := config.Load("config.toml")
-	if err != nil {
-		cfg = config.Config{}
-	}
-	_, _ = logging.Setup(logging.Config{
-		Level:      cfg.Log.Level,
-		File:       cfg.Log.File,
-		MaxSizeMB:  cfg.Log.MaxSizeMB,
-		MaxBackups: cfg.Log.MaxBackups,
-		MaxAgeDays: cfg.Log.MaxAgeDays,
-	})
 }
 
 // runAuth 处理 bot / user 登录。
@@ -224,7 +209,7 @@ func runChannelCreate(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.channel_init_prefix"), err)
 	}
-	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
+	ui.Out(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
 // runChannelList 列出当前 user 能管理的频道。
@@ -295,7 +280,7 @@ func runChannelAdd(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.add_bot"), err)
 	}
-	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
+	ui.Out(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
 // runChannelInit 建频道并给 bot 提权（等价 channel create --bot）。
@@ -330,7 +315,7 @@ func runChannelInit(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.channel_init_prefix"), err)
 	}
-	fmt.Println(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
+	ui.Out(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
 // resolveVolumeName 决定命令作用于哪个卷。
@@ -381,7 +366,7 @@ func runSync(args []string) {
 			if rerr != nil {
 				return rerr
 			}
-			fmt.Println(i18n.T("cli.rebuild_stats", n))
+			ui.Out(i18n.T("cli.rebuild_stats", n))
 		} else {
 			d := &tgsync.TelegramChannelDiffer{API: s.Client.API(), ChannelID: s.Volume.ChatID}
 			res, serr := tgsync.SyncChannel(ctx, s.Index, d, s.Store(), *limit)
@@ -389,9 +374,9 @@ func runSync(args []string) {
 				return serr
 			}
 			if res.Truncated {
-				fmt.Println(i18n.T("warn.diff_too_long"))
+				ui.Out(i18n.T("warn.diff_too_long"))
 			}
-			fmt.Println(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
+			ui.Out(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
 		}
 		children, cerr := s.Index.Children(ctx, 0)
 		if cerr != nil {
@@ -403,7 +388,7 @@ func runSync(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.sync"), err)
 	}
-	fmt.Println(i18n.T("cli.sync_ok", entries))
+	ui.Out(i18n.T("cli.sync_ok", entries))
 }
 
 // runMount 已停用：FUSE/WinFsp 挂载层已移除，改用 WebDAV 挂载。
@@ -452,7 +437,7 @@ func runWeb(args []string) {
 		_ = ln.Close()
 	}
 	url := "http://" + addr
-	fmt.Println(i18n.T("cli.web_url", url))
+	ui.Out(i18n.T("cli.web_url", url))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -685,7 +670,7 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 		}
 		vf, err := a.OpenVolume(ctx, v.Name, api)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, i18n.T("tray.mount.failed", v.Name, err))
+			logging.Warn("tray.mount.failed", err, v.Name)
 			continue
 		}
 		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
@@ -742,7 +727,7 @@ func usage() {
 		ui.Error("usage", fmt.Errorf("%s", i18n.T("cli.usage_short")))
 		os.Exit(2)
 	}
-	fmt.Fprintln(os.Stderr, i18n.T("cli.usage"))
+	ui.Errf("%s\n", i18n.T("cli.usage"))
 }
 
 func readTrim(path string) string {
@@ -781,7 +766,7 @@ func fatal(msg string) {
 		ui.Error("fatal", fmt.Errorf("%s", msg))
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "FAIL:", msg)
+	ui.Errf("FAIL: %s\n", msg)
 	os.Exit(1)
 }
 

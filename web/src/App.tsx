@@ -106,7 +106,6 @@ interface ToastMessage {
 
 // EMPTY_SETTINGS 是服务端设置到达前的占位，值域与 config.Schema() 一致。
 const EMPTY_SETTINGS: AppSettings = {
-  listenHost: '127.0.0.1',
   panelPort: 0,
   autoSyncIntervalSec: 15,
   downloadConnections: 4,
@@ -863,7 +862,7 @@ export default function App() {
                 {t.appName}
               </div>
               <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate leading-tight">
-                {t.loopbackOnlyBadge} · {formatBytes(summary.totalBytes, 1, locale)}
+                {formatBytes(summary.totalBytes, 1, locale)}
               </div>
             </div>
           </motion.a>
@@ -938,9 +937,7 @@ export default function App() {
                     >
                       {t.appName}
                     </div>
-                    <div className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
-                      {t.loopbackOnlyBadge}
-                    </div>
+
                   </div>
                 </motion.a>
               )}
@@ -1090,8 +1087,7 @@ export default function App() {
             {!sidebarCollapsed && (
               <div className="p-3 rounded-xl bg-zinc-100/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800/80 space-y-1 text-[11px]">
                 <div className="flex items-center justify-between gap-2 text-zinc-500 dark:text-zinc-400">
-                  <span className="truncate">{t.sidebar.loopback}</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
+                  <span className="text-emerald-600 dark:text-emerald-400 font-medium truncate">
                     {t.connection[connectionStatus]}
                   </span>
                 </div>

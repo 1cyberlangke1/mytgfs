@@ -15,7 +15,6 @@
   },
   "appName": "mytgfs",
   "pageTitle": "mytgfs · 本地存储卷管理面板",
-  "loopbackOnlyBadge": "127.0.0.1 本机",
   "a11y": {
     "primaryNav": "主导航",
     "dismissToast": "关闭通知",
@@ -57,7 +56,6 @@
     "collapseSidebar": "收起侧边栏",
     "expandSidebar": "展开侧边栏",
     "totalUsed": "总占用",
-    "loopback": "本机回环",
     "webdavActive": "WebDAV：已开启",
     "webdavOff": "WebDAV：已关闭",
     "languageLabel": "切换语言"
@@ -206,7 +204,6 @@
     "endpointLabel": "监听地址",
     "copyBtn": "复制",
     "copiedToast": "已复制监听地址",
-    "loopbackNotice": "仅监听本机回环地址 (127.0.0.1)，不对局域网或公网开放。",
     "guideTitle": "如何映射本地磁盘",
     "tabWindows": "Windows",
     "tabMacos": "macOS",
@@ -235,17 +232,6 @@
     "resetDefaultsBtn": "恢复默认",
     "saveSuccessToast": "设置已保存",
     "saveErrorPrefix": "保存失败：",
-    "errors": {
-      "SYNTAX_MISSING_EQ": "第 {line} 行：语法错误（缺少 \"=\" 赋值符号）",
-      "INVALID_HOST": "第 {line} 行：安全策略要求 listen_host 必须保持为本机回环 (127.0.0.1)",
-      "INVALID_PORT": "第 {line} 行：panel_port 必须是 1024 到 65535 之间的整数",
-      "INVALID_SYNC_INTERVAL": "第 {line} 行：auto_sync_interval_sec 必须在 10 到 86400 秒之间",
-      "INVALID_DL_CONN": "第 {line} 行：download_connections 必须在 1 到 16 之间",
-      "INVALID_UL_CONC": "第 {line} 行：upload_concurrency 必须在 1 到 8 之间",
-      "INVALID_CHUNK_SIZE": "第 {line} 行：read_chunk_size_mb 必须为 1、2、4、8 或 16 MB",
-      "INVALID_BOOL": "第 {line} 行：布尔配置项必须为 true 或 false",
-      "INVALID_PWA_LIMIT": "第 {line} 行：pwa_offline_max_file_mb 必须在 10 到 2048 MB 之间"
-    },
     "boolOn": "已开启",
     "boolOff": "已关闭",
     "invalidNumber": "{field} 必须是整数",

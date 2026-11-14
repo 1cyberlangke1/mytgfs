@@ -76,24 +76,24 @@ func runCheck(args []string) {
 		})
 		return
 	}
-	fmt.Println(i18n.T("check_title", volName, volume.ChatID))
+	ui.Out(i18n.T("check_title", volName, volume.ChatID))
 	for _, p := range rep.Problems {
 		switch p.Kind {
 		case fsck.KindMissing:
-			fmt.Println(i18n.T("check_problem_missing", p.Path, p.MsgID))
+			ui.Out(i18n.T("check_problem_missing", p.Path, p.MsgID))
 		case fsck.KindMoved:
-			fmt.Println(i18n.T("check_problem_moved", p.Path, p.Actual, p.MsgID))
+			ui.Out(i18n.T("check_problem_moved", p.Path, p.Actual, p.MsgID))
 		case fsck.KindAdded:
-			fmt.Println(i18n.T("check_problem_added", p.Path, p.MsgID))
+			ui.Out(i18n.T("check_problem_added", p.Path, p.MsgID))
 		}
 	}
 	if len(rep.Problems) == 0 {
-		fmt.Println(i18n.T("check_clean", rep.Checked))
+		ui.Out(i18n.T("check_clean", rep.Checked))
 		return
 	}
-	fmt.Println(i18n.T("check_summary", rep.Checked, rep.Missing, rep.Moved, rep.Added, rep.Fixed))
+	ui.Out(i18n.T("check_summary", rep.Checked, rep.Missing, rep.Moved, rep.Added, rep.Fixed))
 	if !*fix {
-		fmt.Println(i18n.T("check_fix_hint"))
+		ui.Out(i18n.T("check_fix_hint"))
 	}
 }
 

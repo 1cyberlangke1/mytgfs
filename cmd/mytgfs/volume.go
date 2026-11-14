@@ -66,7 +66,7 @@ func runVolumeCheck(args []string) {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
 	if len(cfg.Volumes) == 0 {
-		fmt.Println(i18n.T("volume.check_none"))
+		ui.Out(i18n.T("volume.check_none"))
 		return
 	}
 	apiHash := cfg.APIHash()
@@ -174,7 +174,7 @@ func runVolumeDelete(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.volume_delete_prefix"), err)
 	}
-	fmt.Println(i18n.T("volume.channel_deleted", channelID))
+	ui.Out(i18n.T("volume.channel_deleted", channelID))
 
 	if err := config.RemoveVolume(*cfgPath, volName); err != nil {
 		failErr(i18n.T("err.volume_config_remove_prefix"), err)
@@ -182,10 +182,10 @@ func runVolumeDelete(args []string) {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		p := datadir.Path("index-" + volName + ".db" + suffix)
 		if rmErr := os.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
-			fmt.Println(i18n.T("volume.index_remove_failed", p, rmErr))
+			ui.Out(i18n.T("volume.index_remove_failed", p, rmErr))
 		}
 	}
-	fmt.Println(i18n.T("volume.deleted", volName))
+	ui.Out(i18n.T("volume.deleted", volName))
 }
 
 // runVolumeAttach 把已有频道挂成卷。
@@ -338,19 +338,19 @@ func runVolumeCreate(args []string) {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_write"), aerr))
 	}
 
-	fmt.Println(i18n.T("volume.ok", res.Name, res.ChannelID, res.ChatID))
+	ui.Out(i18n.T("volume.ok", res.Name, res.ChannelID, res.ChatID))
 	switch {
 	case res.Muted:
-		fmt.Println(i18n.T("volume.muted"))
+		ui.Out(i18n.T("volume.muted"))
 	case res.MuteErr != nil:
-		fmt.Println(i18n.T("volume.mute_failed", res.MuteErr))
+		ui.Out(i18n.T("volume.mute_failed", res.MuteErr))
 	}
 	mountPoint := vol.Point
 	if mountPoint == "" {
 		mountPoint = "-"
 	}
-	fmt.Println(i18n.T("volume.saved", vol.Name, mountPoint))
-	fmt.Println(i18n.T("volume.restart_hint"))
+	ui.Out(i18n.T("volume.saved", vol.Name, mountPoint))
+	ui.Out(i18n.T("volume.restart_hint"))
 }
 
 // readBotUsername 用 bot 会话读取 bot 用户名。

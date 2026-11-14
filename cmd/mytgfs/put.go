@@ -32,6 +32,7 @@ import (
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/ui"
 )
 
 // putItem 是一个待上传的本地文件。
@@ -80,7 +81,7 @@ func runPut(args []string) {
 				return putOne(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), it)
 			}); err != nil {
 				failCount++
-				fmt.Println(i18n.T("put.fail", it.remote, err))
+				ui.Out(i18n.T("put.fail", it.remote, err))
 				continue
 			}
 			okCount++
@@ -90,7 +91,7 @@ func runPut(args []string) {
 	if err != nil {
 		failErr(i18n.T("err.put_prefix"), err)
 	}
-	fmt.Println(i18n.T("put.summary", okCount, failCount))
+	ui.Out(i18n.T("put.summary", okCount, failCount))
 	if failCount > 0 {
 		os.Exit(1)
 	}
@@ -129,7 +130,7 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, c
 	if !ok {
 		return os.ErrNotExist
 	}
-	fmt.Println(i18n.T("put.ok", it.remote, n.Size, n.ID))
+	ui.Out(i18n.T("put.ok", it.remote, n.Size, n.ID))
 	return nil
 }
 

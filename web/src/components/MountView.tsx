@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Copy, HardDrive, ShieldCheck, Terminal } from 'lucide-react';
+import { Check, Copy, HardDrive, Terminal } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AppSettings } from '../types';
 import { Translations } from '../utils/i18n';
@@ -112,10 +112,6 @@ export const MountView: React.FC<MountViewProps> = ({
               )}
               <span>{t.mount.copyBtn}</span>
             </Button>
-          </div>
-          <div className="flex items-center gap-2 pt-1 text-xs text-zinc-500 dark:text-zinc-400">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>{t.mount.loopbackNotice}</span>
           </div>
         </div>
       </section>

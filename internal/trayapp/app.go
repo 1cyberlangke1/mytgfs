@@ -35,6 +35,7 @@ import (
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
@@ -48,6 +49,8 @@ import (
 type Options struct {
 	ConfigPath string // 配置文件路径，空则 config.toml
 	Point      string // 挂载点覆盖，空则取配置
+	// SingleInstance 为 true 时启用进程级单实例锁；第二个实例只唤起已有窗口后退出
+	SingleInstance bool
 }
 
 // SyncInterval 把配置里的秒数换算成自动同步间隔。
@@ -144,7 +147,7 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 			}
 			switch {
 			case err != nil:
-				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autosync_failed"), err)
+				logging.Warn("log.autosync_failed", err)
 			case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
 				notify(res.Changed, res.Removed)
 			}
@@ -200,10 +203,25 @@ func Run(opts Options) error {
 	}))
 	setHandler := func(h http.Handler) { hmu.Lock(); inner = h; hmu.Unlock() }
 
+	// 单实例锁：第二个实例启动时唤起已有窗口后自行退出；CLI 子命令不经过这里
+	var win *application.WebviewWindow
+	var single *application.SingleInstanceOptions
+	if opts.SingleInstance {
+		single = &application.SingleInstanceOptions{
+			UniqueID: "com.mytgfs.tray",
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				if win != nil {
+					win.Show()
+					win.Focus()
+				}
+			},
+		}
+	}
 	wailsApp := application.New(application.Options{
-		Name:        "mytgfs",
-		Description: "Telegram channel file volumes",
-		Icon:        brand.Large,
+		Name:           "mytgfs",
+		Description:    "Telegram channel file volumes",
+		Icon:           brand.Large,
+		SingleInstance: single,
 		Assets: application.AssetOptions{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hmu.RLock()
@@ -213,7 +231,7 @@ func Run(opts Options) error {
 			}),
 		},
 	})
-	win := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+	win = wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:   "main",
 		Title:  "mytgfs",
 		Width:  1120,
@@ -411,7 +429,7 @@ func Run(opts Options) error {
 		w := config.WebDAV{Enabled: on, Addr: cfg.WebDAV.ListenAddr(), Volume: cfg.WebDAV.Volume}
 		if werr := config.SetWebDAV(cfgPath, w); werr != nil {
 			// 服务已经启停成功，配置失败只提醒，不撤销
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("err.webdav_config"), werr)
+			logging.Warn("err.webdav_config", werr)
 		} else {
 			bus.Publish("config")
 		}
@@ -435,7 +453,7 @@ func Run(opts Options) error {
 				// 会话被吊销只能重新登录；停止 Run，别让连接循环空转
 				authLost.Store(true)
 				setState("tray.state.auth_lost")
-				fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.session_invalid"), err)
+				logging.Warn("log.session_invalid", err)
 				return err
 			},
 		})
@@ -697,14 +715,14 @@ func Run(opts Options) error {
 		}
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", i18n.T("tray.mount.failed", name, perr))
+			logging.Warn("tray.mount.failed", perr, name)
 			return
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、WebDAV 语义与文件管理统一由装配根给出
 		vf, oerr := app.New(cfg, app.Options{Bus: bus}).OpenVolume(vctx, name, api)
 		if oerr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.index_open_failed"), oerr)
+			logging.Warn("log.index_open_failed", oerr)
 			vcancel()
 			closePool()
 			return
@@ -768,7 +786,7 @@ func Run(opts Options) error {
 		// 挂盘服务要在卷就绪之后才能启动；失败不影响挂载与托盘
 		if cfg.WebDAV.Enabled {
 			if derr := startDAV(); derr != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", derr)
+				logging.Warn("err.webdav_start", derr)
 			}
 		}
 	}
@@ -791,19 +809,19 @@ func Run(opts Options) error {
 		if tgclient.IsAuthLost(rerr) {
 			authLost.Store(true)
 			setState("tray.state.auth_lost")
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.auth_lost"), rerr)
+			logging.Warn("log.auth_lost", rerr)
 			return
 		}
 		// 其它永久错误（app id 无效等）无法自愈，保持托盘可退出
 		setState("tray.state.reconnecting")
-		fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.conn_closed"), rerr)
+		logging.Warn("log.conn_closed", rerr)
 	})
 
 	// 开机自启：状态以系统注册项为准，默认关闭
 	autoOn, aerr := autostart.Enabled()
 	if aerr != nil {
 		autoOn = false
-		fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_read_failed"), aerr)
+		logging.Warn("log.autostart_read_failed", aerr)
 	}
 	exePath, exeErr := os.Executable()
 
@@ -823,7 +841,7 @@ func Run(opts Options) error {
 	autoItem.OnClick(func(*application.Context) {
 		on := !autoOn
 		if exeErr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_toggle_failed"), exeErr)
+			logging.Warn("log.autostart_toggle_failed", exeErr)
 			return
 		}
 		var terr error
@@ -833,7 +851,7 @@ func Run(opts Options) error {
 			terr = autostart.Disable()
 		}
 		if terr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autostart_toggle_failed"), terr)
+			logging.Warn("log.autostart_toggle_failed", terr)
 			return
 		}
 		autoOn = on
@@ -844,7 +862,7 @@ func Run(opts Options) error {
 	davItem.OnClick(func(*application.Context) {
 		on := !davState().Enabled
 		if derr := setDAV(on); derr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.webdav_toggle_failed"), derr)
+			logging.Warn("log.webdav_toggle_failed", derr)
 			return
 		}
 		davItem.SetChecked(on)
@@ -859,7 +877,7 @@ func Run(opts Options) error {
 			secs = -1
 		}
 		if werr := config.SetKey(cfgPath, "mount.sync_seconds", strconv.Itoa(secs)); werr != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("log.autosync_toggle_failed"), werr)
+			logging.Warn("log.autosync_toggle_failed", werr)
 			return
 		}
 		syncSwitch.Set(on)

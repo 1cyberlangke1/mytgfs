@@ -4,16 +4,14 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"time"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
-	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 )
@@ -52,7 +50,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	store := a.newStore(api, vol.ChatID)
 	// 索引是缓存：空了就重建，否则面板与命令行都会看到空白目录
 	if rerr := a.RebuildIndexIfEmpty(ctx, idx, vol.ChatID); rerr != nil {
-		fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)
+		logging.Warn("log.volume_warn", rerr, volName)
 	}
 
 	fsys := dav.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
@@ -66,7 +64,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	}
 	// 只补传本程序记下的记录，不动频道里别的内容
 	if rerr := fsys.ResumePending(); rerr != nil {
-		fmt.Fprintf(os.Stderr, i18n.T("log.volume_warn")+"\n", volName, rerr)
+		logging.Warn("log.volume_warn", rerr, volName)
 	}
 	return &VolumeFS{
 		Volume: vol,
