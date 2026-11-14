@@ -19,7 +19,7 @@ var distFS embed.FS
 //
 // 输入：任意 GET/HEAD 请求
 // 输出：静态文件；未知路径返回 index.html
-// 预期：index.html 与 sw.js 不缓存，带 hash 的 /assets/ 长缓存
+// 预期：index.html 不缓存，带 hash 的 /assets/ 长缓存
 func spaHandler() http.Handler {
 	sub, err := fs.Sub(distFS, "dist")
 	if err != nil {

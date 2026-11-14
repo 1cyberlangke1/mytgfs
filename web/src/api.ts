@@ -299,31 +299,46 @@ export function coverURL(volume: string): string {
   return `/api/cover?${q.toString()}`;
 }
 
-// ---- 离线缓存（Service Worker 运行时缓存同名 cache）----
+// ---- 下载目录（服务端落盘）----
 
-const OFFLINE_CACHE = 'mytgfs-files';
-
-// cacheFile 把文件写入离线缓存；先确认缓存可用。
-export async function cacheFile(url: string): Promise<void> {
-  if (typeof caches === 'undefined') throw new Error('Cache API unavailable');
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`${res.status}`);
-  const cache = await caches.open(OFFLINE_CACHE);
-  await cache.put(new Request(url), res);
+// ApiDownload 是下载目录里的一个文件。
+export interface ApiDownload {
+  name: string;
+  size: number;
+  mod: string;
 }
 
-// uncacheFile 从离线缓存移除。
-export async function uncacheFile(url: string): Promise<void> {
-  if (typeof caches === 'undefined') return;
-  const cache = await caches.open(OFFLINE_CACHE);
-  await cache.delete(new Request(url));
+// ApiDownloads 是目录路径与文件列表。
+export interface ApiDownloads {
+  dir: string;
+  files: ApiDownload[];
 }
 
-// isCached 判断某个地址是否离线可用。
-export async function isCached(url: string): Promise<boolean> {
-  if (typeof caches === 'undefined') return false;
-  const cache = await caches.open(OFFLINE_CACHE);
-  return (await cache.match(new Request(url))) !== undefined;
+// getDownloads 列出已下载文件。
+export function getDownloads(): Promise<ApiDownloads> {
+  return request<ApiDownloads>('/api/downloads');
+}
+
+// downloadToDir 让服务端把卷内文件复制到下载目录。
+export function downloadToDir(
+  volume: string,
+  path: string
+): Promise<{ dir: string; saved: ApiDownload }> {
+  return request('/api/downloads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vol: volume, path }),
+  });
+}
+
+// removeDownload 删除本地副本。
+export function removeDownload(name: string): Promise<{ removed: boolean }> {
+  return request(`/api/downloads?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+// openDownloads 用系统文件管理器打开下载目录。
+export function openDownloads(): Promise<{ opened: boolean }> {
+  return request('/api/downloads/open', { method: 'POST' });
 }
 
 // ApiCredentials 是凭证与登录态：只有「有没有」，没有密钥内容。

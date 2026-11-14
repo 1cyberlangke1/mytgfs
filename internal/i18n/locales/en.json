@@ -227,5 +227,10 @@
   "warn.diff_too_long": "warning: the difference is too large, only recent changes were applied; the index was rebuilt",
   "web.no_instance": "No running instance",
   "web.state_local": "Local mode",
-  "tray.volume.open_failed": "failed to open volume %s"
+  "tray.volume.open_failed": "failed to open volume %s",
+  "err.downloads_unavailable": "downloads directory is unavailable",
+  "err.downloads_no_volume": "no volume with that name in the config",
+  "err.downloads_bad_path": "invalid file path",
+  "err.downloads_bad_name": "invalid file name",
+  "err.downloads_list": "failed to read the downloads directory"
 }

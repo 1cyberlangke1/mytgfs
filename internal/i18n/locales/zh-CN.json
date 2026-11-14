@@ -227,5 +227,10 @@
   "warn.diff_too_long": "警告：差异过大，只应用了最近变更，已按全量节点重建索引",
   "web.no_instance": "没有正在运行的实例",
   "web.state_local": "本地模式",
-  "tray.volume.open_failed": "打开卷 %s 失败"
+  "tray.volume.open_failed": "打开卷 %s 失败",
+  "err.downloads_unavailable": "下载目录不可用",
+  "err.downloads_no_volume": "配置里没有这个卷",
+  "err.downloads_bad_path": "文件路径不合法",
+  "err.downloads_bad_name": "文件名不合法",
+  "err.downloads_list": "读取下载目录失败"
 }

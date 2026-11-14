@@ -29,7 +29,6 @@ import {
   FileItem,
   IndexStatus,
   Locale,
-  OfflineSavedFile,
   SortField,
   SortOrder,
   VolumeInfo,
@@ -65,7 +64,6 @@ interface FilesViewProps {
   currentFolderId: string | null;
   onNavigateFolder: (folderId: string | null) => void;
   files: FileItem[];
-  offlineFiles: OfflineSavedFile[];
   connectionStatus: ConnectionStatus;
   onUploadFiles: (fileList: FileList, volumeId: string, parentId: string | null) => void;
   onCreateFolder: (volumeId: string, parentId: string | null, name: string) => void;
@@ -73,7 +71,6 @@ interface FilesViewProps {
   onBatchMoveItems: (itemIds: string[], targetParentId: string | null) => void;
   onDeleteItems: (itemIds: string[]) => void;
   onDownloadFile: (file: FileItem) => void;
-  onSaveOffline: (file: FileItem) => void;
   onPreviewFile: (file: FileItem) => void;
   /** 服务端能力：纯网页模式可能不允许建/删卷 */
   canCreateVolume: boolean;
@@ -151,7 +148,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   currentFolderId,
   onNavigateFolder,
   files,
-  offlineFiles,
   connectionStatus,
   onUploadFiles,
   onCreateFolder,
@@ -159,7 +155,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onBatchMoveItems,
   onDeleteItems,
   onDownloadFile,
-  onSaveOffline,
   onPreviewFile,
   canCreateVolume,
   canDeleteVolume,
@@ -269,11 +264,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const volumeDirectories = useMemo(
     () => files.filter((f) => f.volumeId === activeVolumeId && f.isDir),
     [files, activeVolumeId]
-  );
-
-  const offlineIdsSet = useMemo(
-    () => new Set(offlineFiles.map((o) => o.fileId)),
-    [offlineFiles]
   );
 
   const handleVolumeSelect = (volId: string) => {
@@ -794,7 +784,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
           >
             {paginatedItems.map((item) => {
               const isSelected = selectedIds.has(item.id);
-              const isOffline = offlineIdsSet.has(item.id);
               const displaySize = item.isDir
                 ? computeDirectoryStats(files, item.volumeId, item.id).totalBytes
                 : item.size;
@@ -869,16 +858,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                         >
                           <Download className="w-3.5 h-3.5" />
                         </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => onSaveOffline(item)}
-                          disabled={isOffline}
-                          aria-label={`${t.files.actionSaveOffline} ${item.name}`}
-                        >
-                          <HardDrive className="w-3.5 h-3.5" />
-                        </Button>
                       </>
                     )}
                     <Button
@@ -932,7 +911,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
             <div className="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
               {paginatedItems.map((item) => {
                 const isSelected = selectedIds.has(item.id);
-                const isOffline = offlineIdsSet.has(item.id);
                 const displaySize = item.isDir
                   ? computeDirectoryStats(files, item.volumeId, item.id).totalBytes
                   : item.size;
@@ -979,14 +957,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                               <span aria-hidden="true">·</span>
                               <span dir="ltr" className="truncate max-w-[180px] font-mono">
                                 {getItemFullPath(files, item)}
-                              </span>
-                            </>
-                          )}
-                          {isOffline && (
-                            <>
-                              <span aria-hidden="true">·</span>
-                              <span className="text-emerald-600 dark:text-emerald-400">
-                                {t.files.actionOfflineSaved}
                               </span>
                             </>
                           )}
@@ -1038,19 +1008,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                             title={t.files.actionDownload}
                           >
                             <Download className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onSaveOffline(item)}
-                            disabled={isOffline}
-                            aria-label={`${t.files.actionSaveOffline} ${item.name}`}
-                            title={
-                              isOffline ? t.files.actionOfflineSaved : t.files.actionSaveOffline
-                            }
-                          >
-                            <HardDrive className="w-3.5 h-3.5" />
                           </Button>
                         </>
                       )}

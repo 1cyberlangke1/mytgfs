@@ -39,7 +39,6 @@
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "vite-plugin-pwa": "^2.0.0"
+    "typescript": "^7.0.2"
   }
 }

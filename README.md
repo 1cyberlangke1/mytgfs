@@ -11,7 +11,7 @@
 
 提供三种使用方式：
 
-- **Web 面板**（`mytgfs web`）：浏览器里增删改查、拖拽/目录上传、搜索排序、在线播放、离线保存（PWA）。
+- **Web 面板**（`mytgfs web`）：浏览器里增删改查、拖拽/目录上传、搜索排序、在线播放、下载到本地目录。
 - **系统托盘**（`mytgfs tray`）：常驻后台、自动增量同步，按需打开面板。
 
 > 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己格式的消息**（正文含 `v`/`t`/`n`/`p` 字段），
@@ -85,7 +85,7 @@ go build -o mytgfs ./cmd/mytgfs
    mytgfs web
    ```
 
-   浏览器打开提示的本地地址即可。面板里可上传下载、搜索、播放、离线保存。
+   浏览器打开提示的本地地址即可。面板里可上传、下载、搜索、播放，下载的文件落在配置的下载目录。
 
 ## 命令一览
 
@@ -123,7 +123,7 @@ go build -o mytgfs ./cmd/mytgfs
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
   `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
 - `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）。`mytgfs web` 只打印地址，不改浏览器；桌面托盘由 Wails 直接显示面板窗口。
-- `[pwa]`：默认启用可安装 PWA 与「离线保存」，单文件上限默认 256MB。
+- `[downloads]`：`dir` 是面板「下载」页的落盘目录，留空用 `data/downloads`；可用 `mytgfs config set downloads.dir <路径>` 修改。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
 
 ## 数据都放在哪
@@ -139,6 +139,7 @@ go build -o mytgfs ./cmd/mytgfs
 - **上传断点**：`data/uploads/<sha256>.json`，记录已上传的分片，中断后按内容摘要续传。
 - **待补传账本**：写进同一个索引库的 `pending` 表，见下节。
 - **会话/密钥**：`secrets/`（bot.session、user.session、session.key 等）。
+- **下载目录**：面板「下载」页落盘的位置，默认 `data/downloads`，可用 `[downloads].dir` 改到别的磁盘。
 
 ## 写入可靠性与待补传记账
 
@@ -203,7 +204,7 @@ internal/
   index/        SQLite 索引（nodes/meta/pending/pending_done）
   dirent/       节点正文编解码（name/parent/type/sha，名字限长）
   sync/         频道 pts 增量同步、全量历史重建（按父消息号拼树）
-  web/          内嵌面板、文件管理、PWA、缩略图、分片上传
+  web/          内嵌面板、文件管理、下载目录、缩略图、分片上传
   trayapp/      托盘 + 自动同步 + 按需面板
   ...           auth/channel/config/crypto/fm/queue/uploadcache/...
 web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/dist）

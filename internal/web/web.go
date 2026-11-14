@@ -12,6 +12,7 @@ import (
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
+	"mytgfs/internal/datadir"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 )
@@ -68,6 +69,8 @@ type Options struct {
 	Stats func(volume string) (files, used int64, ok bool)
 	// TempDir 是分片上传的临时目录；空则 data/tmp
 	TempDir string
+	// DownloadsDir 是下载目录；空则 data/downloads
+	DownloadsDir string
 	// Bus 用于把配置变更推给托盘；nil 时只影响当前页面
 	Bus *eventbus.Bus
 	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
@@ -121,6 +124,18 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/files/remove", handleAPIRemove(api))
 	mux.Handle("/api/files/upload", handleAPIUpload(api))
 	mux.Handle("/api/file", handleAPIFile(api))
+	dlDir := opts.DownloadsDir
+	if dlDir == "" {
+		dlDir = datadir.Path("downloads")
+	}
+	dl := newDownloadStore(dlDir, func(v string) (fm.Files, bool) {
+		if api == nil {
+			return nil, false
+		}
+		return api.lookup(v)
+	})
+	mux.Handle("/api/downloads", handleAPIDownloads(dl))
+	mux.Handle("/api/downloads/open", handleAPIDownloadsOpen(dl))
 	mux.Handle("/api/thumb", handleFileThumb(api))
 	mux.Handle("/api/cover", handleVolumeCover(api))
 	mux.Handle("/api/volumes", handleAPIVolumes(opts))

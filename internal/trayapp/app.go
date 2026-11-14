@@ -352,6 +352,8 @@ func Run(opts Options) error {
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
 			// 桌面壳里的自启开关与托盘菜单写同一处注册项
 			Autostart: autostart.Control{},
+			// 下载目录留空时由面板回落到 data/downloads
+			DownloadsDir: cfg.Downloads.Dir,
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
 				st := connText

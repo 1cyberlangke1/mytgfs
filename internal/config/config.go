@@ -13,12 +13,12 @@ import (
 
 // Config 是顶层配置。
 type Config struct {
-	Telegram Telegram `toml:"telegram"`
-	Mount    Mount    `toml:"mount"`
-	Volumes  []Volume `toml:"volumes"`
-	Web      Web      `toml:"web"`
-	PWA      PWA      `toml:"pwa"`
-	Log      Log      `toml:"log"`
+	Telegram  Telegram  `toml:"telegram"`
+	Mount     Mount     `toml:"mount"`
+	Volumes   []Volume  `toml:"volumes"`
+	Web       Web       `toml:"web"`
+	Downloads Downloads `toml:"downloads"`
+	Log       Log       `toml:"log"`
 }
 
 // Web 是本地面板配置。

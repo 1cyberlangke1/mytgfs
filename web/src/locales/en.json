@@ -49,7 +49,7 @@
     "overview": "Overview",
     "files": "Files",
     "settings": "Settings",
-    "offline": "Offline"
+    "downloads": "Downloads"
   },
   "sidebar": {
     "collapseSidebar": "Collapse sidebar",
@@ -149,11 +149,8 @@
     "actionPreview": "Preview",
     "actionDownload": "Download",
     "actionRenameMove": "Rename / Move",
-    "actionSaveOffline": "Make Offline",
-    "actionOfflineSaved": "Saved Offline",
     "actionDelete": "Delete",
     "uploadStartedToast": "Uploading: {name}",
-    "downloadStartedToast": "Downloading: {name}",
     "folderCreatedToast": "Created folder: {name}",
     "itemMovedRenamedToast": "Changes saved",
     "deletedToast": "Selected items deleted",
@@ -198,7 +195,6 @@
     "downloadConnLabel": "Download Connections",
     "uploadConcLabel": "Upload Concurrency",
     "readChunkLabel": "Read Chunk Size",
-    "pwaLimitLabel": "Offline File Size Limit (MB)",
     "saveSettingsBtn": "Save Changes",
     "savingBtn": "Saving...",
     "resetDefaultsBtn": "Reset",
@@ -216,28 +212,11 @@
     "autostartLabel": "Start on login",
     "autostartHint": "Runs in the tray right after you log in; turn it off to start it manually"
   },
-  "offline": {
-    "title": "Offline Access",
-    "installCardTitle": "Install Desktop App",
-    "installCardDesc": "Run in a standalone window with quick launch support.",
-    "installBtn": "Install App",
-    "installedBadge": "Installed",
-    "iosGuideText": "On iOS Safari, tap Share and select \"Add to Home Screen\".",
-    "cacheQuotaLabel": "Max {limit} MB per file",
-    "savedListHeading": "Offline Files",
-    "emptyOfflineTitle": "No Offline Files",
-    "emptyOfflineDesc": "Click \"Make Offline\" on any file in the Files tab to save it here.",
-    "removeOfflineBtn": "Remove",
-    "removedOfflineToast": "Removed offline file",
-    "savedOfflineToast": "Saved for offline access: {name}",
-    "exceededLimitToast": "File exceeds offline size limit ({limit} MB).",
-    "installUnavailable": "This browser has no install prompt; use the Install app menu in Chrome/Edge"
-  },
   "settingSections": {
     "web": "Panel",
     "mount": "Transfer & sync",
-    "pwa": "Offline / PWA",
-    "log": "Logging"
+    "log": "Logging",
+    "downloads": "Download directory"
   },
   "settingLabels": {
     "web.port": "Panel port",
@@ -246,10 +225,8 @@
     "mount.download_parallel": "Download connections",
     "mount.upload_parallel": "Upload chunk concurrency",
     "mount.read_chunk_mb": "Read chunk size (MB)",
-    "pwa.enabled": "Enable PWA",
-    "pwa.name": "App name",
-    "pwa.offline_max_mb": "Offline file limit (MB)",
-    "log.level": "Log level"
+    "log.level": "Log level",
+    "downloads.dir": "Download directory"
   },
   "settingHints": {
     "web.port": "0 uses default 8720; falls back to a random port if busy",
@@ -258,10 +235,8 @@
     "mount.download_parallel": "One MTProto connection cannot saturate; about 4 is best",
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",
     "mount.read_chunk_mb": "Larger means fewer requests but worse on slow links",
-    "pwa.enabled": "When off, manifest and service worker are not served",
-    "pwa.name": "Shown in the browser install prompt",
-    "pwa.offline_max_mb": "0 uses 256MB default, negative means unlimited",
-    "log.level": "debug logs every remote fetch; enable only while diagnosing"
+    "log.level": "debug logs every remote fetch; enable only while diagnosing",
+    "downloads.dir": "Empty uses data/downloads; absolute paths are allowed"
   },
   "volume": {
     "createBtn": "New volume",
@@ -333,5 +308,21 @@
     "submitLogin": "Sign in",
     "needPasswordHint": "This account uses two-step verification; enter the password and sign in again",
     "loggedIn": "Signed in as {name}"
+  },
+  "downloads": {
+    "title": "Downloads",
+    "summary": "{count} files · {size}",
+    "dirLabel": "Save to",
+    "openDirBtn": "Open in file manager",
+    "refreshBtn": "Refresh",
+    "emptyTitle": "Nothing downloaded yet",
+    "emptyDesc": "Use Download in the file list and the file lands in the directory above.",
+    "removeBtn": "Delete local copy",
+    "confirmDelete": "Delete this copy?",
+    "confirmDeleteBtn": "Delete",
+    "cancelBtn": "Cancel",
+    "savedToast": "Downloaded: {name}",
+    "removedToast": "Local copy deleted",
+    "openFailedToast": "Failed to open the downloads directory"
   }
 }

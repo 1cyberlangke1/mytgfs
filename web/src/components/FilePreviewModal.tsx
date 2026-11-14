@@ -23,8 +23,6 @@ interface FilePreviewModalProps {
   locale: Locale;
   onClose: () => void;
   onDownload: (file: FileItem) => void;
-  onSaveOffline: (file: FileItem) => void;
-  isOfflineSaved: boolean;
 }
 
 export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
@@ -34,8 +32,6 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   locale,
   onClose,
   onDownload,
-  onSaveOffline,
-  isOfflineSaved,
 }) => {
   const [imgZoomed, setImgZoomed] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -306,21 +302,6 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                           >
                             <Download className="w-4 h-4" />
                             <span>{t.files.actionDownload}</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="lg"
-                            onClick={() => onSaveOffline(file)}
-                            disabled={isOfflineSaved}
-                            className="w-full"
-                          >
-                            <HardDrive className="w-4 h-4" />
-                            <span>
-                              {isOfflineSaved
-                                ? t.files.actionOfflineSaved
-                                : t.files.actionSaveOffline}
-                            </span>
                           </Button>
                         </div>
                       )}

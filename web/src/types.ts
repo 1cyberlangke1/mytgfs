@@ -65,27 +65,22 @@ export interface AppSettings {
   downloadConnections: number;
   uploadConcurrency: number;
   readChunkSizeMb: number;
-  pwaOfflineMaxFileMb: number;
   /** 服务端 config.Schema() 返回的可编辑键，面板据此动态渲染 */
   schema: AppSettingDef[];
   /** 配置文件里的原始字符串值，键为 section.key */
   values: Record<string, string>;
 }
 
-export interface OfflineSavedFile {
-  fileId: string;
-  volumeId: string;
+export interface DownloadItem {
   name: string;
   size: number;
-  category: FileCategory;
-  savedAt: string;
-  thumbnailUrl?: string;
-  previewUrl?: string;
+  /** RFC3339 文本，按本地时区展示 */
+  mod: string;
 }
 
 export type SortField = 'name' | 'size' | 'updatedAt';
 export type SortOrder = 'asc' | 'desc';
-export type NavTab = 'overview' | 'files' | 'settings' | 'offline';
+export type NavTab = 'overview' | 'files' | 'settings' | 'downloads';
 // 语言包目录里的文件名即 Locale；新增语言只丢 JSON，不改类型
 export type Locale = string;
 export type ThemeMode = 'light' | 'dark';
@@ -98,5 +93,4 @@ export type ConfigErrorCode =
   | 'INVALID_DL_CONN'
   | 'INVALID_UL_CONC'
   | 'INVALID_CHUNK_SIZE'
-  | 'INVALID_BOOL'
-  | 'INVALID_PWA_LIMIT';
+  | 'INVALID_BOOL';

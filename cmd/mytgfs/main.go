@@ -427,7 +427,7 @@ func runWeb(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// PWA 资源由前端构建产物内嵌，配置只影响离线保存上限
+	// 面板资源由前端构建产物内嵌，启停状态全部走 web.Options
 	serve := func(opts web.Options) error {
 		return web.ServeWith(ctx, addr, cfgPath, opts)
 	}
@@ -611,6 +611,8 @@ func runWeb(args []string) {
 			Bus: bus,
 			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
+			// 下载目录留空时由面板回落到 data/downloads
+			DownloadsDir: cfg.Downloads.Dir,
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil

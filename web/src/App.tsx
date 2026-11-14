@@ -5,25 +5,25 @@ import {
   FolderTree,
   Globe,
   HardDrive,
+  HardDriveDownload,
   LayoutDashboard,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Sliders,
   Sun,
-  WifiOff,
   X,
 } from 'lucide-react';
 import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 import {
   AppSettings,
   ConnectionStatus,
+  DownloadItem,
   FileCategory,
   FileItem,
   IndexStatus,
   Locale,
   NavTab,
-  OfflineSavedFile,
   ThemeMode,
   TransferTask,
   VolumeInfo,
@@ -44,26 +44,27 @@ import {
   ApiState,
   ApiTransfer,
   attachVolume,
-  cacheFile,
   createVolume,
   deleteVolume,
-  fileURL,
+  downloadToDir,
+  getDownloads,
   getSettings,
   getState,
   listFiles,
   mkdir,
   moveItems,
+  openDownloads,
+  removeDownload,
   removeItems,
   saveSettings,
   triggerSync,
-  uncacheFile,
   uploadFile,
 } from './api';
 import { OverviewView } from './components/OverviewView';
 import { FilesView } from './components/FilesView';
 import { SettingsView } from './components/SettingsView';
 import { AccountCard } from './components/AccountCard';
-import { OfflineView } from './components/OfflineView';
+import { DownloadsView } from './components/DownloadsView';
 import { FilePreviewModal } from './components/FilePreviewModal';
 import { BrandEmblemSvg } from './components/VisualAssets';
 import {
@@ -80,7 +81,6 @@ const STORAGE_KEYS = {
   tab: 'mytgfs_active_tab_v1',
   locale: 'mytgfs_locale_v1',
   theme: 'mytgfs_theme_v1',
-  offline: 'mytgfs_offline_v1',
   activeVol: 'mytgfs_active_vol_v1',
 };
 
@@ -108,7 +108,6 @@ const EMPTY_SETTINGS: AppSettings = {
   downloadConnections: 4,
   uploadConcurrency: 4,
   readChunkSizeMb: 8,
-  pwaOfflineMaxFileMb: 256,
   schema: [],
   values: {},
 };
@@ -202,9 +201,9 @@ export default function App() {
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
   const [serverQueue, setServerQueue] = useState<TransferTask[]>([]);
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
-  const [offlineFiles, setOfflineFiles] = useState<OfflineSavedFile[]>(() =>
-    loadFromStorage<OfflineSavedFile[]>(STORAGE_KEYS.offline, [])
-  );
+  // 下载目录列表由服务端扫描磁盘得到，页面只负责展示与刷新
+  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [downloadsDir, setDownloadsDir] = useState('');
 
   const [activeVolumeId, setActiveVolumeId] = useState<string>(() =>
     loadFromStorage<string>(STORAGE_KEYS.activeVol, '')
@@ -236,9 +235,6 @@ export default function App() {
   const localeMeta = getLocaleMeta(locale);
   const summary = computeOverviewSummary(volumes, files);
   const viewSpring = useInterruptibleViewSpring(activeTab);
-  // 离线缓存依赖 Service Worker：桌面壳内没有 SW，整块功能不展示，避免假按钮
-  const offlineAvailable =
-    typeof window !== 'undefined' && !('_wails' in window) && 'caches' in window;
 
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
   const uploadAbort = useRef(new Map<string, AbortController>());
@@ -363,9 +359,24 @@ export default function App() {
       downloadConnections: num('mount.download_parallel', 4),
       uploadConcurrency: num('mount.upload_parallel', 4),
       readChunkSizeMb: num('mount.read_chunk_mb', 8),
-      pwaOfflineMaxFileMb: num('pwa.offline_max_mb', 256),
     }));
   }, []);
+
+  // reloadDownloads 读取下载目录；目录不可用时保留旧列表，不打断页面
+  const reloadDownloads = useCallback(async () => {
+    try {
+      const res = await getDownloads();
+      setDownloads(res.files ?? []);
+      setDownloadsDir(res.dir ?? '');
+    } catch {
+      // 卷后端尚未就绪时接口返回 501，等切页或下载完成后会再拉
+    }
+  }, []);
+
+  // 切到下载页时拉一次，避免在其它页面反复扫磁盘
+  useEffect(() => {
+    if (activeTab === 'downloads') void reloadDownloads();
+  }, [activeTab, reloadDownloads]);
 
   // 首屏：设置 + 状态；卷挂载是异步的，卷名到达前每隔 1.5s 重试一次
   useEffect(() => {
@@ -475,10 +486,6 @@ export default function App() {
       i18next.changeLanguage(locale).catch(() => {});
     }
   }, [locale]);
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEYS.offline, JSON.stringify(offlineFiles));
-  }, [offlineFiles]);
 
   useEffect(() => {
     if (activeVolumeId) window.localStorage.setItem(STORAGE_KEYS.activeVol, JSON.stringify(activeVolumeId));
@@ -640,68 +647,39 @@ export default function App() {
     const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
     if (!vol || itemIds.length === 0) return;
     removeItems(vol, itemIds)
-      .then(() => {
-        setOfflineFiles((prev) => prev.filter((off) => !itemIds.includes(off.fileId)));
-        return reloadFiles([vol]);
-      })
+      .then(() => reloadFiles([vol]))
       .then(() => pushToast(t.files.deletedToast, 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
+  // handleDownloadFile 让服务端把文件写进下载目录，再由页面刷新列表
   const handleDownloadFile = (file: FileItem) => {
-    const url = fileURL(file.volumeId, file.id);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    pushToast(interpolate(t.files.downloadStartedToast, { name: file.name }, locale), 'success');
-  };
-
-  const handleSaveOffline = (file: FileItem) => {
-    const maxBytes = settings.pwaOfflineMaxFileMb * 1024 * 1024;
-    if (maxBytes > 0 && file.size > maxBytes) {
-      pushToast(
-        interpolate(t.offline.exceededLimitToast, { limit: settings.pwaOfflineMaxFileMb }, locale),
-        'error'
-      );
-      return;
-    }
-    cacheFile(fileURL(file.volumeId, file.id))
-      .then(() => {
-        setOfflineFiles((prev) => {
-          if (prev.some((o) => o.fileId === file.id)) return prev;
-          return [
-            {
-              fileId: file.id,
-              volumeId: file.volumeId,
-              name: file.name,
-              size: file.size,
-              category: file.category,
-              savedAt: new Date().toISOString(),
-              thumbnailUrl: file.thumbnailUrl,
-              previewUrl: file.previewUrl,
-            },
-            ...prev,
-          ];
-        });
-        pushToast(interpolate(t.offline.savedOfflineToast, { name: file.name }, locale), 'success');
+    downloadToDir(file.volumeId, file.id)
+      .then((res) => {
+        setDownloadsDir(res.dir);
+        return reloadDownloads();
       })
+      .then(() =>
+        pushToast(interpolate(t.downloads.savedToast, { name: file.name }, locale), 'success')
+      )
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
-  const handleRemoveOfflineFile = (fileId: string) => {
-    const saved = offlineFiles.find((o) => o.fileId === fileId);
-    const done = () => {
-      setOfflineFiles((prev) => prev.filter((o) => o.fileId !== fileId));
-      pushToast(t.offline.removedOfflineToast, 'success');
-    };
-    if (!saved) {
-      done();
-      return;
-    }
-    uncacheFile(fileURL(saved.volumeId, saved.fileId)).then(done).catch(done);
+  // handleRemoveDownload 只删本地副本，云端文件不受影响
+  const handleRemoveDownload = (name: string) =>
+    removeDownload(name)
+      .then(() => reloadDownloads())
+      .then(() => pushToast(t.downloads.removedToast, 'success'))
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+
+  // handleOpenDownloads 用系统文件管理器打开下载目录
+  const handleOpenDownloads = () => {
+    openDownloads()
+      .then(() => undefined)
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        pushToast(`${t.downloads.openFailedToast}：${msg}`, 'error');
+      });
   };
 
   // handleSaveSettings 只提交卡片里的键，成功后本地合并，不再整页重拉
@@ -780,7 +758,7 @@ export default function App() {
     { id: 'overview', label: t.nav.overview, icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
     { id: 'files', label: t.nav.files, icon: <FolderTree className="w-4 h-4 shrink-0" /> },
     { id: 'settings', label: t.nav.settings, icon: <Sliders className="w-4 h-4 shrink-0" /> },
-    { id: 'offline', label: t.nav.offline, icon: <WifiOff className="w-4 h-4 shrink-0" /> },
+    { id: 'downloads', label: t.nav.downloads, icon: <HardDriveDownload className="w-4 h-4 shrink-0" /> },
   ];
 
   return (
@@ -970,13 +948,13 @@ export default function App() {
                           {formatNumber(summary.totalFiles, locale)}
                         </span>
                       )}
-                      {!sidebarCollapsed && item.id === 'offline' && (
+                      {!sidebarCollapsed && item.id === 'downloads' && (
                         <span
                           className={`font-mono text-[11px] tabular-nums shrink-0 ${
                             isActive ? 'text-white/90' : 'text-zinc-400 dark:text-zinc-500'
                           }`}
                         >
-                          {formatNumber(offlineFiles.length, locale)}
+                          {formatNumber(downloads.length, locale)}
                         </span>
                       )}
                     </motion.a>
@@ -1185,7 +1163,6 @@ export default function App() {
                 currentFolderId={currentFolderId}
                 onNavigateFolder={setCurrentFolderId}
                 files={files}
-                offlineFiles={offlineFiles}
                 connectionStatus={connectionStatus}
                 onUploadFiles={handleUploadFiles}
                 onCreateFolder={handleCreateFolder}
@@ -1193,7 +1170,6 @@ export default function App() {
                 onBatchMoveItems={handleBatchMoveItems}
                 onDeleteItems={handleDeleteItems}
                 onDownloadFile={handleDownloadFile}
-                onSaveOffline={handleSaveOffline}
                 onPreviewFile={setPreviewFile}
                 canCreateVolume={caps.createVolume}
                 canDeleteVolume={caps.deleteVolume}
@@ -1221,15 +1197,15 @@ export default function App() {
               </div>
             )}
 
-            {activeTab === 'offline' && (
-              <OfflineView
+            {activeTab === 'downloads' && (
+              <DownloadsView
                 t={t}
                 locale={locale}
-                settings={settings}
-                offlineFiles={offlineFiles}
-                allFiles={files}
-                onRemoveOfflineFile={handleRemoveOfflineFile}
-                onPreviewOfflineFile={setPreviewFile}
+                dir={downloadsDir}
+                files={downloads}
+                onRefresh={() => void reloadDownloads()}
+                onOpenDir={handleOpenDownloads}
+                onRemove={handleRemoveDownload}
               />
             )}
           </motion.div>
@@ -1248,8 +1224,8 @@ export default function App() {
               const badgeCount =
                 item.id === 'files'
                   ? summary.totalFiles
-                  : item.id === 'offline'
-                  ? offlineFiles.length
+                  : item.id === 'downloads'
+                  ? downloads.length
                   : null;
               return (
                 <motion.a
@@ -1299,10 +1275,6 @@ export default function App() {
         locale={locale}
         onClose={() => setPreviewFile(null)}
         onDownload={handleDownloadFile}
-        onSaveOffline={handleSaveOffline}
-        isOfflineSaved={
-          previewFile ? offlineFiles.some((o) => o.fileId === previewFile.id) : false
-        }
       />
 
       {/* iOS Dynamic Toast Notification Stack */}

@@ -98,7 +98,7 @@ func TestSetKeyValidates(t *testing.T) {
 	cases := [][2]string{
 		{"web.nope", "1"},
 		{"web.port", "abc"},
-		{"pwa.enabled", "maybe"},
+		{"mount.sync_seconds", "abc"},
 	}
 	for _, c := range cases {
 		if err := SetKey(p, c[0], c[1]); err == nil {
@@ -110,26 +110,9 @@ func TestSetKeyValidates(t *testing.T) {
 	}
 }
 
-// TestSetKeyBoolNormalization 布尔输入统一写成 true/false。
-//
-// 输入：on / off / 1 / 0
-// 输出：文件里的字面量
-// 预期：都归一化为 TOML 布尔值
-func TestSetKeyBoolNormalization(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.toml")
-	for in, want := range map[string]string{"on": "true", "off": "false", "1": "true", "0": "false"} {
-		if err := SetKey(p, "pwa.enabled", in); err != nil {
-			t.Fatalf("SetKey(%q): %v", in, err)
-		}
-		if got, ok, _ := GetKey(p, "pwa.enabled"); !ok || got != want {
-			t.Errorf("输入 %q 得到 %q ok=%v，期望 %q", in, got, ok, want)
-		}
-	}
-}
-
 // TestSetKeyRangeAndEnum 越界与枚举外的值必须被拒绝且给出原因。
 //
-// 输入：端口 70000、上传并发 99、日志级别 trace、PWA 名字超长
+// 输入：端口 70000、上传并发 99、日志级别 trace
 // 输出：error，文件保持原样
 // 预期：CLI 与面板共用同一份 validateValue，非法值一条都不落盘
 func TestSetKeyRangeAndEnum(t *testing.T) {
@@ -141,7 +124,6 @@ func TestSetKeyRangeAndEnum(t *testing.T) {
 		{"web.port", "70000"},
 		{"mount.upload_parallel", "99"},
 		{"log.level", "trace"},
-		{"pwa.name", strings.Repeat("x", 65)},
 	}
 	for _, c := range cases {
 		err := SetKey(p, c[0], c[1])
@@ -157,8 +139,8 @@ func TestSetKeyRangeAndEnum(t *testing.T) {
 		t.Errorf("非法写入改动了文件：\n%s", got)
 	}
 	// 合法值仍然能写
-	if err := SetKey(p, "pwa.name", "mytgfs"); err != nil {
-		t.Fatalf("合法名字被拒: %v", err)
+	if err := SetKey(p, "downloads.dir", "D:/dl"); err != nil {
+		t.Fatalf("合法下载目录被拒: %v", err)
 	}
 	if err := SetKey(p, "log.level", "debug"); err != nil {
 		t.Fatalf("合法日志级别被拒: %v", err)

@@ -31,14 +31,9 @@ upload_parallel = 4
 # 面板端口：0 = 默认 8720；被占用时自动退回随机端口
 port = 8720
 
-[pwa]
-# 可安装 + 离线：整段省略即启用下面这套默认配置
-# 显式关掉（不输出 manifest、不注册 service worker）
-# enabled = false
-# 安装到桌面/开始菜单时显示的名字
-name = "mytgfs"
-# 单个文件允许「离线保存」的上限（MB）：0 = 默认 256，负数 = 不限制
-offline_max_mb = 256
+[downloads]
+# 面板「下载」页把卷内文件写到这里；留空则用 data/downloads
+dir = ""
 
 [log]
 # 日志等级：debug / info / warn / error

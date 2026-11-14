@@ -49,7 +49,7 @@
     "overview": "概览",
     "files": "文件",
     "settings": "设置",
-    "offline": "离线"
+    "downloads": "下载"
   },
   "sidebar": {
     "collapseSidebar": "收起侧边栏",
@@ -149,11 +149,8 @@
     "actionPreview": "预览",
     "actionDownload": "下载",
     "actionRenameMove": "重命名 / 移动",
-    "actionSaveOffline": "设为离线可用",
-    "actionOfflineSaved": "已离线保存",
     "actionDelete": "删除",
     "uploadStartedToast": "已开始上传：{name}",
-    "downloadStartedToast": "已开始下载：{name}",
     "folderCreatedToast": "已创建文件夹：{name}",
     "itemMovedRenamedToast": "修改已保存",
     "deletedToast": "已删除所选项目",
@@ -198,7 +195,6 @@
     "downloadConnLabel": "下载连接数",
     "uploadConcLabel": "上传并发数",
     "readChunkLabel": "读取分块大小",
-    "pwaLimitLabel": "离线单文件上限 (MB)",
     "saveSettingsBtn": "保存设置",
     "savingBtn": "保存中...",
     "resetDefaultsBtn": "恢复默认",
@@ -216,28 +212,11 @@
     "autostartLabel": "开机自启",
     "autostartHint": "登录系统后自动在托盘运行，面板随托盘一起可打开；关掉它就不随系统启动"
   },
-  "offline": {
-    "title": "离线访问",
-    "installCardTitle": "安装到桌面",
-    "installCardDesc": "作为独立桌面应用窗口运行，支持快速启动。",
-    "installBtn": "安装应用",
-    "installedBadge": "已安装",
-    "iosGuideText": "iOS Safari 请点击底部“分享”并选择“添加到主屏幕”。",
-    "cacheQuotaLabel": "单文件上限 {limit} MB",
-    "savedListHeading": "已离线文件",
-    "emptyOfflineTitle": "暂无离线文件",
-    "emptyOfflineDesc": "在“文件”列表中点击“设为离线可用”，即可将文件保存在本地。",
-    "removeOfflineBtn": "移除",
-    "removedOfflineToast": "已移除离线文件",
-    "savedOfflineToast": "已保存为离线可用：{name}",
-    "exceededLimitToast": "文件超过离线单文件上限 ({limit} MB)，可在设置中调整。",
-    "installUnavailable": "当前浏览器不支持一键安装，请用 Chrome/Edge 的“安装应用”菜单"
-  },
   "settingSections": {
     "web": "面板",
     "mount": "传输与同步",
-    "pwa": "离线 / PWA",
-    "log": "日志"
+    "log": "日志",
+    "downloads": "下载目录"
   },
   "settingLabels": {
     "web.port": "面板端口",
@@ -246,10 +225,8 @@
     "mount.download_parallel": "下载连接数",
     "mount.upload_parallel": "上传并发分片",
     "mount.read_chunk_mb": "读取分片大小（MB）",
-    "pwa.enabled": "启用 PWA",
-    "pwa.name": "应用名称",
-    "pwa.offline_max_mb": "离线单文件上限（MB）",
-    "log.level": "日志级别"
+    "log.level": "日志级别",
+    "downloads.dir": "下载目录"
   },
   "settingHints": {
     "web.port": "0 表示用默认 8720；被占用会自动换端口",
@@ -258,10 +235,8 @@
     "mount.download_parallel": "单条 MTProto 连接吃不满带宽，4 左右最佳",
     "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",
     "mount.read_chunk_mb": "越大请求越少，但对慢网络不友好",
-    "pwa.enabled": "关闭后不提供 manifest 与 service worker",
-    "pwa.name": "显示在浏览器安装提示里",
-    "pwa.offline_max_mb": "0 用默认 256MB，负数表示不限",
-    "log.level": "debug 会记录每次回源，排查问题时再开"
+    "log.level": "debug 会记录每次回源，排查问题时再开",
+    "downloads.dir": "留空则用 data/downloads；支持绝对路径"
   },
   "volume": {
     "createBtn": "新建卷",
@@ -333,5 +308,21 @@
     "submitLogin": "登录",
     "needPasswordHint": "这个账号开启了两步验证，请填密码后再点登录",
     "loggedIn": "已登录 {name}"
+  },
+  "downloads": {
+    "title": "下载",
+    "summary": "{count} 个文件 · 共 {size}",
+    "dirLabel": "保存目录",
+    "openDirBtn": "在资源管理器打开",
+    "refreshBtn": "刷新",
+    "emptyTitle": "还没有下载的文件",
+    "emptyDesc": "在文件列表里点击下载，文件会保存到上面的目录。",
+    "removeBtn": "删除本地文件",
+    "confirmDelete": "确定删除？",
+    "confirmDeleteBtn": "删除",
+    "cancelBtn": "取消",
+    "savedToast": "已下载：{name}",
+    "removedToast": "已删除本地文件",
+    "openFailedToast": "打开下载目录失败"
   }
 }

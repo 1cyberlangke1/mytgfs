@@ -34,9 +34,7 @@ type setting struct {
 // settings 是允许通过命令行修改的键（"section.key" => 描述）。
 var settings = map[string]setting{
 	"web.port":                {"web", "port", kindInt},
-	"pwa.enabled":             {"pwa", "enabled", kindBool},
-	"pwa.name":                {"pwa", "name", kindString},
-	"pwa.offline_max_mb":      {"pwa", "offline_max_mb", kindInt},
+	"downloads.dir":           {"downloads", "dir", kindString},
 	"mount.sync_seconds":      {"mount", "sync_seconds", kindInt},
 	"mount.download_parallel": {"mount", "download_parallel", kindInt},
 	"mount.read_chunk_mb":     {"mount", "read_chunk_mb", kindInt},
@@ -62,7 +60,6 @@ var settingLimits = map[string]struct{ min, max int }{
 	"mount.download_parallel": {0, 8},
 	"mount.upload_parallel":   {0, 16},
 	"mount.read_chunk_mb":     {0, 64},
-	"pwa.offline_max_mb":      {-1, 1048576},
 }
 
 // settingOptions 是枚举键的合法取值。
@@ -94,12 +91,6 @@ func validateValue(key, raw string) error {
 			return nil
 		}
 		return fmt.Errorf(i18n.T("err.config_enum"), key, strings.Join(opts, " / "), v)
-	}
-	switch key {
-	case "pwa.name":
-		if len([]rune(v)) > 64 {
-			return fmt.Errorf(i18n.T("err.config_too_long"), key, 64)
-		}
 	}
 	return nil
 }
