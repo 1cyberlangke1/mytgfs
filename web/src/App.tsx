@@ -24,7 +24,6 @@ import {
   DownloadTask,
   FileCategory,
   FileItem,
-  IndexStatus,
   Locale,
   NavTab,
   ThemeMode,
@@ -36,6 +35,7 @@ import { subscribePush } from './events';
 import {
   DICTIONARY,
   LOCALE_OPTIONS,
+  Translations,
   formatNumber,
   formatPercent,
   getLocaleMeta,
@@ -72,7 +72,6 @@ import {
   saveSettings,
   rebuildVolume,
   setCover,
-  triggerSync,
   uploadFile,
   uploadPoster,
 } from './api';
@@ -276,7 +275,7 @@ export default function App() {
     rebuild: false,
   });
 
-  const t = DICTIONARY[locale] || DICTIONARY.zh;
+  const t: Translations = DICTIONARY[locale] ?? DICTIONARY.zh!;
   const localeMeta = getLocaleMeta(locale);
   const summary = computeOverviewSummary(volumes, files);
   const problemList = useMemo(() => Object.values(problems), [problems]);
@@ -313,7 +312,7 @@ export default function App() {
 
   const cycleNextLocale = () => {
     const idx = LOCALE_OPTIONS.findIndex((o) => o.id === locale);
-    const next = LOCALE_OPTIONS[(idx + 1) % LOCALE_OPTIONS.length];
+    const next = LOCALE_OPTIONS[(idx + 1) % LOCALE_OPTIONS.length]!;
     setLocale(next.id);
   };
 
@@ -732,11 +731,13 @@ export default function App() {
     // 最新的任务排在最上面，与操作队列显示顺序一致
     setUploadTasks((prev) => [...plan, ...prev]);
     pushToast(
-      interpolate(t.files.uploadStartedToast, { name: plan[0].fileName }, locale),
+      interpolate(t.files.uploadStartedToast, { name: plan[0]?.fileName ?? '' }, locale),
       'success'
     );
-    for (let i = 0; i < plan.length; i++) {
-      void runUpload(plan[i], incoming[i], volumeId, parentId, rels[i] ?? '');
+    for (const [i, task] of plan.entries()) {
+      const source = incoming[i];
+      if (!source) continue;
+      void runUpload(task, source, volumeId, parentId, rels[i] ?? '');
     }
   };
 
@@ -1168,7 +1169,7 @@ export default function App() {
                     {formatBytes(summary.totalBytes, 1, locale)}
                   </span>
                 </div>
-                {summary.perVolume.map(({ volume, totalBytes, sharePct }) => {
+                {summary.perVolume.map(({ volume, totalBytes, sharePct = 0 }) => {
                   const isCurrentVol = activeVolumeId === volume.id && activeTab === 'files';
                   const visualWidth = Math.min(100, Math.max(6, sharePct));
                   return (

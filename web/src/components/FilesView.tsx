@@ -28,7 +28,6 @@ import {
   ConnectionStatus,
   FileCategory,
   FileItem,
-  IndexStatus,
   Locale,
   SortField,
   SortOrder,
@@ -46,7 +45,6 @@ import {
 import {
   Translations,
   formatDateTime,
-  formatPercent,
   formatPlural,
   interpolate,
 } from '../utils/i18n';
@@ -377,6 +375,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
           src={item.thumbnailUrl}
           alt={item.name}
           referrerPolicy="no-referrer"
+          loading="lazy"
+          decoding="async"
           className="w-11 h-9 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800 shrink-0"
         />
       );
@@ -802,6 +802,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
                           src={item.thumbnailUrl}
                           alt={item.name}
                           referrerPolicy="no-referrer"
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                         />
                       ) : (

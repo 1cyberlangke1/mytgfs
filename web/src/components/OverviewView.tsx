@@ -194,7 +194,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 min-[520px]:grid-cols-2 xl:grid-cols-3 gap-4">
-            {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes, sharePct }) => {
+            {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes, sharePct = 0 }) => {
               const isSelected = volume.id === activeVolumeId;
 
               // 卷间占比来自 summary（最大余数法），文件类型占比留在卷内

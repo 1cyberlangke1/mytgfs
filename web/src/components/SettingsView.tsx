@@ -128,7 +128,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setDraft((prev) => {
       const next = { ...prev };
       for (const k of Object.keys(incoming)) {
-        if (prev[k] === savedRef.current[k]) next[k] = incoming[k];
+        const value = incoming[k];
+        if (prev[k] === savedRef.current[k] && value !== undefined) next[k] = value;
       }
       return next;
     });

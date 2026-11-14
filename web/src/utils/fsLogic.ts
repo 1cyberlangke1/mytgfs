@@ -1,6 +1,4 @@
 import {
-  AppSettings,
-  ConfigErrorCode,
   FileCategory,
   FileItem,
   Locale,
@@ -333,7 +331,9 @@ export function apportionPercents(parts: number[]): number[] {
     .sort((a, b) => b.frac - a.frac || a.i - b.i);
   const out = base.slice();
   for (let k = 0; k < order.length && left > 0; k += 1) {
-    out[order[k].i] += 1;
+    const item = order[k];
+    if (!item) break;
+    out[item.i] = (out[item.i] ?? 0) + 1;
     left -= 1;
   }
   return out;

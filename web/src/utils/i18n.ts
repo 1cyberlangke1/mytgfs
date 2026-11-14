@@ -1,6 +1,6 @@
 import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import { ConfigErrorCode, FileCategory, Locale } from '../types';
+import { Locale } from '../types';
 import zhPack from '../locales/zh.json';
 
 export interface LocaleMeta {
@@ -153,7 +153,7 @@ export const LOCALE_OPTIONS: LocaleMeta[] = Object.entries(DICTIONARY)
   .sort((a, b) => (a.id === 'zh' ? -1 : b.id === 'zh' ? 1 : a.id.localeCompare(b.id)));
 
 export function getLocaleMeta(locale: Locale): LocaleMeta {
-  return LOCALE_OPTIONS.find((o) => o.id === locale) || LOCALE_OPTIONS[0];
+  return LOCALE_OPTIONS.find((o) => o.id === locale) ?? LOCALE_OPTIONS[0]!;
 }
 
 const i18nResources = Object.fromEntries(
