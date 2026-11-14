@@ -173,6 +173,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
 
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
@@ -440,6 +441,37 @@ export const FilesView: React.FC<FilesViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true);
+              try {
+                await onRefresh();
+              } finally {
+                setRefreshing(false);
+              }
+            }}
+            aria-label={t.files.refreshBtn}
+            title={t.files.refreshBtn}
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
+          {onRebuildVolume && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              disabled={rebuilding || !activeVolumeId}
+              onClick={() => setShowRebuildConfirm(true)}
+              aria-label={t.files.rebuildBtn}
+              title={t.files.rebuildBtn}
+            >
+              <Database className={`w-4 h-4 ${rebuilding ? 'animate-pulse' : ''}`} />
+            </Button>
+          )}
           {canCreateVolume && (
             <Button
               type="button"
@@ -645,44 +677,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
               >
                 <FolderPlus className="w-4 h-4" />
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                disabled={refreshing}
-                onClick={async () => {
-                  setRefreshing(true);
-                  try {
-                    await onRefresh();
-                  } finally {
-                    setRefreshing(false);
-                  }
-                }}
-                aria-label={t.files.refreshBtn}
-                title={t.files.refreshBtn}
-              >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              </Button>
-              {onRebuildVolume && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  disabled={rebuilding || !activeVolumeId}
-                  onClick={async () => {
-                    setRebuilding(true);
-                    try {
-                      await onRebuildVolume(activeVolumeId);
-                    } finally {
-                      setRebuilding(false);
-                    }
-                  }}
-                  aria-label={t.files.rebuildBtn}
-                  title={t.files.rebuildBtn}
-                >
-                  <Database className={`w-4 h-4 ${rebuilding ? 'animate-pulse' : ''}`} />
-                </Button>
-              )}
             </div>
 
 
@@ -1594,6 +1588,54 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 }}
               >
                 {t.volume.deleteConfirm}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 9: Rebuild Index Confirmation */}
+      {showRebuildConfirm && onRebuildVolume && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-rebuild-title"
+        >
+          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+            <h3
+              id="modal-rebuild-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.files.rebuildConfirmTitle}
+            </h3>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              {t.files.rebuildConfirmDesc}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={rebuilding}
+                onClick={() => setShowRebuildConfirm(false)}
+              >
+                {t.files.cancel}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={rebuilding}
+                onClick={async () => {
+                  setRebuilding(true);
+                  try {
+                    await onRebuildVolume(activeVolumeId);
+                    setShowRebuildConfirm(false);
+                  } finally {
+                    setRebuilding(false);
+                  }
+                }}
+              >
+                {t.files.rebuildConfirm}
               </Button>
             </div>
           </div>
