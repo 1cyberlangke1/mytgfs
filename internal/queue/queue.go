@@ -49,7 +49,6 @@ const (
 	keepFinished = 20
 	// maxPending 是排队中 + 执行中的任务上限：防止一次批量操作把表撑爆。
 	maxPending     = 2000
-	waitPoll       = 50 * time.Millisecond
 	defaultWorkers = 4
 	minBackoff     = time.Second
 	maxBackoff     = time.Minute
@@ -101,7 +100,10 @@ type Queue struct {
 	// onChange 可选：任务入队、开始、结束时各回调一次，供上层推送状态
 	onChange func()
 
-	wake     chan struct{}
+	wake []chan struct{}
+	// waitMu/waiters 保护任务完成通知：finish 关闭对应通道，Wait 不再轮询
+	waitMu   sync.Mutex
+	waiters  map[int64][]chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -150,7 +152,7 @@ func Open(db *sql.DB, workers int, onChange func()) (*Queue, error) {
 	return &Queue{
 		db:       db,
 		workers:  workers,
-		wake:     make(chan struct{}, 1),
+		waiters:  make(map[int64][]chan struct{}),
 		onChange: onChange,
 	}, nil
 }
@@ -197,7 +199,7 @@ func (q *Queue) Start(ctx context.Context) {
 
 	for range q.workers {
 		q.wg.Add(1)
-		go q.loop(runCtx)
+		go q.loop(runCtx, make(chan struct{}, 1))
 	}
 	q.signal()
 }
@@ -340,31 +342,87 @@ func (q *Queue) ClearFinished(ctx context.Context) (int64, error) {
 // 输入：ctx 取消；id 任务 ID
 // 输出：done 为 nil；failed 返回任务错误；ctx 取消返回 ctx.Err()
 // 预期：任务会被持久化重试，调用方取消只影响本次等待，不影响任务本身
-func (q *Queue) Wait(ctx context.Context, id int64) error {
-	ticker := time.NewTicker(waitPoll)
-	defer ticker.Stop()
-	for {
-		var state, msg string
-		err := q.db.QueryRowContext(ctx,
-			`SELECT state, err FROM jobs WHERE id = ?`, id).Scan(&state, &msg)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
-			return err
-		}
-		switch state {
-		case stateDone:
-			return nil
-		case stateFailed:
-			return errors.New(msg)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
+// notifyDone 注册任务完成通知；finish 时关闭通道。
+//
+// 输入：id 任务 ID
+// 输出：通知通道
+// 预期：通道只关闭一次；未注册的 id（已被清理）由 Wait 的首查处理
+func (q *Queue) notifyDone(id int64) chan struct{} {
+	q.waitMu.Lock()
+	defer q.waitMu.Unlock()
+	ch := make(chan struct{})
+	q.waiters[id] = append(q.waiters[id], ch)
+	return ch
+}
+
+func (q *Queue) notifyDoneClose(id int64) {
+	q.waitMu.Lock()
+	defer q.waitMu.Unlock()
+	for _, ch := range q.waiters[id] {
+		close(ch)
 	}
+	delete(q.waiters, id)
+}
+
+// Wait 等待任务到达终态（done/failed）。
+//
+// 输入：ctx 取消；id 任务 ID
+// 输出：done 为 nil；failed 返回任务错误；ctx 取消返回 ctx.Err()
+// 预期：finish 关闭通知通道后立刻返回，无轮询；任务记录已被清理（no rows）视为完成
+func (q *Queue) Wait(ctx context.Context, id int64) error {
+	// 先查一次当前状态：任务可能早已完成或记录已被清理
+	var state, msg string
+	err := q.db.QueryRowContext(ctx,
+		`SELECT state, err FROM jobs WHERE id = ?`, id).Scan(&state, &msg)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	switch state {
+	case stateDone:
+		return nil
+	case stateFailed:
+		return errors.New(msg)
+	}
+
+	ch := q.notifyDone(id)
+	// 注册后再查一次：finish 可能恰好发生在首查与注册之间
+	err = q.db.QueryRowContext(ctx,
+		`SELECT state, err FROM jobs WHERE id = ?`, id).Scan(&state, &msg)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	switch state {
+	case stateDone:
+		return nil
+	case stateFailed:
+		return errors.New(msg)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ch:
+	}
+
+	// 通道关闭后复读终态，避免与 finish 的清理竞态
+	err = q.db.QueryRowContext(ctx,
+		`SELECT state, err FROM jobs WHERE id = ?`, id).Scan(&state, &msg)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if state == stateFailed {
+		return errors.New(msg)
+	}
+	return nil
 }
 
 // Snapshot 返回最近的任务快照，最新的排在最前。
@@ -396,17 +454,41 @@ func (q *Queue) Pending() int {
 	return n
 }
 
-// signal 非阻塞唤醒一个工作协程。
+// signal 唤醒所有空闲工作协程。
+//
+// 输入：无
+// 输出：无
+// 预期：每个 worker 有自己的 wake 通道，全部非阻塞唤醒；容量 1 保证连发不堆积
 func (q *Queue) signal() {
-	select {
-	case q.wake <- struct{}{}:
-	default:
+	q.mu.Lock()
+	ws := q.wake
+	q.mu.Unlock()
+	for _, ch := range ws {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
 // loop 是单个工作协程：领任务、执行、重试。
-func (q *Queue) loop(ctx context.Context) {
+//
+// 预期：自己的 wake 通道注册进 q.wake，退出时注销；signal 广播能立刻唤醒全部空闲 worker
+func (q *Queue) loop(ctx context.Context, wake chan struct{}) {
 	defer q.wg.Done()
+	q.mu.Lock()
+	q.wake = append(q.wake, wake)
+	q.mu.Unlock()
+	defer func() {
+		q.mu.Lock()
+		for i, ch := range q.wake {
+			if ch == wake {
+				q.wake = append(q.wake[:i], q.wake[i+1:]...)
+				break
+			}
+		}
+		q.mu.Unlock()
+	}()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -421,10 +503,9 @@ func (q *Queue) loop(ctx context.Context) {
 		}
 		if !ok {
 			select {
-			case <-q.wake:
+			case <-wake:
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Second):
 			}
 			continue
 		}
@@ -550,6 +631,8 @@ DELETE FROM jobs WHERE state IN (?, ?) AND id NOT IN (
 )`, stateDone, stateFailed, stateDone, stateFailed, keepFinished)
 	// 结束（成功或失败）必须推一次：这是面板从「执行中」变成最终状态的唯一时点
 	q.changed()
+	// 唤醒所有等待该任务结束的调用方
+	q.notifyDoneClose(id)
 }
 
 // Retryable 判断错误是否值得重试。

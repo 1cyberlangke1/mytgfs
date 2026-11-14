@@ -104,11 +104,19 @@ func TestSameVolumeSerial(t *testing.T) {
 	var mu sync.Mutex
 	running := map[string]int{}
 	maxDemo := 0
+	maxTotal := 0
 	q.SetHandler(func(_ context.Context, j Job) error {
 		mu.Lock()
 		running[j.Volume]++
+		total := 0
+		for _, n := range running {
+			total += n
+		}
 		if j.Volume == "demo" && running[j.Volume] > maxDemo {
 			maxDemo = running[j.Volume]
+		}
+		if total > maxTotal {
+			maxTotal = total
 		}
 		mu.Unlock()
 		time.Sleep(80 * time.Millisecond)
@@ -136,15 +144,18 @@ func TestSameVolumeSerial(t *testing.T) {
 			t.Fatalf("wait: %v", err)
 		}
 	}
-	elapsed := time.Since(start)
 
 	mu.Lock()
 	defer mu.Unlock()
 	if maxDemo != 1 {
 		t.Fatalf("demo concurrent = %d, want 1", maxDemo)
 	}
-	if elapsed >= 240*time.Millisecond {
-		t.Fatalf("elapsed = %v, want < 240ms (different volumes run in parallel)", elapsed)
+	if maxTotal < 2 {
+		t.Fatalf("max concurrent = %d, want >= 2 (不同卷应并行)", maxTotal)
+	}
+	// 领取已事件驱动：总耗时接近串行下限（2×150ms），轮询延迟不应叠加
+	if elapsed := time.Since(start); elapsed >= 240*time.Millisecond {
+		t.Fatalf("elapsed = %v, want < 240ms (不同卷应并行)", elapsed)
 	}
 }
 

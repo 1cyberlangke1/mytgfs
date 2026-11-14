@@ -8,7 +8,9 @@ package queue
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -22,13 +24,34 @@ VALUES('demo', 'mkdir', '/x', '{}', ?, 0, '', 0, 0)`, state); err != nil {
 	}
 }
 
+// newQuietQueue 只建队列不启动 worker：状态由 seedJob 直接写入，
+// 避免 worker 把 queued 行领走导致行数不确定。
+//
+// 输入：t
+// 输出：未 Start 的 *Queue
+// 预期：ClearFinished/Enqueue 不依赖 worker 运行
+func newQuietQueue(t *testing.T) *Queue {
+	t.Helper()
+	dsn := "file:" + filepath.Join(t.TempDir(), "queue.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	q, err := Open(db, 1, func() {})
+	if err != nil {
+		t.Fatalf("open queue: %v", err)
+	}
+	return q
+}
+
 // TestClearFinishedKeepsActive 清空记录只影响已结束任务。
 //
 // 输入：done/failed/queued/running 各一行
 // 输出：删除 2 条，剩余 queued 与 running
 // 预期：持久化表真的少行，而不是只改界面
 func TestClearFinishedKeepsActive(t *testing.T) {
-	q := newTestQueue(t, 1)
+	q := newQuietQueue(t)
 	for _, st := range []string{stateDone, stateFailed, stateQueued, stateRunning} {
 		seedJob(t, q, st)
 	}
@@ -55,7 +78,7 @@ func TestClearFinishedKeepsActive(t *testing.T) {
 // 输出：ErrQueueFull
 // 预期：队列不会无限增长；错误可被上层翻译成提示
 func TestEnqueueRejectsWhenFull(t *testing.T) {
-	q := newTestQueue(t, 1)
+	q := newQuietQueue(t)
 	tx, err := q.db.Begin()
 	if err != nil {
 		t.Fatal(err)
