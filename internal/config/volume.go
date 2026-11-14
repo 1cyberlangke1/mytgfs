@@ -59,9 +59,6 @@ func AppendVolume(path string, v Volume) error {
 	b.WriteString("\n[[volumes]]\n")
 	fmt.Fprintf(&b, "name = %s\n", tomlString(name))
 	fmt.Fprintf(&b, "chat_id = %d\n", v.ChatID)
-	if p := strings.TrimSpace(v.Point); p != "" {
-		fmt.Fprintf(&b, "point = %s\n", tomlString(p))
-	}
 	b.WriteString("enabled = true\n")
 
 	return atomic.WriteFile(path, bytes.NewReader(b.Bytes()))

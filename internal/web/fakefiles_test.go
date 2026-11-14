@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 
-	"golang.org/x/net/webdav"
 	"mytgfs/internal/fm"
+	"mytgfs/internal/vfs"
 )
 
 // fakeFiles 是 fm.Files 的最小假实现。
@@ -68,7 +68,7 @@ func (f *fakeFiles) Move(ctx context.Context, from, to string) error {
 	return nil
 }
 
-func (f *fakeFiles) Open(ctx context.Context, p string) (webdav.File, error) {
+func (f *fakeFiles) Open(ctx context.Context, p string) (vfs.File, error) {
 	return nil, os.ErrNotExist
 }
 

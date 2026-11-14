@@ -192,7 +192,7 @@ func runVolumeDelete(args []string) {
 //
 // 输入：--name 卷名（必填）；--chat-id Bot API 形式 -100... 或裸频道 id；
 //
-//	--point 盘符；--config 配置文件
+//	--config 配置文件
 //
 // 输出：卷信息与写入结果
 // 预期：只读校验频道可见 + bot 有发言权；频道不存在或无权限直接失败，不写配置
@@ -200,7 +200,6 @@ func runVolumeAttach(args []string) {
 	fs := flag.NewFlagSet("volume attach", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
 	chatID := fs.Int64("chat-id", 0, i18n.T("cli.flag.chat_id"))
-	point := fs.String("point", "", i18n.T("cli.flag.mount_example"))
 	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
@@ -242,7 +241,6 @@ func runVolumeAttach(args []string) {
 	vol := config.Volume{
 		Name:    res.Name,
 		ChatID:  res.ChannelID,
-		Point:   strings.TrimSpace(*point),
 		Enabled: true,
 	}
 	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
@@ -258,7 +256,7 @@ func runVolumeAttach(args []string) {
 
 // runVolumeCreate 新建一个卷并写入配置文件。
 //
-// 输入：--name 卷名（必填）；--title 频道标题；--point 挂载点；
+// 输入：--name 卷名（必填）；--title 频道标题；
 //
 //	--bot bot 用户名（默认从 bot.session 读）；--config 配置文件
 //
@@ -268,7 +266,6 @@ func runVolumeCreate(args []string) {
 	fs := flag.NewFlagSet("volume create", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
 	title := fs.String("title", "", i18n.T("cli.flag.title_default"))
-	point := fs.String("point", "", i18n.T("cli.flag.mount_example"))
 	bot := fs.String("bot", "", i18n.T("cli.flag.bot_default"))
 	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
@@ -328,7 +325,6 @@ func runVolumeCreate(args []string) {
 	vol := config.Volume{
 		Name:    res.Name,
 		ChatID:  res.ChannelID,
-		Point:   strings.TrimSpace(*point),
 		Enabled: true,
 	}
 	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
@@ -345,11 +341,7 @@ func runVolumeCreate(args []string) {
 	case res.MuteErr != nil:
 		ui.Out(i18n.T("volume.mute_failed", res.MuteErr))
 	}
-	mountPoint := vol.Point
-	if mountPoint == "" {
-		mountPoint = "-"
-	}
-	ui.Out(i18n.T("volume.saved", vol.Name, mountPoint))
+	ui.Out(i18n.T("volume.saved", vol.Name))
 	ui.Out(i18n.T("volume.restart_hint"))
 }
 

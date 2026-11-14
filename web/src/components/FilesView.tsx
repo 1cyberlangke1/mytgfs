@@ -80,7 +80,7 @@ interface FilesViewProps {
   canDeleteVolume: boolean;
   canAttachVolume: boolean;
   canListChannels: boolean;
-  onCreateVolume: (name: string, title: string, point: string) => void;
+  onCreateVolume: (name: string, title: string) => void;
   onAttachVolume: (name: string, chatId: number) => void;
   onDeleteVolume: (name: string) => void;
   onSetCover: (volumeId: string, file: File) => void;
@@ -177,7 +177,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
-  const [newVolume, setNewVolume] = useState({ name: '', title: '', point: '' });
+  const [newVolume, setNewVolume] = useState({ name: '', title: '' });
   const [showAttachVolume, setShowAttachVolume] = useState(false);
   const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
   // 频道列表按需加载：只有打开弹窗并点「载入」时才连 Telegram
@@ -483,7 +483,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               type="button"
               variant="outline"
               onClick={() => {
-                setNewVolume({ name: '', title: '', point: '' });
+                setNewVolume({ name: '', title: '' });
                 setShowCreateVolume(true);
               }}
             >
@@ -1397,7 +1397,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 window.alert(t.volume.invalidName);
                 return;
               }
-              onCreateVolume(name, newVolume.title.trim(), newVolume.point.trim());
+              onCreateVolume(name, newVolume.title.trim());
               setShowCreateVolume(false);
             }}
             className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
@@ -1436,17 +1436,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 id="volume-title"
                 value={newVolume.title}
                 onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="volume-point" className="block text-xs font-medium">
-                {t.volume.pointLabel}
-              </label>
-              <Input
-                id="volume-point"
-                dir="ltr"
-                value={newVolume.point}
-                onChange={(e) => setNewVolume((v) => ({ ...v, point: e.target.value }))}
               />
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">

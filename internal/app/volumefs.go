@@ -1,6 +1,6 @@
 package app
 
-// 一个卷的读写后端装配：索引、存储、WebDAV 语义、文件管理。
+// 一个卷的读写后端装配：索引、存储、文件系统语义、文件管理。
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/vfs"
 )
 
 // statusEventGap 是状态事件的最小推送间隔：进度按块触发，节流后前端每秒最多几次。
@@ -25,7 +25,7 @@ type VolumeFS struct {
 	Name   string        // 解析后的卷名
 	Index  *index.Index  // 本地索引
 	Store  *telegramstore.Store
-	FS     *dav.FileSystem // WebDAV 语义后端
+	FS     *vfs.FileSystem // 卷内文件系统后端
 	Files  *fm.Manager     // 文件管理接口
 }
 
@@ -53,7 +53,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		logging.Warn("log.volume_warn", rerr, volName)
 	}
 
-	fsys := dav.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
+	fsys := vfs.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
 	// 批量写入互相抢 Telegram 发消息配额，串行提交
 	fsys.SetQueue(queue.New(1, 3))
 	fsys.SetTempDir(datadir.Path("tmp"))
@@ -76,5 +76,5 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	}, nil
 }
 
-// Close 关闭索引；连接池与 WebDAV 队列由调用方负责。
+// Close 关闭索引；连接池与上传队列由调用方负责。
 func (v *VolumeFS) Close() error { return v.Index.Close() }

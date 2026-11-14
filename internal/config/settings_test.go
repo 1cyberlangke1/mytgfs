@@ -56,7 +56,7 @@ func TestLoadWebSection(t *testing.T) {
 // 预期：注释与其它段落不变；新键写在对应段内；重复设置只替换不重复
 func TestSetKeyAppendsAndKeepsComments(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	body := "# 顶部注释\n[telegram]\napi_id = 1\n\n[mount]\npoint = \"\"\n"
+	body := "# 顶部注释\n[telegram]\napi_id = 1\n\n[mount]\nsync_seconds = 15\n"
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSetKeyValidates(t *testing.T) {
 	cases := [][2]string{
 		{"web.nope", "1"},
 		{"web.port", "abc"},
-		{"web.auto_open", "maybe"},
+		{"pwa.enabled", "maybe"},
 	}
 	for _, c := range cases {
 		if err := SetKey(p, c[0], c[1]); err == nil {
@@ -118,10 +118,10 @@ func TestSetKeyValidates(t *testing.T) {
 func TestSetKeyBoolNormalization(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
 	for in, want := range map[string]string{"on": "true", "off": "false", "1": "true", "0": "false"} {
-		if err := SetKey(p, "webdav.enabled", in); err != nil {
+		if err := SetKey(p, "pwa.enabled", in); err != nil {
 			t.Fatalf("SetKey(%q): %v", in, err)
 		}
-		if got, ok, _ := GetKey(p, "webdav.enabled"); !ok || got != want {
+		if got, ok, _ := GetKey(p, "pwa.enabled"); !ok || got != want {
 			t.Errorf("输入 %q 得到 %q ok=%v，期望 %q", in, got, ok, want)
 		}
 	}
@@ -129,7 +129,7 @@ func TestSetKeyBoolNormalization(t *testing.T) {
 
 // TestSetKeyRangeAndEnum 越界与枚举外的值必须被拒绝且给出原因。
 //
-// 输入：端口 70000、上传并发 99、日志级别 trace、WebDAV 地址缺端口
+// 输入：端口 70000、上传并发 99、日志级别 trace、PWA 名字超长
 // 输出：error，文件保持原样
 // 预期：CLI 与面板共用同一份 validateValue，非法值一条都不落盘
 func TestSetKeyRangeAndEnum(t *testing.T) {
@@ -141,8 +141,7 @@ func TestSetKeyRangeAndEnum(t *testing.T) {
 		{"web.port", "70000"},
 		{"mount.upload_parallel", "99"},
 		{"log.level", "trace"},
-		{"webdav.addr", "127.0.0.1"},
-		{"webdav.addr", "127.0.0.1:99999"},
+		{"pwa.name", strings.Repeat("x", 65)},
 	}
 	for _, c := range cases {
 		err := SetKey(p, c[0], c[1])
@@ -158,8 +157,8 @@ func TestSetKeyRangeAndEnum(t *testing.T) {
 		t.Errorf("非法写入改动了文件：\n%s", got)
 	}
 	// 合法值仍然能写
-	if err := SetKey(p, "webdav.addr", "127.0.0.1:18080"); err != nil {
-		t.Fatalf("合法地址被拒: %v", err)
+	if err := SetKey(p, "pwa.name", "mytgfs"); err != nil {
+		t.Fatalf("合法名字被拒: %v", err)
 	}
 	if err := SetKey(p, "log.level", "debug"); err != nil {
 		t.Fatalf("合法日志级别被拒: %v", err)
@@ -183,7 +182,7 @@ func TestSchemaCarriesLimits(t *testing.T) {
 // TestGetKeyMissing 键不存在时返回 ok=false 且不报错。
 func TestGetKeyMissing(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(p, []byte("[mount]\npoint = \"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("[mount]\nsync_seconds = 15\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if v, ok, err := GetKey(p, "web.port"); err != nil || ok || v != "" {

@@ -9,9 +9,9 @@ import (
 	"context"
 
 	"mytgfs/internal/config"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/queue"
+	"mytgfs/internal/vfs"
 )
 
 // webStatus 汇总各卷的条目数、占用量与排队中的上传。
@@ -24,7 +24,7 @@ import (
 func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolume) any {
 	list := make([]map[string]any, 0, len(vols))
 	var queued []queue.Item
-	var xfers []dav.Transfer
+	var xfers []vfs.Transfer
 	for _, v := range cfg.Volumes {
 		wv, ok := vols[v.Name]
 		if !ok {

@@ -2,7 +2,7 @@ package web
 
 // 服务端事件通道：前端用 EventSource 订阅，取代定时轮询。
 //
-// 主题：status（文件/进度变化）、config（配置保存）、mount（WebDAV 开关）。
+// 主题：status（文件/进度变化）、config（配置保存）。
 // 事件只带主题名，前端收到后自行拉取最新快照。
 
 import (
@@ -15,7 +15,7 @@ import (
 )
 
 // eventTopics 是面板关心的全部主题。
-var eventTopics = []string{"status", "config", "mount"}
+var eventTopics = []string{"status", "config"}
 
 // handleAPIEvents 输出 text/event-stream。
 //
@@ -69,8 +69,7 @@ func handleAPIEvents(bus *eventbus.Bus) http.HandlerFunc {
 		fmt.Fprint(w, "event: ready\ndata: {}\n\n")
 		flusher.Flush()
 
-		heartbeat := time.NewTicker(25 * time.Second)
-		defer heartbeat.Stop()
+		heartbeat := time.Tick(25 * time.Second)
 
 		for {
 			select {
@@ -79,7 +78,7 @@ func handleAPIEvents(bus *eventbus.Bus) http.HandlerFunc {
 			case topic := <-merged:
 				fmt.Fprintf(w, "event: %s\ndata: {}\n\n", topic)
 				flusher.Flush()
-			case <-heartbeat.C:
+			case <-heartbeat:
 				fmt.Fprint(w, ": ping\n\n")
 				flusher.Flush()
 			}

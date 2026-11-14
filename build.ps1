@@ -35,7 +35,7 @@ if ($Package) {
     if (Test-Path $out) { Remove-Item -Recurse -Force $out }
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     Copy-Item 'build\mytgfs.exe', 'build\mytgfs-tray.exe', 'config.example.toml', 'LICENSE' $out -Force
-    Copy-Item 'packaging\install.ps1', 'packaging\uninstall.ps1', 'packaging\setup-webdav.ps1' $out -Force
+    Copy-Item 'packaging\install.ps1', 'packaging\uninstall.ps1' $out -Force
 
     $tag = $ver
     $zip = "build\mytgfs-$tag-win64.zip"

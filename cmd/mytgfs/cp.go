@@ -27,12 +27,12 @@ import (
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/config"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/upload"
+	"mytgfs/internal/vfs"
 )
 
 // runCopy 处理频道内复制。
@@ -109,7 +109,7 @@ func runCopy(args []string) {
 
 		srcStore := s.Store()
 		dstStore := s.StoreFor(dstVolume.ChatID)
-		dstFS := dav.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk())
+		dstFS := vfs.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk())
 		srcPart := upload.Part(source)
 		body, cerr := dstFS.NodeBody(ctx, dst, source.Sha256)
 		if cerr != nil {

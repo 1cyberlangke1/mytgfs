@@ -31,13 +31,6 @@ export interface ApiTransfer {
   total: number;
 }
 
-export interface ApiMount {
-  available: boolean;
-  enabled: boolean;
-  addr: string;
-  volume: string;
-}
-
 export interface ApiAutostart {
   enabled: boolean;
 }
@@ -66,7 +59,6 @@ export interface ApiState {
     transfers?: ApiTransfer[];
     queue?: ApiQueueItem[];
   };
-  mount?: ApiMount;
 }
 
 export interface ApiSettingDef {
@@ -223,10 +215,6 @@ export function saveSettings(values: Record<string, string>): Promise<{ saved: b
   });
 }
 
-// getMount 读取 WebDAV 挂盘状态。
-export function getMount(): Promise<ApiMount> {
-  return request<ApiMount>('/api/mount');
-}
 // getAutostart 读取开机自启状态（系统注册项）。
 export function getAutostart(): Promise<ApiAutostart> {
   return request<ApiAutostart>('/api/autostart');
@@ -241,15 +229,6 @@ export function setAutostart(enabled: boolean): Promise<ApiAutostart> {
   });
 }
 
-// setMount 开关 WebDAV 挂盘。
-export function setMount(enabled: boolean): Promise<ApiMount> {
-  return request('/api/mount', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-}
-
 // triggerSync 立即增量同步。
 export function triggerSync(): Promise<unknown> {
   return request('/api/sync', { method: 'POST' });
@@ -258,13 +237,12 @@ export function triggerSync(): Promise<unknown> {
 // createVolume 新建卷：后端建 Telegram 频道并写配置。
 export function createVolume(
   name: string,
-  title: string,
-  point: string
+  title: string
 ): Promise<{ name: string; channel_id: number; chat_id: number }> {
   return request('/api/volumes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, title, point }),
+    body: JSON.stringify({ name, title }),
   });
 }
 

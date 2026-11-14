@@ -29,7 +29,6 @@ api_id = 1
 [[volumes]]
 name = "work"
 chat_id = 111
-point = "Y:"
 enabled = true
 
 [[volumes]]

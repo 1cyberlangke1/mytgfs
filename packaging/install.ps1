@@ -5,7 +5,6 @@
 #   - copies mytgfs.exe and mytgfs-tray.exe into the install directory
 #   - keeps an existing config.toml untouched
 #   - creates a Start Menu shortcut for the tray app
-#   - no WinFsp, no drivers: drives are mapped over WebDAV by setup-webdav.ps1
 param(
     [string]$Dir = (Join-Path $env:LOCALAPPDATA 'mytgfs')
 )
@@ -35,5 +34,4 @@ $sc.IconLocation = Join-Path $Dir 'mytgfs-tray.exe'
 $sc.Save()
 
 Write-Host "Installed to $Dir"
-Write-Host "Next: open the mytgfs shortcut in the Start Menu, enable WebDAV in the panel,"
-Write-Host "then run setup-webdav.ps1 as Administrator to map a drive."
+Write-Host "Next: open the mytgfs shortcut in the Start Menu and finish the setup in the panel."

@@ -35,7 +35,7 @@ func TestPWATomlRoundTrip(t *testing.T) {
 func TestPWATomlAbsentUsesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte("[mount]\npoint = \"Y:\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[mount]\nsync_seconds = 15\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)

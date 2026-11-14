@@ -1,4 +1,4 @@
-package dav
+package vfs
 
 // 删除测试：删目录按子树批量删消息，本地索引一起清。
 

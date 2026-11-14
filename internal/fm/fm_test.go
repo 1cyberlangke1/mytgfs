@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/net/webdav"
+	"mytgfs/internal/vfs"
 )
 
-// ---- 内存 webdav.FileSystem ----
+// ---- 内存 vfs.FS ----
 
 type memFS struct {
 	files map[string][]byte
@@ -43,7 +43,7 @@ func (m *memFS) Mkdir(_ context.Context, name string, _ os.FileMode) error {
 	return nil
 }
 
-func (m *memFS) OpenFile(_ context.Context, name string, flag int, _ os.FileMode) (webdav.File, error) {
+func (m *memFS) OpenFile(_ context.Context, name string, flag int, _ os.FileMode) (vfs.File, error) {
 	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE) != 0 {
 		return &memFile{fs: m, name: name, write: true}, nil
 	}
@@ -57,7 +57,7 @@ func (m *memFS) OpenFile(_ context.Context, name string, flag int, _ os.FileMode
 	return &memFile{fs: m, name: name, data: data}, nil
 }
 
-// RemoveAll 删文件，或删目录及其全部子孙（模仿 WebDAV 的递归语义）。
+// RemoveAll 删文件，或删目录及其全部子孙（递归删除语义）。
 func (m *memFS) RemoveAll(_ context.Context, name string) error {
 	if name == "/" {
 		return nil

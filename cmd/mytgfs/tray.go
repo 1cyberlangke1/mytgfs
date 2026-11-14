@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 
-	"mytgfs/internal/i18n"
 	"mytgfs/internal/trayapp"
 )
 
@@ -14,12 +13,10 @@ import (
 // 预期：不监听端口，面板由内嵌 webview 承载
 func runTray(args []string) {
 	fs := flag.NewFlagSet("tray", flag.ExitOnError)
-	point := fs.String("point", "", i18n.T("cli.flag.mount_point"))
 	_ = fs.Parse(args)
 
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath:     "config.toml",
-		Point:          *point,
 		SingleInstance: true,
 	}); err != nil {
 		fatal(err.Error())

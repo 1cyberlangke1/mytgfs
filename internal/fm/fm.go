@@ -1,6 +1,6 @@
 package fm
 
-// 面板文件管理门面：在 webdav.FileSystem 之上补齐路径规范、递归搜索、串行化变更。
+// 面板文件管理门面：在 vfs.FS 之上补齐路径规范、递归搜索、串行化变更。
 //
 // 删除与移动由底层按节点子树一次完成，这里不重复实现存储逻辑。
 // 所有路径都是卷内绝对路径（以 / 开头），越界（含 ..）一律拒绝。
@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/webdav"
+	"mytgfs/internal/vfs"
 
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
@@ -48,22 +48,22 @@ type Files interface {
 	Upload(ctx context.Context, p string, r io.Reader) error
 	Remove(ctx context.Context, p string) error
 	Move(ctx context.Context, from, to string) error
-	Open(ctx context.Context, p string) (webdav.File, error)
+	Open(ctx context.Context, p string) (vfs.File, error)
 }
 
 // Manager 是 Files 的实现。
 type Manager struct {
-	fs webdav.FileSystem
+	fs vfs.FS
 	// mu 串行化变更操作：面板上连点两下不会互相踩改名/删除
 	mu sync.Mutex
 }
 
 // New 创建文件管理门面。
 //
-// 输入：fsys 底层文件系统（通常是 dav.FileSystem）
+// 输入：fsys 底层文件系统（通常是 vfs.FileSystem）
 // 输出：*Manager
 // 预期：只做路径规范化与组合，不重复实现存储逻辑
-func New(fsys webdav.FileSystem) *Manager { return &Manager{fs: fsys} }
+func New(fsys vfs.FS) *Manager { return &Manager{fs: fsys} }
 
 // List 列出一个目录。
 //
@@ -112,7 +112,7 @@ type SearchHit struct {
 
 // Searcher 是底层文件系统的可选能力：索引级递归搜索。
 //
-// dav.FileSystem 实现了它；没有实现的实现会退化成当前目录过滤。
+// vfs.FileSystem 实现了它；没有实现的实现会退化成当前目录过滤。
 type Searcher interface {
 	Search(ctx context.Context, dir, query string, limit int) ([]index.SearchHit, error)
 }
@@ -277,7 +277,7 @@ func (m *Manager) Move(ctx context.Context, from, to string) error {
 }
 
 // Open 以只读方式打开文件，供下载流式读取。
-func (m *Manager) Open(ctx context.Context, p string) (webdav.File, error) {
+func (m *Manager) Open(ctx context.Context, p string) (vfs.File, error) {
 	c, err := clean(p)
 	if err != nil {
 		return nil, err

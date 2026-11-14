@@ -9,7 +9,6 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Server,
   Sliders,
   Sun,
   WifiOff,
@@ -56,14 +55,12 @@ import {
   moveItems,
   removeItems,
   saveSettings,
-  setMount,
   triggerSync,
   uncacheFile,
   uploadFile,
 } from './api';
 import { OverviewView } from './components/OverviewView';
 import { FilesView } from './components/FilesView';
-import { MountView } from './components/MountView';
 import { SettingsView } from './components/SettingsView';
 import { AccountCard } from './components/AccountCard';
 import { OfflineView } from './components/OfflineView';
@@ -112,8 +109,6 @@ const EMPTY_SETTINGS: AppSettings = {
   uploadConcurrency: 4,
   readChunkSizeMb: 8,
   pwaOfflineMaxFileMb: 256,
-  webdavEnabled: false,
-  webdavPath: '',
   schema: [],
   values: {},
 };
@@ -329,13 +324,6 @@ export default function App() {
       login: Boolean(st.caps?.login),
       autostart: Boolean(st.caps?.autostart),
     });
-    if (st.mount) {
-      setSettings((prev) => ({
-        ...prev,
-        webdavEnabled: st.mount!.enabled,
-        webdavPath: st.mount!.addr || prev.webdavPath,
-      }));
-    }
   }, [sampleDownloads]);
 
   // reloadFiles 拉取所有卷的完整条目（索引查询，不进 Telegram）
@@ -376,7 +364,6 @@ export default function App() {
       uploadConcurrency: num('mount.upload_parallel', 4),
       readChunkSizeMb: num('mount.read_chunk_mb', 8),
       pwaOfflineMaxFileMb: num('pwa.offline_max_mb', 256),
-      webdavEnabled: v['webdav.enabled'] === 'true',
     }));
   }, []);
 
@@ -455,7 +442,6 @@ export default function App() {
       scheduleFiles();
     };
     es.addEventListener('status', onStatus);
-    es.addEventListener('mount', scheduleState);
     es.addEventListener('config', onConfig);
     // 断线重连后补拉一次，覆盖断线期间丢失的事件
     es.addEventListener('ready', onStatus);
@@ -718,26 +704,6 @@ export default function App() {
     uncacheFile(fileURL(saved.volumeId, saved.fileId)).then(done).catch(done);
   };
 
-  const handleToggleWebdav = (enabled: boolean) => {
-    setMount(enabled)
-      .then((st) => {
-        setSettings((prev) => ({
-          ...prev,
-          webdavEnabled: st.enabled,
-          webdavPath: st.addr || prev.webdavPath,
-        }));
-        pushToast(enabled ? t.mount.toggleSavedToastOn : t.mount.toggleSavedToastOff, 'success');
-      })
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
-  };
-
-  const handleCopyAddress = (url: string) => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url).catch(() => {});
-    }
-    pushToast(t.mount.copiedToast, 'success');
-  };
-
   // handleSaveSettings 只提交卡片里的键，成功后本地合并，不再整页重拉
   const handleSaveSettings = (values: Record<string, string>) => {
     return saveSettings(values).then(() => {
@@ -750,8 +716,8 @@ export default function App() {
 
 
   // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表
-  const handleCreateVolume = (name: string, title: string, point: string) => {
-    createVolume(name, title, point)
+  const handleCreateVolume = (name: string, title: string) => {
+    createVolume(name, title)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => pushToast(t.volume.createSuccess.replace('{name}', name), 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
@@ -813,7 +779,6 @@ export default function App() {
   const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
     { id: 'overview', label: t.nav.overview, icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
     { id: 'files', label: t.nav.files, icon: <FolderTree className="w-4 h-4 shrink-0" /> },
-    { id: 'mount', label: t.nav.mount, icon: <Server className="w-4 h-4 shrink-0" /> },
     { id: 'settings', label: t.nav.settings, icon: <Sliders className="w-4 h-4 shrink-0" /> },
     { id: 'offline', label: t.nav.offline, icon: <WifiOff className="w-4 h-4 shrink-0" /> },
   ];
@@ -1091,14 +1056,6 @@ export default function App() {
                     {t.connection[connectionStatus]}
                   </span>
                 </div>
-                <div
-                  dir="ltr"
-                  className="font-mono text-zinc-900 dark:text-zinc-200 truncate text-start"
-                >
-                  {settings.webdavEnabled && settings.webdavPath
-                    ? `WebDAV http://${settings.webdavPath}`
-                    : t.sidebar.webdavOff}
-                </div>
               </div>
             )}
 
@@ -1247,15 +1204,6 @@ export default function App() {
                 onDeleteVolume={handleDeleteVolume}
                 onSetCover={handleSetCover}
                 onRemoveCover={handleRemoveCover}
-              />
-            )}
-
-            {activeTab === 'mount' && (
-              <MountView
-                t={t}
-                settings={settings}
-                onToggleWebdav={handleToggleWebdav}
-                onCopyAddress={handleCopyAddress}
               />
             )}
 

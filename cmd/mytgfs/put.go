@@ -26,13 +26,13 @@ import (
 	"strings"
 
 	"mytgfs/internal/app"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/ui"
+	"mytgfs/internal/vfs"
 )
 
 // putItem 是一个待上传的本地文件。
@@ -116,7 +116,7 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, c
 		return telegramstore.ErrTooLarge
 	}
 
-	fsys := dav.New(ctx, idx, store, chunk)
+	fsys := vfs.New(ctx, idx, store, chunk)
 	if err := mkdirAll(ctx, fsys, path.Dir(it.remote)); err != nil {
 		return err
 	}
@@ -136,10 +136,10 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, c
 
 // mkdirAll 按需创建远程目录。
 //
-// 输入：ctx；fsys WebDAV 语义；dir 目录路径
+// 输入：ctx；fsys 卷内文件系统；dir 目录路径
 // 输出：error
 // 预期：已存在的层级直接跳过；父目录不存在时按层级顺序创建
-func mkdirAll(ctx context.Context, fsys *dav.FileSystem, dir string) error {
+func mkdirAll(ctx context.Context, fsys *vfs.FileSystem, dir string) error {
 	dir = volPath(dir)
 	if dir == "/" {
 		return nil

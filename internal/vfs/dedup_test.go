@@ -1,4 +1,4 @@
-package dav
+package vfs
 
 // 写时去重复用回归测试：同内容文件只上传一次，第二个路径复用已有 document。
 

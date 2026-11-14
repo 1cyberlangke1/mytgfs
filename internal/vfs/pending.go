@@ -1,4 +1,4 @@
-package dav
+package vfs
 
 import (
 	"crypto/sha256"

@@ -7,7 +7,6 @@ package config
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"slices"
 	"strconv"
@@ -35,9 +34,6 @@ type setting struct {
 // settings 是允许通过命令行修改的键（"section.key" => 描述）。
 var settings = map[string]setting{
 	"web.port":                {"web", "port", kindInt},
-	"webdav.enabled":          {"webdav", "enabled", kindBool},
-	"webdav.addr":             {"webdav", "addr", kindString},
-	"webdav.volume":           {"webdav", "volume", kindString},
 	"pwa.enabled":             {"pwa", "enabled", kindBool},
 	"pwa.name":                {"pwa", "name", kindString},
 	"pwa.offline_max_mb":      {"pwa", "offline_max_mb", kindInt},
@@ -100,34 +96,10 @@ func validateValue(key, raw string) error {
 		return fmt.Errorf(i18n.T("err.config_enum"), key, strings.Join(opts, " / "), v)
 	}
 	switch key {
-	case "webdav.addr":
-		if v == "" {
-			return nil
-		}
-		if err := checkHostPort(v); err != nil {
-			return fmt.Errorf(i18n.T("err.config_addr"), v)
-		}
-	case "pwa.name", "webdav.volume":
+	case "pwa.name":
 		if len([]rune(v)) > 64 {
 			return fmt.Errorf(i18n.T("err.config_too_long"), key, 64)
 		}
-	}
-	return nil
-}
-
-// checkHostPort 校验 host:port 形式，端口必须在 1..65535。
-//
-// 输入：addr 形如 127.0.0.1:8080
-// 输出：error；缺端口或端口越界时非 nil
-// 预期：允许主机名与 IPv4，不做 DNS 解析
-func checkHostPort(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil || strings.TrimSpace(host) == "" {
-		return fmt.Errorf("bad host:port")
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("bad port")
 	}
 	return nil
 }

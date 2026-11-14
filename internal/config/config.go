@@ -17,7 +17,6 @@ type Config struct {
 	Mount    Mount    `toml:"mount"`
 	Volumes  []Volume `toml:"volumes"`
 	Web      Web      `toml:"web"`
-	WebDAV   WebDAV   `toml:"webdav"`
 	PWA      PWA      `toml:"pwa"`
 	Log      Log      `toml:"log"`
 }
@@ -43,58 +42,6 @@ func (w Web) ListenPort() int {
 	return w.Port
 }
 
-// WebDAV 是「把卷挂成盘」的可选服务。
-//
-// 默认关闭（Enabled=false）：面板本身已经能做增删改查，
-// 只有确实要用资源管理器/rclone 挂盘时才需要打开。
-type WebDAV struct {
-	Enabled bool `toml:"enabled"`
-	// Addr 监听地址，空则用 DefaultWebDAVAddr
-	Addr string `toml:"addr"`
-	// Volume 只暴露这个卷；空则用第一个启用的卷
-	Volume string `toml:"volume"`
-}
-
-// DefaultWebDAVAddr 是 WebDAV 默认监听地址。
-const DefaultWebDAVAddr = "127.0.0.1:8080"
-
-// ListenAddr 返回实际监听地址。
-//
-// 输入：无
-// 输出：非空地址，默认 127.0.0.1:8080
-// 预期：只绑本地回环，不对外网暴露
-func (w WebDAV) ListenAddr() string {
-	if a := strings.TrimSpace(w.Addr); a != "" {
-		return a
-	}
-	return DefaultWebDAVAddr
-}
-
-// Target 挑出要暴露的卷。
-//
-// 输入：volumes 配置里的卷
-// 输出：卷与是否存在
-// 预期：
-//   - Volume 非空时按名字精确匹配（找不到就 false，不静默换卷）
-//   - Volume 为空时取第一个 enabled 的卷
-func (w WebDAV) Target(volumes []Volume) (Volume, bool) {
-	want := strings.TrimSpace(w.Volume)
-	if want != "" {
-		for _, v := range volumes {
-			if strings.EqualFold(v.Name, want) {
-				return v, true
-			}
-		}
-		return Volume{}, false
-	}
-	for _, v := range volumes {
-		if v.Enabled {
-			return v, true
-		}
-	}
-	return Volume{}, false
-}
-
 // Log 是日志配置。
 type Log struct {
 	Level      string `toml:"level"`
@@ -116,12 +63,11 @@ type Telegram struct {
 
 // Mount 是挂载配置。
 type Mount struct {
-	Point string `toml:"point"`
 	// SyncSeconds 是托盘自动增量同步的间隔秒数：0 用默认 15，负数关闭。
 	SyncSeconds int `toml:"sync_seconds"`
 	// DownloadParallel 是下载并发块数：0 用默认 8，范围 1..32。
 	DownloadParallel int `toml:"download_parallel"`
-	// ReadChunkMB 是 WebDAV 每次向上游取数的分片大小（MB）：0 用默认 8，范围 1..64。
+	// ReadChunkMB 是每次向上游取数的分片大小（MB）：0 用默认 8，范围 1..64。
 	ReadChunkMB int `toml:"read_chunk_mb"`
 	// UploadParallel 是上传并发分片数：0 用默认 4，范围 1..16。
 	UploadParallel int `toml:"upload_parallel"`
@@ -143,7 +89,7 @@ func (c Mount) UploadParallelism() int {
 	return n
 }
 
-// ReadChunk 返回 WebDAV 读分片大小（字节）。
+// ReadChunk 返回读分片大小（字节）。
 //
 // 输入：无
 // 输出：字节数，默认 1MB，夹在 1..64MB
@@ -175,12 +121,11 @@ func (m Mount) DownloadConnections() int {
 	return n
 }
 
-// Volume 是一个挂载卷（一个频道）。
+// Volume 是一个卷（一个频道）。
 type Volume struct {
 	Name    string `toml:"name"`
 	ChatID  int64  `toml:"chat_id"`
 	Enabled bool   `toml:"enabled"`
-	Point   string `toml:"point"`
 }
 
 // Load 读取 TOML 配置。

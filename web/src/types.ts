@@ -66,8 +66,6 @@ export interface AppSettings {
   uploadConcurrency: number;
   readChunkSizeMb: number;
   pwaOfflineMaxFileMb: number;
-  webdavEnabled: boolean;
-  webdavPath: string;
   /** 服务端 config.Schema() 返回的可编辑键，面板据此动态渲染 */
   schema: AppSettingDef[];
   /** 配置文件里的原始字符串值，键为 section.key */
@@ -87,7 +85,7 @@ export interface OfflineSavedFile {
 
 export type SortField = 'name' | 'size' | 'updatedAt';
 export type SortOrder = 'asc' | 'desc';
-export type NavTab = 'overview' | 'files' | 'mount' | 'settings' | 'offline';
+export type NavTab = 'overview' | 'files' | 'settings' | 'offline';
 // 语言包目录里的文件名即 Locale；新增语言只丢 JSON，不改类型
 export type Locale = string;
 export type ThemeMode = 'light' | 'dark';

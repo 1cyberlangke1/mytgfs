@@ -108,7 +108,6 @@ func TestStateCode(t *testing.T) {
 		"tray.state.connecting":   "connecting",
 		"tray.state.reconnecting": "reconnecting",
 		"tray.state.auth_lost":    "auth_lost",
-		"tray.state.unmounted":    "unmounted",
 		"tray.state.whatever":     "starting",
 		"":                        "starting",
 	}

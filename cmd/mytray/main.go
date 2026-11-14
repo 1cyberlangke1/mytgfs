@@ -17,13 +17,11 @@ import (
 func main() {
 	logging.SetupFromConfig("config.toml")
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
-	point := fs.String("point", "", "mount point")
 	cfg := fs.String("config", "config.toml", "config file")
 	_ = fs.Parse(os.Args[1:])
 
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath:     *cfg,
-		Point:          *point,
 		SingleInstance: true,
 	}); err != nil {
 		slog.Error("tray exited", "err", err)

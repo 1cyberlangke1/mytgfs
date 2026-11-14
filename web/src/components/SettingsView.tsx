@@ -16,23 +16,14 @@ interface SettingsViewProps {
 }
 
 // SECTION_ORDER 控制分组顺序：与 config.toml 的段落顺序一致。
-const SECTION_ORDER = ['webdav', 'mount', 'pwa', 'log'];
+const SECTION_ORDER = ['mount', 'pwa', 'log'];
 
 // PANEL_HIDDEN 是不在面板里出现的键：端口只能在启动参数或 config.toml 里改。
 const PANEL_HIDDEN = new Set(['web.port']);
 
-// sectionOf 取 "webdav.addr" 的 "webdav"。
+// sectionOf 取 "mount.sync_seconds" 的 "mount"。
 function sectionOf(key: string): string {
   return key.includes('.') ? key.slice(0, key.indexOf('.')) : key;
-}
-
-// addrValid 与 Go 侧 checkHostPort 同规则：host:port，端口 1..65535。
-function addrValid(value: string): boolean {
-  const i = value.lastIndexOf(':');
-  if (i <= 0 || i === value.length - 1) return false;
-  const host = value.slice(0, i).trim();
-  const port = Number(value.slice(i + 1));
-  return host.length > 0 && Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 // labelOf 取字段名，缺翻译时回落到键名。
@@ -75,9 +66,6 @@ function validateOne(def: AppSettingDef, value: string, t: Translations): string
       : t.settings.invalidOption
           .replace('{field}', label)
           .replace('{options}', def.options.join(' / '));
-  }
-  if (def.key === 'webdav.addr' && value.trim() !== '' && !addrValid(value.trim())) {
-    return t.settings.invalidAddr.replace('{field}', label);
   }
   if (value.length > 64) {
     return t.settings.invalidTooLong.replace('{field}', label);

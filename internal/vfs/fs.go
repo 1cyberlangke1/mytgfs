@@ -1,6 +1,6 @@
-package dav
+package vfs
 
-// WebDAV 适配层：把频道内容暴露成标准 WebDAV 文件系统。
+// 卷内虚拟文件系统：把频道内容暴露成文件系统语义。
 //
 // 远端每条消息自述名字与父消息号，改名/移动只编辑这一条消息，
 // 删除按子树批量删消息；本地索引里的 path 只是派生缓存。
@@ -12,14 +12,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
 	"sync"
-
-	"golang.org/x/net/webdav"
 
 	"mytgfs/internal/dirent"
 	"mytgfs/internal/i18n"
@@ -28,7 +24,7 @@ import (
 	"mytgfs/internal/telegramstore"
 )
 
-// Store 是 WebDAV 层需要的存储能力。
+// Store 是本层需要的存储能力。
 type Store interface {
 	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error)
 	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
@@ -46,7 +42,7 @@ type Store interface {
 	ReadNode(ctx context.Context, id int) (string, error)
 }
 
-// FileSystem 实现 webdav.FileSystem。
+// FileSystem 是卷内的文件系统实现。
 type FileSystem struct {
 	ctx   context.Context
 	idx   *index.Index
@@ -79,7 +75,7 @@ func (d *FileSystem) notify() {
 	}
 }
 
-// New 创建 WebDAV 文件系统。
+// New 创建卷内文件系统。
 //
 // 输入：ctx；idx 索引；store 存储；chunk 读块大小
 // 输出：*FileSystem
@@ -237,7 +233,7 @@ func (d *FileSystem) Search(ctx context.Context, dir, query string, limit int) (
 }
 
 // OpenFile 打开文件或目录。
-func (d *FileSystem) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+func (d *FileSystem) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (File, error) {
 	name = clean(name)
 	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE) != 0 {
 		tmp, err := d.newTemp()
@@ -403,160 +399,6 @@ func (d *FileSystem) Import(ctx context.Context, dst string, part *telegramstore
 	}
 	d.notify()
 	return nil
-}
-
-// CopyPrefix 用引用复制实现 WebDAV COPY：源文件只发一条引用消息，不传输字节。
-//
-// 输入：src 源路径；dst 目标路径；overwrite 目标已存在时是否替换；
-// depth <0 表示整棵树，0 表示目录只建壳
-// 输出：error
-// 预期：目录递归复制子树，每个节点独立发消息
-func (d *FileSystem) CopyPrefix(ctx context.Context, src, dst string, overwrite bool, depth int) error {
-	src, dst = clean(src), clean(dst)
-	if src == "/" || dst == "/" {
-		return errors.New(i18n.T("err.dav_root_copy"))
-	}
-	if src == dst {
-		return errors.New(i18n.T("err.dav_copy_same"))
-	}
-	if strings.HasPrefix(dst+"/", src+"/") {
-		return errors.New(i18n.T("err.dav_copy_into_self"))
-	}
-	parent, base, ok, err := d.parentOf(ctx, dst)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return os.ErrNotExist
-	}
-	node, exists, err := d.nodeAt(ctx, src)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return os.ErrNotExist
-	}
-	if _, taken, err := d.idx.Child(ctx, parent.ID, base); err != nil {
-		return err
-	} else if taken {
-		if !overwrite {
-			return os.ErrExist
-		}
-		if err := d.RemoveAll(ctx, dst); err != nil {
-			return err
-		}
-	}
-	if _, err := d.copyNode(ctx, node, parent.ID, base, depth); err != nil {
-		return err
-	}
-	d.notify()
-	return nil
-}
-
-// copyNode 复制一个节点到目标父目录下。
-func (d *FileSystem) copyNode(ctx context.Context, src index.Node, parentID int, name string, depth int) (index.Node, error) {
-	if !src.IsDir {
-		body, err := nodeBody(name, parentID, false, src.Sha256)
-		if err != nil {
-			return index.Node{}, err
-		}
-		part, err := d.store.Copy(ctx, partOf(src), name, "application/octet-stream", body)
-		if err != nil {
-			return index.Node{}, err
-		}
-		n := index.Node{
-			ID: part.MessageID, ParentID: parentID, Name: name,
-			Path:       joinPath(dirPathOf(ctx, d.idx, parentID), name),
-			DocumentID: part.DocumentID, AccessHash: part.AccessHash,
-			FileReference: part.FileReference, Size: part.Size,
-			Mtime: nowUnix(), Sha256: src.Sha256,
-		}
-		return n, d.idx.PutNode(ctx, n)
-	}
-	id, err := d.sendNode(ctx, name, parentID, true, "")
-	if err != nil {
-		return index.Node{}, err
-	}
-	newDir := index.Node{ID: id, ParentID: parentID, Name: name, IsDir: true,
-		Path: joinPath(dirPathOf(ctx, d.idx, parentID), name), Mtime: nowUnix()}
-	if err := d.idx.PutNode(ctx, newDir); err != nil {
-		return index.Node{}, err
-	}
-	if depth != 0 {
-		children, err := d.idx.Children(ctx, src.ID)
-		if err != nil {
-			return index.Node{}, err
-		}
-		for _, child := range children {
-			if _, err := d.copyNode(ctx, child, newDir.ID, child.Name, depth-1); err != nil {
-				return index.Node{}, err
-			}
-		}
-	}
-	return newDir, nil
-}
-
-// copyFileSystem 是 COPY 优化要求的能力。
-type copyFileSystem interface {
-	webdav.FileSystem
-	CopyPrefix(ctx context.Context, src, dst string, overwrite bool, depth int) error
-}
-
-// copyHandler 把 COPY 换成引用复制，其余请求交给标准 handler。
-type copyHandler struct {
-	base *webdav.Handler
-	fs   copyFileSystem
-}
-
-// NewHandler 包装 webdav.Handler，让 COPY 走引用复用。
-func NewHandler(fs webdav.FileSystem, ls webdav.LockSystem) http.Handler {
-	if ls == nil {
-		ls = webdav.NewMemLS()
-	}
-	base := &webdav.Handler{Prefix: "/", FileSystem: fs, LockSystem: ls}
-	cfs, ok := fs.(copyFileSystem)
-	if !ok {
-		return base
-	}
-	return &copyHandler{base: base, fs: cfs}
-}
-
-func (h *copyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "COPY" {
-		h.base.ServeHTTP(w, r)
-		return
-	}
-	u, err := url.Parse(r.Header.Get("Destination"))
-	if err != nil || u.Path == "" || (u.Host != "" && u.Host != r.Host) {
-		h.base.ServeHTTP(w, r)
-		return
-	}
-	src, dst := clean(r.URL.Path), clean(u.Path)
-	overwrite := r.Header.Get("Overwrite") != "F"
-	depth := -1
-	if r.Header.Get("Depth") == "0" {
-		depth = 0
-	}
-	existed := false
-	if _, serr := h.base.FileSystem.Stat(r.Context(), dst); serr == nil {
-		existed = true
-	}
-	if cerr := h.fs.CopyPrefix(r.Context(), src, dst, overwrite, depth); cerr != nil {
-		switch {
-		case errors.Is(cerr, os.ErrNotExist):
-			w.WriteHeader(http.StatusNotFound)
-		case errors.Is(cerr, os.ErrExist):
-			w.WriteHeader(http.StatusPreconditionFailed)
-		default:
-			w.WriteHeader(http.StatusForbidden)
-		}
-		return
-	}
-	if existed {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
 }
 
 // Stat 返回文件或目录信息。

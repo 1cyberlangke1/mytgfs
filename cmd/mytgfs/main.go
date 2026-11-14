@@ -28,7 +28,6 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
@@ -41,6 +40,7 @@ import (
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/version"
+	"mytgfs/internal/vfs"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
@@ -105,12 +105,6 @@ func main() {
 		runConfig(os.Args[2:])
 	case "volume":
 		runVolume(os.Args[2:])
-	case "mount":
-		runMount(os.Args[2:])
-	case "webdav":
-		runWebDAV(os.Args[2:])
-	case "unmap":
-		runUnmap(os.Args[2:])
 	case "web":
 		runWeb(os.Args[2:])
 	case "startup":
@@ -391,15 +385,6 @@ func runSync(args []string) {
 	ui.Out(i18n.T("cli.sync_ok", entries))
 }
 
-// runMount 已停用：FUSE/WinFsp 挂载层已移除，改用 WebDAV 挂载。
-//
-// 输入：任意参数（忽略）
-// 输出：无；打印提示后以非零码退出
-// 预期：不连接 Telegram、不写挂载状态，避免旧脚本误判挂载成功
-func runMount(_ []string) {
-	fatal(i18n.T("err.mount_removed"))
-}
-
 // runWeb 启动本地面板。
 //
 // 输入：--port 端口（不传则用 config.toml [web].port，传 0 用随机端口）
@@ -470,8 +455,6 @@ func runWeb(args []string) {
 		defer closePool()
 		vols := openWebVolumes(ctx, app.New(cfg, app.Options{Bus: bus}), api)
 		defer closeWebVolumes(vols)
-		davSvc, mount := newMountControl(cfgPath, vols)
-		defer davSvc.Stop()
 
 		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
 		vsync, vstop := context.WithCancel(ctx)
@@ -518,7 +501,7 @@ func runWeb(args []string) {
 				return names
 			},
 			// 建卷需要 user 会话：临时开一条，建完就关
-			CreateVolume: func(ctx context.Context, name, title, point string) (any, error) {
+			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
 				bn := readBotUsername(ctx, cfg, cfg.APIHash(), key)
 				if bn == "" {
 					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
@@ -539,7 +522,6 @@ func runWeb(args []string) {
 				vol := config.Volume{
 					Name:    res.Name,
 					ChatID:  res.ChannelID,
-					Point:   strings.TrimSpace(point),
 					Enabled: true,
 				}
 				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
@@ -626,9 +608,8 @@ func runWeb(args []string) {
 				}
 				return int64(files), used, true
 			},
-			Mount: mount,
-			Bus:   bus,
-			// 分片上传的临时文件与 WebDAV 写路径共用同一目录，统一按时间清扫
+			Bus: bus,
+			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
@@ -640,7 +621,7 @@ func runWeb(args []string) {
 		return
 	}
 	if tgclient.IsAuthLost(err) {
-		fmt.Fprintln(os.Stderr, i18n.T("err.auth_lost_hint"))
+		ui.Errf("%s\n", i18n.T("err.auth_lost_hint"))
 		if serr := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); serr != nil {
 			fatal(serr.Error())
 		}
@@ -652,7 +633,7 @@ func runWeb(args []string) {
 // webVolume 是一个卷在面板里用到的后端。
 type webVolume struct {
 	mgr   *fm.Manager
-	davfs *dav.FileSystem
+	davfs *vfs.FileSystem
 	idx   *index.Index
 	store *telegramstore.Store
 }
@@ -670,7 +651,7 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 		}
 		vf, err := a.OpenVolume(ctx, v.Name, api)
 		if err != nil {
-			logging.Warn("tray.mount.failed", err, v.Name)
+			logging.Warn("tray.volume.open_failed", err, v.Name)
 			continue
 		}
 		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}

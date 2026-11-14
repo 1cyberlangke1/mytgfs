@@ -12,7 +12,6 @@
 提供三种使用方式：
 
 - **Web 面板**（`mytgfs web`）：浏览器里增删改查、拖拽/目录上传、搜索排序、在线播放、离线保存（PWA）。
-- **WebDAV**（`mytgfs webdav`）：映射成系统网络盘，用资源管理器操作。
 - **系统托盘**（`mytgfs tray`）：常驻后台、自动增量同步，按需打开面板。
 
 > 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己格式的消息**（正文含 `v`/`t`/`n`/`p` 字段），
@@ -23,8 +22,6 @@
 - Go 1.26.1（从源码构建时）
 - Telegram `api_id` / `api_hash`（在 my.telegram.org/apps 申请）
 - 一个 bot token（在 @BotFather 申请）
-- Windows：映射网络盘需要 WebClient 服务，见 `packaging/setup-webdav.ps1`
-- 不需要 WinFsp、FUSE 或任何 CGO 依赖（纯 Go 构建）
 
 ## 构建
 
@@ -48,11 +45,10 @@ go build -o mytgfs ./cmd/mytgfs
    （默认装到 `%LOCALAPPDATA%\mytgfs`，并创建开始菜单快捷方式）。
 2. 把 `config.toml`、`secrets/` 配好；登录 bot / user 需要各跑一次 `mytgfs auth`，这两步要用命令行。
 3. 之后从开始菜单点 **mytgfs**：启动的是 `mytgfs-tray.exe`（GUI 子系统），
-   **不会出现命令行窗口**。右键托盘图标可以打开面板、开关 WebDAV、勾选开机自启。
-4. 需要盘符时，用管理员 PowerShell 跑一次 `setup-webdav.ps1`——这是整套流程里唯一会开控制台的步骤。
+   **不会出现命令行窗口**。右键托盘图标可以打开面板、勾选开机自启。
 
 `mytgfs.exe` 是命令行版（控制台子系统），适合脚本和首次登录；双击它只会停在控制台里等命令。
-日常使用请走 `mytgfs-tray.exe` 或开始菜单快捷方式，托盘、面板、WebDAV 开关全程无控制台窗口。
+日常使用请走 `mytgfs-tray.exe` 或开始菜单快捷方式，托盘与面板全程无控制台窗口。
 
 ## 快速开始
 
@@ -89,7 +85,7 @@ go build -o mytgfs ./cmd/mytgfs
    mytgfs web
    ```
 
-   浏览器打开提示的本地地址即可。面板里可开/关 WebDAV 挂载、上传下载、搜索、播放、离线保存。
+   浏览器打开提示的本地地址即可。面板里可上传下载、搜索、播放、离线保存。
 
 ## 命令一览
 
@@ -102,9 +98,7 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs volume delete --name <n>` | 删卷：删频道、移除配置、删本地索引 |
 | `mytgfs volume check` | 检查每个卷的频道是否仍可读写 |
 | `mytgfs web [--port N]` | 启动本地 Web 面板（端口默认取 `[web].port`，传 0 用随机端口） |
-| `mytgfs tray [--port N]` | 系统托盘常驻（自动同步、按需面板） |
-| `mytgfs webdav [--addr 127.0.0.1:8080] [--name 卷]` | 启动 WebDAV 服务 |
-| `mytgfs unmap --addr 127.0.0.1:8080` | 清理指向本服务的网络映射 |
+| `mytgfs tray` | 系统托盘常驻（自动同步、按需面板） |
 | `mytgfs ls [--name 卷] [目录]` | 列出目录 |
 | `mytgfs mkdir [--name 卷] <目录>` | 创建目录 |
 | `mytgfs rm [--name 卷] <路径...>` | 删除文件或目录（目录递归） |
@@ -129,7 +123,6 @@ go build -o mytgfs ./cmd/mytgfs
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
   `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
 - `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）。`mytgfs web` 只打印地址，不改浏览器；桌面托盘由 Wails 直接显示面板窗口。
-- `[webdav]`：默认 `enabled = false`，只绑本机回环；可在面板或托盘里开关。
 - `[pwa]`：默认启用可安装 PWA 与「离线保存」，单文件上限默认 256MB。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
 
@@ -140,7 +133,7 @@ go build -o mytgfs ./cmd/mytgfs
   - 目录是纯文本消息，正文是 `{"v":2,"t":"d","n":"docs","p":0}`；
   - `p` 是父节点消息号，`0` 表示挂在卷根 `/`。卷根是虚拟的，没有根消息、不用置顶。
   - 名字限长 255 字节，正文恒小于 Telegram caption/文本上限，不需要拆到别的消息里。
-- **本地索引**：`data/index-<卷名>.db`（SQLite，WAL）。**可丢弃**：删掉后启动 `web` / `webdav` / `tray`
+- **本地索引**：`data/index-<卷名>.db`（SQLite，WAL）。**可丢弃**：删掉后启动 `web` / `tray`
   会用 user 会话翻整个频道历史自动重建（`RebuildIndexIfEmpty`，按父消息号拼树）；也可手动 `mytgfs sync --rebuild`。
   父消息不存在或成环的节点会挂到卷根。注意 `secrets/` 里的会话与密钥不能删，那是连接 Telegram 的身份。
 - **上传断点**：`data/uploads/<sha256>.json`，记录已上传的分片，中断后按内容摘要续传。
@@ -149,14 +142,14 @@ go build -o mytgfs ./cmd/mytgfs
 
 ## 写入可靠性与待补传记账
 
-写入流程（WebDAV / 面板 / put 共用）：
+写入流程（面板 / put 共用）：
 
 1. 写打开时把整份内容落到 `data/tmp` 下的临时文件。
 2. **关闭时先在 `pending` 表记一笔**（路径、临时文件位置、大小、时间），再上传。
 3. 上传并登记索引成功后，清掉这笔账、删临时文件。
 
 如果上传期间崩溃、断网、杀进程，那笔账和临时文件都还在。下次启动
-（`web` / `webdav` / `tray`）会自动执行 `ResumePending`：按账本把没传完的文件补传并按内容
+（`web` / `tray`）会自动执行 `ResumePending`：按账本把没传完的文件补传并按内容
 sha256 登记索引，成功后清账。临时文件已被清扫或大小对不上时，只清账、不上传，避免把损坏内容写进频道。
 
 分片级的断点续传由 `data/uploads/<sha256>.json` 负责：大文件传到一半中断，重启后跳过已完成分片继续发。
@@ -167,8 +160,7 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 
 **写时去重**：提交前按「大小 + sha256」在索引里查找同内容文件，命中就发一条引用已有 document 的
 新消息，不再重传字节；复用失败会自动回退成正常上传。删除某个路径只删它自己的消息，其它引用不受影响。
-映射盘里用资源管理器复制文件或整个目录时，服务端同样只发引用消息（COPY 走 `CopyPrefix`），
-不把内容下载再上传一遍。
+面板里整目录复制同样只发引用消息，不把内容下载再上传一遍。
 
 **从频道重建与 file_reference 刷新**：索引从频道历史重建时，拿到的是上传当时的
 `file_reference`，Telegram 的引用会过期。读取遇到 `FILE_REFERENCE_EXPIRED` 时，程序按消息 ID
@@ -206,16 +198,16 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 cmd/mytgfs/     CLI 入口与各子命令
 cmd/mytray/     GUI 子系统托盘入口（Windows 双击无黑框）
 internal/
-  dav/          WebDAV 文件系统（读写/待补传记账）
+  vfs/          卷内文件系统（读写/待补传记账）
   telegramstore/ MTProto 上传、下载、断点续传、引用复制
   index/        SQLite 索引（nodes/meta/pending/pending_done）
   dirent/       节点正文编解码（name/parent/type/sha，名字限长）
   sync/         频道 pts 增量同步、全量历史重建（按父消息号拼树）
   web/          内嵌面板、文件管理、PWA、缩略图、分片上传
-  trayapp/      托盘 + 自动同步 + 按需面板 + WebDAV 开关
+  trayapp/      托盘 + 自动同步 + 按需面板
   ...           auth/channel/config/crypto/fm/queue/uploadcache/...
-web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/static）
-packaging/      安装/卸载/映射脚本
+web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/dist）
+packaging/      安装/卸载脚本
 ```
 
 ## 托盘
@@ -224,7 +216,6 @@ packaging/      安装/卸载/映射脚本
 
 - **打开面板 / 关闭面板**：按需显示/隐藏 Wails 面板窗口（桌面壳不监听端口）。
 - **自动同步**：即时开关频道增量同步，状态写回 `config.toml` 的 `[mount].sync_seconds`。
-- **WebDAV**：开关网络盘服务，状态写回 `[webdav].enabled`。
 - **开机自启**：写当前用户的系统注册项，默认关闭。
 
 鼠标悬停在图标上会显示连接状态、每个卷的文件数与占用、正在下载/排队的任务数。

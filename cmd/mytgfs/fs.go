@@ -19,11 +19,11 @@ import (
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/dav"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/ui"
+	"mytgfs/internal/vfs"
 )
 
 // withFiles 打开指定卷的文件管理接口并执行 fn。
@@ -49,7 +49,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 		if rerr := a.RebuildIndexIfEmpty(ctx, s.Index, s.Volume.ChatID); rerr != nil {
 			logging.Warn("err.fs_rebuild", rerr)
 		}
-		davfs := dav.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
+		davfs := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
 		davfs.SetTempDir(datadir.Path("tmp"))
 		return fn(ctx, volName, fm.New(davfs))
 	})
@@ -188,6 +188,10 @@ func runGet(args []string) {
 	local := path.Base(remote)
 	if fset.NArg() > 1 {
 		local = fset.Arg(1)
+	}
+	// --json 下 stdout 只能是 JSON，二进制内容必须写到文件
+	if local == "-" && ui.JSONMode() {
+		fatal(i18n.T("err.get_stdout_json"))
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
 		rf, err := f.Open(ctx, remote)

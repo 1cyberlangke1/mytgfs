@@ -1,8 +1,8 @@
-package dav
+package vfs
 
-// WebDAV 文件句柄：读、写、提交、列目录。
+// 文件句柄：读、写、提交、列目录。
 //
-// 输入：webdav.File 接口调用
+// 输入：File 接口调用
 // 输出：字节流、FileInfo、提交结果
 // 预期：写入落临时文件，Close 时整份上传，节点消息自述名字与父消息号
 

@@ -48,7 +48,6 @@
   "nav": {
     "overview": "Overview",
     "files": "Files",
-    "mount": "Mount",
     "settings": "Settings",
     "offline": "Offline"
   },
@@ -56,8 +55,6 @@
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
     "totalUsed": "Total Used",
-    "webdavActive": "WebDAV: on",
-    "webdavOff": "WebDAV: Off",
     "languageLabel": "Language"
   },
   "header": {
@@ -194,31 +191,6 @@
     "rawLosslessImage": "RAW / Lossless Image",
     "noInlinePlayback": "This browser cannot play this file inline. Download it instead."
   },
-  "mount": {
-    "title": "WebDAV Mount",
-    "webdavCardTitle": "WebDAV Server",
-    "webdavStatusOn": "Running",
-    "webdavStatusOff": "Stopped",
-    "toggleSavedToastOn": "WebDAV server enabled",
-    "toggleSavedToastOff": "WebDAV server stopped",
-    "endpointLabel": "Listen URL",
-    "copyBtn": "Copy",
-    "copiedToast": "Copied to clipboard",
-    "guideTitle": "How to Map Drive",
-    "tabWindows": "Windows",
-    "tabMacos": "macOS",
-    "tabLinux": "Linux",
-    "winStep1": "1. Open File Explorer, click \"This PC\", and select \"Map network drive\".",
-    "winStep2": "2. Choose a drive letter and paste the WebDAV address:",
-    "winStep3": "3. Click Finish to browse your volume like a local disk.",
-    "macStep1": "1. In Finder, press ⌘K to open \"Connect to Server\".",
-    "macStep2": "2. Enter the WebDAV URL and click Connect:",
-    "macStep3": "3. Select \"Guest\" when prompted.",
-    "linuxStep1": "1. Mount via your file manager or terminal:",
-    "linuxStep2": "2. Example command:",
-    "linuxStep3": "3. Once mounted, access files directly from your local mount point.",
-    "enableFirst": "WebDAV is off; the real listen address appears once enabled"
-  },
   "settings": {
     "title": "Settings",
     "panelPortLabel": "Port",
@@ -237,7 +209,6 @@
     "invalidNumber": "{field} must be an integer",
     "invalidRange": "{field} must be between {min} and {max}",
     "invalidOption": "{field} must be one of {options}",
-    "invalidAddr": "{field} must be host:port, for example 127.0.0.1:8080",
     "invalidTooLong": "{field} must be at most 64 characters",
     "saveCard": "Save",
     "savedCard": "Saved",
@@ -264,7 +235,6 @@
   },
   "settingSections": {
     "web": "Panel",
-    "webdav": "WebDAV mount",
     "mount": "Transfer & sync",
     "pwa": "Offline / PWA",
     "log": "Logging"
@@ -272,9 +242,6 @@
   "settingLabels": {
     "web.port": "Panel port",
     "web.auto_open": "Open browser on start",
-    "webdav.enabled": "Enable WebDAV",
-    "webdav.addr": "Listen address",
-    "webdav.volume": "Expose only this volume",
     "mount.sync_seconds": "Auto sync interval (s)",
     "mount.download_parallel": "Download connections",
     "mount.upload_parallel": "Upload chunk concurrency",
@@ -287,9 +254,6 @@
   "settingHints": {
     "web.port": "0 uses default 8720; falls back to a random port if busy",
     "web.auto_open": "Web build only; the desktop shell never opens a browser",
-    "webdav.enabled": "Turn on to mount with Explorer or rclone",
-    "webdav.addr": "host:port such as 127.0.0.1:8080; keep it on loopback",
-    "webdav.volume": "Empty means the first enabled volume",
     "mount.sync_seconds": "0 means 15s default, negative disables auto sync",
     "mount.download_parallel": "One MTProto connection cannot saturate; about 4 is best",
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",
@@ -309,7 +273,6 @@
     "nameLabel": "Volume name",
     "nameHint": "Letters, digits, underscore and hyphen only",
     "titleLabel": "Channel title (optional)",
-    "pointLabel": "Drive letter (optional)",
     "createConfirm": "Create",
     "deleteConfirmTitle": "Delete this volume?",
     "deleteConfirmDesc": "Deletes the Telegram channel, config entry and local index. Irreversible. Volume: {name}",

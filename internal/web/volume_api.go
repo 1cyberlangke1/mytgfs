@@ -93,7 +93,7 @@ func handleAPIAttachVolume(opts Options) http.HandlerFunc {
 // handleAPIVolumes 新建或删除卷。
 //
 // 输入：
-//   - POST {"name","title","point"}
+//   - POST {"name","title"}
 //   - DELETE ?name=
 //
 // 输出：创建返回卷信息；删除返回 {"removed":true}
@@ -109,7 +109,6 @@ func handleAPIVolumes(opts Options) http.HandlerFunc {
 			var in struct {
 				Name  string `json:"name"`
 				Title string `json:"title"`
-				Point string `json:"point"`
 			}
 			if !decodeBody(w, r, &in) {
 				return
@@ -124,7 +123,7 @@ func handleAPIVolumes(opts Options) http.HandlerFunc {
 				replyJSONError(w, http.StatusBadRequest, i18n.T("err.volume_name_invalid"))
 				return
 			}
-			res, err := opts.CreateVolume(r.Context(), name, strings.TrimSpace(in.Title), strings.TrimSpace(in.Point))
+			res, err := opts.CreateVolume(r.Context(), name, strings.TrimSpace(in.Title))
 			if err != nil {
 				if errors.Is(err, config.ErrVolumeExists) {
 					replyJSONError(w, http.StatusConflict, i18n.T("err.volume_exists", name))

@@ -24,10 +24,10 @@ type SyncFunc func(ctx context.Context) (any, error)
 
 // CreateVolumeFunc 创建新卷并返回可序列化的结果。
 //
-// 输入：ctx；name 卷名；title 频道标题；point 挂载点
+// 输入：ctx；name 卷名；title 频道标题
 // 输出：结果对象；error
 // 预期：重名返回 config.ErrVolumeExists，供 handler 映射成 409
-type CreateVolumeFunc func(ctx context.Context, name, title, point string) (any, error)
+type CreateVolumeFunc func(ctx context.Context, name, title string) (any, error)
 
 // DeleteVolumeFunc 删除一个卷（频道 + 配置 + 本地索引）。
 type DeleteVolumeFunc func(ctx context.Context, name string) error
@@ -68,9 +68,7 @@ type Options struct {
 	Stats func(volume string) (files, used int64, ok bool)
 	// TempDir 是分片上传的临时目录；空则 data/tmp
 	TempDir string
-	// Mount 控制 WebDAV 挂盘开关；nil 表示不支持
-	Mount *MountControl
-	// Bus 用于把配置/挂载变更推给托盘；nil 时只影响当前页面
+	// Bus 用于把配置变更推给托盘；nil 时只影响当前页面
 	Bus *eventbus.Bus
 	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
 	ThumbDir string
@@ -135,7 +133,6 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/identity", handleAPIIdentity(opts))
 	mux.Handle("/api/settings", handleAPISettings(configPath))
 	mux.Handle("/api/autostart", handleAPIAutostart(opts))
-	mux.Handle("/api/mount", handleAPIMount(opts))
 	mux.Handle("/api/sync", handleAPISync(opts))
 	mux.Handle("/api/events", handleAPIEvents(opts.Bus))
 

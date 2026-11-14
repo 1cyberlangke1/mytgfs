@@ -1,6 +1,6 @@
-package dav
+package vfs
 
-// WebDAV 层单测：假存储代替 Telegram，验证写入、节点消息、改名/删除与错误处理。
+// 文件系统层单测：假存储代替 Telegram，验证写入、节点消息、改名/删除与错误处理。
 
 import (
 	"bytes"

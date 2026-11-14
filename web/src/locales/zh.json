@@ -48,7 +48,6 @@
   "nav": {
     "overview": "概览",
     "files": "文件",
-    "mount": "挂载",
     "settings": "设置",
     "offline": "离线"
   },
@@ -56,8 +55,6 @@
     "collapseSidebar": "收起侧边栏",
     "expandSidebar": "展开侧边栏",
     "totalUsed": "总占用",
-    "webdavActive": "WebDAV：已开启",
-    "webdavOff": "WebDAV：已关闭",
     "languageLabel": "切换语言"
   },
   "header": {
@@ -194,31 +191,6 @@
     "rawLosslessImage": "无损图像原片",
     "noInlinePlayback": "当前浏览器不支持内嵌播放，请下载后查看。"
   },
-  "mount": {
-    "title": "WebDAV 挂载",
-    "webdavCardTitle": "WebDAV 服务",
-    "webdavStatusOn": "已开启",
-    "webdavStatusOff": "已关闭",
-    "toggleSavedToastOn": "WebDAV 服务已开启",
-    "toggleSavedToastOff": "WebDAV 服务已关闭",
-    "endpointLabel": "监听地址",
-    "copyBtn": "复制",
-    "copiedToast": "已复制监听地址",
-    "guideTitle": "如何映射本地磁盘",
-    "tabWindows": "Windows",
-    "tabMacos": "macOS",
-    "tabLinux": "Linux",
-    "winStep1": "1. 打开“此电脑”，在顶部工具栏点击“映射网络驱动器”。",
-    "winStep2": "2. 选择一个盘符（如 Z:），在“文件夹”一栏输入上方监听地址：",
-    "winStep3": "3. 点击“完成”即可在资源管理器中直接读写文件。",
-    "macStep1": "1. 打开访达 (Finder)，按下快捷键 ⌘K 打开“连接服务器”。",
-    "macStep2": "2. 输入以下服务器地址并点击“连接”：",
-    "macStep3": "3. 身份选择“客人 (Guest)”即可完成挂载。",
-    "linuxStep1": "1. 在文件管理器地址栏或终端中使用 WebDAV 地址挂载：",
-    "linuxStep2": "2. 终端挂载命令示例：",
-    "linuxStep3": "3. 挂载完成后即可在本地目录直接访问。",
-    "enableFirst": "WebDAV 未启用，打开开关后这里会显示真实监听地址"
-  },
   "settings": {
     "title": "设置",
     "panelPortLabel": "服务端口",
@@ -237,7 +209,6 @@
     "invalidNumber": "{field} 必须是整数",
     "invalidRange": "{field} 必须在 {min} 到 {max} 之间",
     "invalidOption": "{field} 只能是 {options} 之一",
-    "invalidAddr": "{field} 必须是 host:port，例如 127.0.0.1:8080",
     "invalidTooLong": "{field} 不能超过 64 个字符",
     "saveCard": "保存",
     "savedCard": "已保存",
@@ -264,7 +235,6 @@
   },
   "settingSections": {
     "web": "面板",
-    "webdav": "WebDAV 挂盘",
     "mount": "传输与同步",
     "pwa": "离线 / PWA",
     "log": "日志"
@@ -272,9 +242,6 @@
   "settingLabels": {
     "web.port": "面板端口",
     "web.auto_open": "启动时自动打开浏览器",
-    "webdav.enabled": "启用 WebDAV",
-    "webdav.addr": "监听地址",
-    "webdav.volume": "只暴露这个卷",
     "mount.sync_seconds": "自动同步间隔（秒）",
     "mount.download_parallel": "下载连接数",
     "mount.upload_parallel": "上传并发分片",
@@ -287,9 +254,6 @@
   "settingHints": {
     "web.port": "0 表示用默认 8720；被占用会自动换端口",
     "web.auto_open": "仅网页版启动时生效，桌面壳不弹浏览器",
-    "webdav.enabled": "开启后可用资源管理器或 rclone 挂盘",
-    "webdav.addr": "形如 127.0.0.1:8080，只建议绑回环",
-    "webdav.volume": "留空表示第一个启用的卷",
     "mount.sync_seconds": "0 用默认 15 秒，负数关闭自动同步",
     "mount.download_parallel": "单条 MTProto 连接吃不满带宽，4 左右最佳",
     "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",
@@ -309,7 +273,6 @@
     "nameLabel": "卷名",
     "nameHint": "只允许字母、数字、下划线、中划线",
     "titleLabel": "频道标题（可选）",
-    "pointLabel": "盘符（可选）",
     "createConfirm": "创建",
     "deleteConfirmTitle": "删除这个卷？",
     "deleteConfirmDesc": "会删除 Telegram 频道、配置条目和本地索引，无法撤销。卷名：{name}",

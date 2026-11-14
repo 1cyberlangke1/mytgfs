@@ -1,4 +1,4 @@
-package dav
+package vfs
 
 // 测试替身：内存里的远端节点消息与文件元数据。
 

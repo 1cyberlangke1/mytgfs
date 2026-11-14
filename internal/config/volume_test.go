@@ -21,7 +21,7 @@ func writeTempConfig(t *testing.T, body string) string {
 func TestAppendVolume(t *testing.T) {
 	p := writeTempConfig(t, "[log]\nlevel = \"debug\"\n")
 
-	if err := AppendVolume(p, Volume{Name: "work", ChatID: 111, Point: "Y:", Enabled: true}); err != nil {
+	if err := AppendVolume(p, Volume{Name: "work", ChatID: 111, Enabled: true}); err != nil {
 		t.Fatalf("AppendVolume: %v", err)
 	}
 	cfg, err := Load(p)
@@ -35,7 +35,7 @@ func TestAppendVolume(t *testing.T) {
 		t.Fatalf("volumes = %d", len(cfg.Volumes))
 	}
 	v := cfg.Volumes[0]
-	if v.Name != "work" || v.ChatID != 111 || v.Point != "Y:" || !v.Enabled {
+	if v.Name != "work" || v.ChatID != 111 || !v.Enabled {
 		t.Errorf("volume = %+v", v)
 	}
 
@@ -49,9 +49,6 @@ func TestAppendVolume(t *testing.T) {
 	}
 	if len(cfg.Volumes) != 2 {
 		t.Fatalf("volumes = %d", len(cfg.Volumes))
-	}
-	if cfg.Volumes[1].Point != "" {
-		t.Errorf("empty point should be omitted, got %q", cfg.Volumes[1].Point)
 	}
 }
 

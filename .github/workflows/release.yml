@@ -61,7 +61,7 @@ jobs:
           pkg="pkg/mytgfs-${GITHUB_REF_NAME}-${{ matrix.platform }}"
           mkdir -p "$pkg"
           cp dist/mytgfs dist/mytgfs-tray LICENSE config.example.toml README.md "$pkg"/
-          cp packaging/uninstall.ps1 packaging/setup-webdav.ps1 "$pkg"/
+          cp packaging/uninstall.ps1 "$pkg"/
           tar -czf "$pkg.tar.gz" -C pkg "$(basename "$pkg")"
       - name: 打包（zip）
         if: matrix.archive == 'zip'
@@ -70,7 +70,7 @@ jobs:
           $pkg = "pkg/mytgfs-$env:GITHUB_REF_NAME-${{ matrix.platform }}"
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
           Copy-Item dist/mytgfs.exe, dist/mytgfs-tray.exe, LICENSE, config.example.toml, README.md $pkg -Force
-          Copy-Item packaging/install.ps1, packaging/uninstall.ps1, packaging/setup-webdav.ps1 $pkg -Force
+          Copy-Item packaging/install.ps1, packaging/uninstall.ps1 $pkg -Force
           Compress-Archive -Path "$pkg/*" -DestinationPath "$pkg.zip"
       - name: 上传构建产物
         uses: actions/upload-artifact@v7

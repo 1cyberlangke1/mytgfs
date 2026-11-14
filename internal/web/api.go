@@ -14,8 +14,6 @@ package web
 //	GET  /api/thumb?vol=&path= 图片缩略图（ETag 缓存）
 //	GET  /api/settings         结构化设置 + 原始配置文本
 //	PUT  /api/settings         只写结构化键，rawConfigText 仅展示不回写
-//	GET  /api/mount            挂盘状态
-//	POST /api/mount            {enabled:bool}
 //	POST /api/sync             立即增量同步
 
 import (
@@ -126,22 +124,6 @@ func (api *filesAPI) publishChange() {
 	if api != nil && api.bus != nil {
 		api.bus.Publish("status")
 	}
-}
-
-// MountState 是 WebDAV 服务的当前状态快照。
-type MountState struct {
-	// Available 为 false 表示当前模式不提供挂盘（例如只读面板）
-	Available bool   `json:"available"`
-	Enabled   bool   `json:"enabled"`
-	Addr      string `json:"addr"`
-	Volume    string `json:"volume"`
-}
-
-// MountControl 由调用方注入实际的启停能力；nil 表示不提供。
-type MountControl struct {
-	Status  func() MountState
-	Enable  func() (MountState, error)
-	Disable func() (MountState, error)
 }
 
 // fileItem 是前端 FileItem 的序列化形态；id 直接用绝对路径。
@@ -291,9 +273,6 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			if st, err := opts.Status(r.Context()); err == nil {
 				resp["status"] = st
 			}
-		}
-		if opts.Mount != nil && opts.Mount.Status != nil {
-			resp["mount"] = opts.Mount.Status()
 		}
 		replyJSON(w, http.StatusOK, resp)
 	}
@@ -646,57 +625,6 @@ func valueString(v any) string {
 		return ""
 	default:
 		return fmt.Sprint(x)
-	}
-}
-
-// handleAPIMount 读取或切换 WebDAV 挂盘。
-func handleAPIMount(opts Options) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctl := opts.Mount
-		if ctl == nil || ctl.Status == nil {
-			replyJSONError(w, http.StatusNotImplemented, i18n.T("web.mount_unavailable"))
-			return
-		}
-		if r.Method == http.MethodGet {
-			replyJSON(w, http.StatusOK, ctl.Status())
-			return
-		}
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
-			return
-		}
-		var in struct {
-			Enabled bool `json:"enabled"`
-		}
-		if !decodeBody(w, r, &in) {
-			return
-		}
-		var (
-			st  MountState
-			err error
-		)
-		if in.Enabled {
-			if ctl.Enable == nil {
-				replyJSONError(w, http.StatusNotImplemented, i18n.T("web.mount_unavailable"))
-				return
-			}
-			st, err = ctl.Enable()
-		} else {
-			if ctl.Disable == nil {
-				replyJSONError(w, http.StatusNotImplemented, i18n.T("web.mount_unavailable"))
-				return
-			}
-			st, err = ctl.Disable()
-		}
-		if err != nil {
-			replyJSONError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		if opts.Bus != nil {
-			opts.Bus.Publish("mount")
-			opts.Bus.Publish("config")
-		}
-		replyJSON(w, http.StatusOK, st)
 	}
 }
 
