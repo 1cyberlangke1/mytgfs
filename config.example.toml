@@ -32,8 +32,8 @@ upload_parallel = 4
 port = 8720
 
 [downloads]
-# 面板「下载」页把卷内文件写到这里；留空则用 data/downloads
-dir = ""
+# 面板「下载」页把卷内文件写到这里；绝对路径原样使用，相对路径按配置文件所在目录解析
+dir = "data/downloads"
 
 [log]
 # 日志等级：debug / info / warn / error

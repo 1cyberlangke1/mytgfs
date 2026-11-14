@@ -37,6 +37,8 @@ export interface ApiAutostart {
 
 export interface ApiQueueItem {
   id: number;
+  volume: string;
+  kind: string;
   name: string;
   state: string;
   attempt: number;

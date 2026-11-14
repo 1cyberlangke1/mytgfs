@@ -54,8 +54,12 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	}
 
 	fsys := vfs.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
-	// 批量写入互相抢 Telegram 发消息配额，串行提交
-	fsys.SetQueue(queue.New(1, 3))
+	fsys.SetVolume(volName)
+	// 所有改动频道的操作先落库再执行：断电/断网后重启继续
+	if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
+		_ = idx.Close()
+		return nil, qerr
+	}
 	fsys.SetTempDir(datadir.Path("tmp"))
 	// 面板靠事件刷新状态：进度、提交、删除都推一次，节流避免高频刷屏
 	if a.opts.Bus != nil {
@@ -76,5 +80,42 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	}, nil
 }
 
-// Close 关闭索引；连接池与上传队列由调用方负责。
-func (v *VolumeFS) Close() error { return v.Index.Close() }
+// Snapshot 是一个卷在面板上的状态。
+type Snapshot struct {
+	Name      string         `json:"name"`
+	Entries   int            `json:"entries"`
+	Used      int64          `json:"used"`
+	Transfers []vfs.Transfer `json:"-"`
+	Queue     []queue.Item   `json:"-"`
+}
+
+// Snapshot 汇总卷统计、下载进度与任务队列。
+//
+// 输入：ctx
+// 输出：卷名、根条目数、占用字节、带卷名前缀的下载进度、任务快照
+// 预期：索引读失败时返回错误，由调用方决定是整卷报错还是跳过
+func (v *VolumeFS) Snapshot(ctx context.Context) (Snapshot, error) {
+	children, err := v.Index.Children(ctx, 0)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	used, _ := v.Index.Used(ctx)
+	snap := Snapshot{Name: v.Name, Entries: len(children), Used: used}
+	if v.FS == nil {
+		return snap, nil
+	}
+	for _, t := range v.FS.Transfers() {
+		t.Path = v.Name + ":" + t.Path
+		snap.Transfers = append(snap.Transfers, t)
+	}
+	if q := v.FS.Queue(); q != nil {
+		snap.Queue = q.Snapshot()
+	}
+	return snap, nil
+}
+
+// Close 先停队列再关索引；在跑任务被取消后等下次启动重排。
+func (v *VolumeFS) Close() error {
+	v.FS.Close()
+	return v.Index.Close()
+}

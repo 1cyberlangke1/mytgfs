@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"mytgfs/internal/index"
+	"mytgfs/internal/queue"
 )
 
 const helloSHA = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -79,6 +81,40 @@ func newResumeIndex(t *testing.T) *index.Index {
 	return idx
 }
 
+// attachQueue 给文件系统挂上持久化队列，测试结束关闭。
+//
+// 输入：t；fsys 待测文件系统
+// 输出：已启动的队列，用于等待任务排空
+// 预期：重启补传是异步的，测试必须等队列跑完再断言
+func attachQueue(t *testing.T, fsys *FileSystem) *queue.Queue {
+	t.Helper()
+	// 队列按卷串行，任务必须带卷名；正式流程由 OpenVolume 设置
+	fsys.SetVolume("resume-test")
+	q, err := fsys.AttachQueue(t.Context())
+	if err != nil {
+		t.Fatalf("attach queue: %v", err)
+	}
+	t.Cleanup(fsys.Close)
+	return q
+}
+
+// waitIdle 等待队列里没有排队或执行中的任务。
+//
+// 输入：t；q 队列
+// 输出：无
+// 预期：5 秒内排空，超时视为失败（不是靠固定 sleep 撞运气）
+func waitIdle(t *testing.T, q *queue.Queue) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if q.Pending() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("queue still has %d pending jobs", q.Pending())
+}
+
 // TestResumePendingUploadsAndIndexes 重启后按账本把未提交文件补传并登记索引。
 func TestResumePendingUploadsAndIndexes(t *testing.T) {
 	idx := newResumeIndex(t)
@@ -95,9 +131,11 @@ func TestResumePendingUploadsAndIndexes(t *testing.T) {
 
 	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
+	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
+	waitIdle(t, q)
 
 	if len(st.uploadKeys) != 1 || st.uploadKeys[0] != helloSHA {
 		t.Fatalf("应按内容 sha 补传，实际 %v", st.uploadKeys)
@@ -160,9 +198,11 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 
 	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
+	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
+	waitIdle(t, q)
 
 	if len(st.uploadKeys) != 0 {
 		t.Fatalf("已上传过的不应重传，实际 %v", st.uploadKeys)
@@ -194,9 +234,11 @@ func TestResumePendingDropsMissingTemp(t *testing.T) {
 
 	st := newFakeStore()
 	fsys := New(ctx, idx, st, 1<<20)
+	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
 	}
+	waitIdle(t, q)
 
 	if len(st.uploadKeys) != 0 {
 		t.Fatalf("临时文件缺失时不应上传，实际 %v", st.uploadKeys)

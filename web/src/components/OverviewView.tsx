@@ -370,12 +370,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
 
         {transfers.length === 0 ? (
-          <div className="surface-card rounded-2xl p-8 text-center space-y-1">
+          <div className="surface-card rounded-2xl p-8 text-center">
             <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
               {t.overview.emptyTransfersTitle}
-            </p>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              {t.overview.emptyTransfersDesc}
             </p>
           </div>
         ) : (
@@ -386,11 +383,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 const pct = unknownSize
                   ? 0
                   : Math.min(100, Math.round((task.transferredBytes / task.size) * 100));
+                const opKind = task.opKind ?? task.direction;
+                const kindLabel = t.overview.queueKind[opKind] ?? '';
                 const stateLabel =
                   task.state === 'transferring'
-                    ? task.direction === 'upload'
+                    ? opKind === 'download'
+                      ? t.overview.transferDownloading
+                      : opKind === 'upload'
                       ? t.overview.transferUploading
-                      : t.overview.transferDownloading
+                      : t.overview.queueRunning
                     : task.state === 'queued'
                     ? t.overview.transferQueued
                     : task.state === 'paused'
@@ -428,10 +429,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
+                          {kindLabel && (
+                            <span className="px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[10px] font-sans font-medium text-zinc-600 dark:text-zinc-300">
+                              {kindLabel}
+                            </span>
+                          )}
                           <span
                             className={
                               task.state === 'completed'
                                 ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                                : task.state === 'failed'
+                                ? 'text-red-600 dark:text-red-400 font-medium'
                                 : task.state === 'transferring'
                                 ? 'text-[#007AFF] dark:text-[#0A84FF] font-medium'
                                 : ''
@@ -466,18 +474,29 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           )}
                         </div>
 
-                        <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
-                          <div
-                            className={`h-full transition-transform duration-200 origin-left ${
-                              task.state === 'completed'
-                                ? 'bg-emerald-500'
-                                : task.state === 'paused'
-                                ? 'bg-amber-500'
-                                : 'bg-[#007AFF] dark:bg-[#0A84FF]'
-                            }`}
-                            style={{ transform: `scaleX(${pct / 100})` }}
-                          />
-                        </div>
+                        {/* 失败原因必须留在界面上，否则用户只看到「失败」不知道怎么办 */}
+                        {task.state === 'failed' && task.errorMessage && (
+                          <p className="text-[11px] leading-relaxed text-red-600 dark:text-red-400 break-words">
+                            {task.errorMessage}
+                          </p>
+                        )}
+
+                        {!unknownSize && (
+                          <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
+                            <div
+                              className={`h-full transition-transform duration-200 origin-left ${
+                                task.state === 'completed'
+                                  ? 'bg-emerald-500'
+                                  : task.state === 'failed'
+                                  ? 'bg-red-500'
+                                  : task.state === 'paused'
+                                  ? 'bg-amber-500'
+                                  : 'bg-[#007AFF] dark:bg-[#0A84FF]'
+                              }`}
+                              style={{ transform: `scaleX(${pct / 100})` }}
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
 

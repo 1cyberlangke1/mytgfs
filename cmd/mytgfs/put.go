@@ -7,7 +7,7 @@ package main
 // 输入：本地路径（可多个）；目录会递归展开
 // 输出：每个文件的 PUT 结果行；最后一行汇总
 // 预期：
-//   - 所有上传走串行队列，避免批量时触发 FLOOD_WAIT
+//   - 所有上传走同一套持久化队列，避免批量时触发 FLOOD_WAIT
 //   - 按内容 sha256 续传：中断后再跑同一命令会跳过已传分片
 //   - 同内容已在索引里时发引用消息，零字节上传
 //   - 索引同时写入 sha256，后续可用 cp 做引用复制
@@ -28,8 +28,6 @@ import (
 	"mytgfs/internal/app"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/index"
-	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/vfs"
@@ -74,12 +72,16 @@ func runPut(args []string) {
 
 	okCount, failCount := 0, 0
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
-		q := queue.New(1, 3)
+		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
+		fsys.SetVolume(volName)
+		// 与面板共用同一套持久化队列：中途断网/断电后任务还在
+		if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
+			return qerr
+		}
+		defer fsys.Close()
 
 		for _, it := range items {
-			if err := q.Do(ctx, it.remote, func(ctx context.Context) error {
-				return putOne(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), it)
-			}); err != nil {
+			if err := putOne(ctx, fsys, it); err != nil {
 				failCount++
 				ui.Out(i18n.T("put.fail", it.remote, err))
 				continue
@@ -99,10 +101,10 @@ func runPut(args []string) {
 
 // putOne 上传单个文件并登记目录项。
 //
-// 输入：ctx；idx 索引；store 存储；chunk 读块大小；it 本地与远程路径
+// 输入：ctx；fsys 卷内文件系统（已挂持久化队列）；it 本地与远程路径
 // 输出：error
-// 预期：目标父目录按需创建；写入走 dav 的临时文件 + 覆盖语义
-func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, chunk int64, it putItem) error {
+// 预期：目标父目录按需创建；写入走临时文件 + 覆盖语义
+func putOne(ctx context.Context, fsys *vfs.FileSystem, it putItem) error {
 	f, err := os.Open(it.local)
 	if err != nil {
 		return err
@@ -116,14 +118,13 @@ func putOne(ctx context.Context, idx *index.Index, store *telegramstore.Store, c
 		return telegramstore.ErrTooLarge
 	}
 
-	fsys := vfs.New(ctx, idx, store, chunk)
 	if err := mkdirAll(ctx, fsys, path.Dir(it.remote)); err != nil {
 		return err
 	}
 	if err := fm.New(fsys).Upload(ctx, it.remote, f); err != nil {
 		return err
 	}
-	n, ok, err := idx.NodeByPath(ctx, it.remote)
+	n, ok, err := fsys.Index().NodeByPath(ctx, it.remote)
 	if err != nil {
 		return err
 	}

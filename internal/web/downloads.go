@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 )
@@ -33,6 +34,25 @@ var (
 	// errDownloadName 表示已下载文件名不合法（含路径分隔符或空名）。
 	errDownloadName = errors.New(i18n.T("err.downloads_bad_name"))
 )
+
+// resolveDownloadsDir 把配置值解析成绝对路径。
+//
+// 输入：configPath 配置文件路径；dir 原始配置（空走缺省）
+// 输出：绝对路径
+// 预期：相对路径按配置文件所在目录解析，托盘从任意工作目录启动也不会写错位置
+func resolveDownloadsDir(configPath, dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		dir = config.DefaultDir
+	}
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	base, err := filepath.Abs(filepath.Dir(configPath))
+	if err != nil {
+		return dir
+	}
+	return filepath.Join(base, dir)
+}
 
 // downloadItem 是已下载文件在界面上的展示结构。
 type downloadItem struct {

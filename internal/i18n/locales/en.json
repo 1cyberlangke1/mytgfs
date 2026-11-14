@@ -232,5 +232,8 @@
   "err.downloads_no_volume": "no volume with that name in the config",
   "err.downloads_bad_path": "invalid file path",
   "err.downloads_bad_name": "invalid file name",
-  "err.downloads_list": "failed to read the downloads directory"
+  "err.downloads_list": "failed to read the downloads directory",
+  "err.queue_no_handler": "queue has no handler",
+  "log.queue_claim_failed": "queue claim failed: %v",
+  "log.queue_finish_failed": "queue finish update failed: %v"
 }

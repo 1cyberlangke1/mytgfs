@@ -58,52 +58,29 @@ func (f *file) Abort() error {
 	return nil
 }
 
-// commit 把一份完整内容上传到频道。
+// commitAt 把一份完整内容上传到频道。
 //
-// 输入：ctx；tmp 已写完的临时文件；name 卷内路径；sha 内容摘要
+// 输入：ctx；tmp 已写完的临时文件；p 定稿的任务参数
 // 输出：error
-// 预期：上传或登记失败时保留临时文件与 pending 记录，供重启补传；
-//
-//	只处理本程序记下的文件，不触碰频道里任何别的消息。
-func (f *file) commit(ctx context.Context, tmp *os.File, name, sha string) error {
-	st, err := tmp.Stat()
-	if err != nil {
-		return err
-	}
+// 预期：上传或登记失败时保留 pending 账本，重启由队列重放
+func (f *file) commitAt(ctx context.Context, tmp *os.File, p uploadJob) error {
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	parent, base, ok, err := f.d.parentOf(ctx, name)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return os.ErrNotExist
-	}
-	// 节点消息正文在上传时就写死 name+parent：文件消息自己描述自己。
-	body, err := nodeBody(base, parent.ID, false, sha)
-	if err != nil {
-		return err
-	}
-	req := upload.Request{
-		Path:    name,
+	part, _, uerr := upload.Write(ctx, f.d.idx, f.d.store, upload.Request{
+		Path:    p.Path,
 		Reader:  tmp,
-		Size:    st.Size(),
-		SHA:     sha,
-		Caption: body,
-	}
-	// 有队列时串行上传：批量写入不会互相抢限流额度
-	if f.d.q != nil {
-		req.Queue = f.d.q
-	}
-	part, _, uerr := upload.Write(ctx, f.d.idx, f.d.store, req)
+		Size:    p.Size,
+		SHA:     p.Sha,
+		Caption: p.Body,
+	})
 	if uerr != nil {
 		return uerr
 	}
 	if part == nil {
 		return errors.New(i18n.T("err.upload_no_result"))
 	}
-	return f.record(ctx, name, sha, part)
+	return f.record(ctx, p.Path, p.Sha, part)
 }
 
 // record 把上传结果登记到本地节点表，并清理被覆盖的旧消息。
@@ -172,12 +149,16 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	return nil
 }
 
-// Close 关闭：写模式先记账再提交上传，读模式释放缓冲。
+// Close 关闭：写模式先把内容落账并入队，执行完才返回。
 //
-// 上传失败时保留账本与临时文件（不 defer 删除），重启由 ResumePending 补传；
-// 成功后才删账本与临时文件。
+// 输入：无
+// 输出：error
+// 预期：
+//   - 先把临时文件刷盘、写 pending 账本，再关句柄（Windows 下执行体要重新打开）
+//   - 入队后等待执行结果；进程被杀或断网时任务仍在库中，下次启动继续
 func (f *file) Close() error {
-	f.d.untrack(f.name)
+	d := f.d
+	d.untrack(f.name)
 	if !f.write || f.tmp == nil {
 		return nil
 	}
@@ -192,23 +173,38 @@ func (f *file) Close() error {
 		_ = tmp.Close()
 		return err
 	}
-	// 提交前先记一笔：上传/登记阶段崩溃也能按账恢复
-	if err := f.d.idx.PutPending(f.d.ctx, index.PendingUpload{
+	// 断电前内容必须真的落到磁盘，否则重启拿到的是短文件
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	parent, base, ok, err := d.parentOf(d.ctx, f.name)
+	if err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if !ok {
+		_ = tmp.Close()
+		return os.ErrNotExist
+	}
+	body, err := nodeBody(base, parent.ID, false, sha)
+	if err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// 提交前先记一笔：入队/上传阶段崩溃也能按账恢复
+	if err := d.idx.PutPending(d.ctx, index.PendingUpload{
 		Path: f.name, Temp: tmp.Name(), Size: st.Size(), Mtime: nowUnix(),
 	}); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := f.commit(f.d.ctx, tmp, f.name, sha); err != nil {
-		// 失败：关句柄但保留磁盘临时文件与 pending 账本，重启补传
-		_ = tmp.Close()
-		return err
-	}
-	name := tmp.Name()
-	// Windows 下必须先关句柄才能删除文件
+	temp := tmp.Name()
 	_ = tmp.Close()
-	_ = f.d.idx.DeletePending(f.d.ctx, f.name)
-	return os.Remove(name)
+	return d.enqueue(d.ctx, jobUpload, f.name, uploadJob{
+		Path: f.name, Temp: temp, Size: st.Size(), Sha: sha,
+		Base: base, Body: body, Parent: parent.ID,
+	})
 }
 
 // Read 按需拉取一块再返回。

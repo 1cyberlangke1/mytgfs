@@ -97,9 +97,8 @@
     "browseVolumeBtn": "打开",
     "emptyVolumesTitle": "暂无存储卷",
     "emptyVolumesDesc": "请在配置文件中添加至少一个 Telegram 私有频道。",
-    "recentTransfersHeading": "传输任务",
-    "emptyTransfersTitle": "暂无传输任务",
-    "emptyTransfersDesc": "上传或下载文件时会在此处显示实时进度。",
+    "recentTransfersHeading": "操作队列",
+    "emptyTransfersTitle": "队列空闲",
     "transferUploading": "上传中",
     "transferDownloading": "下载中",
     "transferQueued": "排队中",
@@ -110,7 +109,16 @@
     "pauseBtn": "暂停",
     "resumeBtn": "继续",
     "cancelBtn": "取消",
-    "clearCompletedBtn": "清除已完成"
+    "clearCompletedBtn": "清除已完成",
+    "queueRunning": "执行中",
+    "queueKind": {
+      "upload": "上传",
+      "download": "下载",
+      "mkdir": "新建目录",
+      "rename": "改名/移动",
+      "remove": "删除",
+      "copy": "复制"
+    }
   },
   "files": {
     "title": "文件",
@@ -236,7 +244,7 @@
     "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",
     "mount.read_chunk_mb": "越大请求越少，但对慢网络不友好",
     "log.level": "debug 会记录每次回源，排查问题时再开",
-    "downloads.dir": "留空则用 data/downloads；支持绝对路径"
+    "downloads.dir": "默认 data/downloads；相对路径按配置文件目录解析，也支持绝对路径"
   },
   "volume": {
     "createBtn": "新建卷",
@@ -324,5 +332,14 @@
     "savedToast": "已下载：{name}",
     "removedToast": "已删除本地文件",
     "openFailedToast": "打开下载目录失败"
+  },
+  "errors": {
+    "title": "出错了",
+    "connection": "与本地服务的连接已断开，正在自动重连…",
+    "state": "无法读取卷状态：{message}",
+    "files": "无法读取「{volume}」的目录：{message}",
+    "settings": "无法读取设置：{message}",
+    "retry": "重试",
+    "dismiss": "关闭"
   }
 }

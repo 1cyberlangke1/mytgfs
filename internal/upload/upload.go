@@ -40,11 +40,6 @@ type Store interface {
 	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*telegramstore.Part, error)
 }
 
-// Queue 串行化上传，nil 表示直接上传。
-type Queue interface {
-	Do(ctx context.Context, name string, fn func(context.Context) error) error
-}
-
 // Request 描述一次写入。
 type Request struct {
 	Path    string      // 卷内绝对路径
@@ -53,7 +48,6 @@ type Request struct {
 	SHA     string      // 内容 sha256（十六进制），同时作为续传键
 	Mime    string      // MIME；空则用 application/octet-stream
 	Caption string      // 已编码好的 caption
-	Queue   Queue       // 可选串行队列
 }
 
 // Hash 计算内容摘要，供续传键与去重使用。
@@ -83,7 +77,7 @@ func Part(n index.Node) *telegramstore.Part {
 //
 // 输入：ctx；idx 索引；st 存储；req 写入描述
 // 输出：频道消息、是否复用、错误
-// 预期：复用命中时不产生任何上传字节；Queue 只包住真正的上传
+// 预期：复用命中时不产生任何上传字节；耗时只在真正的上传阶段
 func Write(ctx context.Context, idx Index, st Store, req Request) (*telegramstore.Part, bool, error) {
 	mime := req.Mime
 	if mime == "" {
@@ -96,26 +90,14 @@ func Write(ctx context.Context, idx Index, st Store, req Request) (*telegramstor
 		return part, reused, err
 	}
 
-	doUpload := func(c context.Context) error {
-		p, uerr := st.UploadResumable(c, req.Reader, req.Size, req.SHA, name, mime, req.Caption)
-		if uerr != nil {
-			return uerr
-		}
-		part = p
-		return nil
+	p, uerr := st.UploadResumable(ctx, req.Reader, req.Size, req.SHA, name, mime, req.Caption)
+	if uerr != nil {
+		return nil, false, uerr
 	}
-	if req.Queue != nil {
-		err = req.Queue.Do(ctx, req.Path, doUpload)
-	} else {
-		err = doUpload(ctx)
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if part == nil {
+	if p == nil {
 		return nil, false, ErrNoResult
 	}
-	return part, false, nil
+	return p, false, nil
 }
 
 // find 在同目录里找同内容的已有文件并复用其 document。

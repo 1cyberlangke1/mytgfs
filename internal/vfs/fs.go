@@ -44,11 +44,12 @@ type Store interface {
 
 // FileSystem 是卷内的文件系统实现。
 type FileSystem struct {
-	ctx   context.Context
-	idx   *index.Index
-	store Store
-	chunk int64
-	// q 可选：非空时上传走串行队列，避免批量写入把 Telegram 打出 FLOOD_WAIT
+	ctx    context.Context
+	idx    *index.Index
+	store  Store
+	chunk  int64
+	volume string
+	// q 非空时所有改动频道的操作走持久化队列
 	q *queue.Queue
 	// tmpDir 是上传临时文件目录；空表示系统临时目录
 	tmpDir string
@@ -87,14 +88,20 @@ func New(ctx context.Context, idx *index.Index, store Store, chunk int64) *FileS
 	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk}
 }
 
-// SetQueue 挂上串行队列。
+// SetQueue 挂上串行队列（测试可注入内存实现）。
 func (d *FileSystem) SetQueue(q *queue.Queue) { d.q = q }
+
+// SetVolume 设置卷名；任务落库时用来区分频道。
+func (d *FileSystem) SetVolume(name string) { d.volume = name }
 
 // SetTempDir 指定上传临时文件目录。
 func (d *FileSystem) SetTempDir(dir string) { d.tmpDir = dir }
 
 // Queue 返回挂上的队列，未设置时为 nil。
 func (d *FileSystem) Queue() *queue.Queue { return d.q }
+
+// Index 返回本地索引，供命令行在写入后回读统计。
+func (d *FileSystem) Index() *index.Index { return d.idx }
 
 // nodeAt 按路径取节点。
 //
@@ -210,21 +217,7 @@ func (d *FileSystem) Mkdir(ctx context.Context, name string, _ os.FileMode) erro
 	} else if exists {
 		return os.ErrExist
 	}
-	id, err := d.sendNode(ctx, base, parent.ID, true, "")
-	if err != nil {
-		return err
-	}
-	if err := d.idx.PutNode(ctx, index.Node{
-		ID: id, ParentID: parent.ID, Name: base, IsDir: true, Path: name,
-		Mtime: nowUnix(),
-	}); err != nil {
-		// 消息已发出：本地登记失败就按远端正文对齐，别把错误吞成「目录不存在」
-		if rerr := d.reconcileNode(ctx, id); rerr != nil {
-			return rerr
-		}
-	}
-	d.notify()
-	return nil
+	return d.enqueue(ctx, jobMkdir, name, mkdirJob{Parent: parent.ID, Name: base})
 }
 
 // Search 在索引里递归搜索文件名。
@@ -276,17 +269,10 @@ func (d *FileSystem) RemoveAll(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if len(ids) > 0 {
-		if err := d.store.Delete(ctx, ids...); err != nil {
-			return err
-		}
+	if len(ids) == 0 {
+		return nil
 	}
-	if _, err := d.idx.DeleteSubtree(ctx, n.ID); err != nil {
-		// 远端消息已删：对账会按「读不到」把本地节点清掉
-		return d.reconcileNode(ctx, n.ID)
-	}
-	d.notify()
-	return nil
+	return d.enqueue(ctx, jobRemove, name, removeJob{ID: n.ID})
 }
 
 // Rename 改名或移动：只编辑节点自己那条消息。
@@ -332,22 +318,7 @@ func (d *FileSystem) Rename(ctx context.Context, oldName, newName string) error 
 	} else if exists && existing.ID != src.ID {
 		return os.ErrExist
 	}
-	body, err := nodeBody(newBase, newParent.ID, src.IsDir, src.Sha256)
-	if err != nil {
-		return err
-	}
-	// 远端先改：这一步失败则两端都没变，直接返回即可
-	if err := d.store.EditNode(ctx, src.ID, body); err != nil {
-		return err
-	}
-	// 本地后改：失败时按已经改好的远端正文对齐，绝不留分叉视图
-	if _, _, err := d.idx.MoveNode(ctx, src.ID, newParent.ID, newBase); err != nil {
-		if rerr := d.reconcileNode(ctx, src.ID); rerr != nil {
-			return rerr
-		}
-	}
-	d.notify()
-	return nil
+	return d.enqueue(ctx, jobRename, newName, renameJob{ID: src.ID, Parent: newParent.ID, Name: newBase})
 }
 
 // NodeBody 生成把已有消息挂到 dst 路径上的节点正文。

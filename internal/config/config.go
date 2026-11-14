@@ -30,6 +30,9 @@ type Web struct {
 // DefaultWebPort 是面板默认端口。
 const DefaultWebPort = 8720
 
+// DefaultLogLevel 是日志默认级别。
+const DefaultLogLevel = "info"
+
 // ListenPort 返回面板端口。
 //
 // 输入：无
@@ -61,27 +64,39 @@ type Telegram struct {
 	ChatID       int64  `toml:"chat_id"`
 }
 
+// 运行时默认值：配置缺省、面板展示、实际执行必须共用同一份数字。
+const (
+	// DefaultSyncSeconds 是自动增量同步的默认间隔秒数。
+	DefaultSyncSeconds = 15
+	// DefaultDownloadParallel 是下载并发连接数的默认值。
+	DefaultDownloadParallel = 4
+	// DefaultReadChunkMB 是每次向上游取数的分片大小默认值（MB）。
+	DefaultReadChunkMB = 8
+	// DefaultUploadParallel 是上传并发分片数的默认值。
+	DefaultUploadParallel = 4
+)
+
 // Mount 是挂载配置。
 type Mount struct {
-	// SyncSeconds 是托盘自动增量同步的间隔秒数：0 用默认 15，负数关闭。
+	// SyncSeconds 是托盘自动增量同步的间隔秒数：0 用 DefaultSyncSeconds，负数关闭。
 	SyncSeconds int `toml:"sync_seconds"`
-	// DownloadParallel 是下载并发块数：0 用默认 8，范围 1..32。
+	// DownloadParallel 是下载并发连接数：0 用 DefaultDownloadParallel，范围 1..8。
 	DownloadParallel int `toml:"download_parallel"`
-	// ReadChunkMB 是每次向上游取数的分片大小（MB）：0 用默认 8，范围 1..64。
+	// ReadChunkMB 是每次向上游取数的分片大小（MB）：0 用 DefaultReadChunkMB，范围 1..64。
 	ReadChunkMB int `toml:"read_chunk_mb"`
-	// UploadParallel 是上传并发分片数：0 用默认 4，范围 1..16。
+	// UploadParallel 是上传并发分片数：0 用 DefaultUploadParallel，范围 1..16。
 	UploadParallel int `toml:"upload_parallel"`
 }
 
 // UploadParallelism 返回上传并发分片数。
 //
 // 输入：无
-// 输出：并发数，默认 4，夹在 1..16
+// 输出：并发数，默认 DefaultUploadParallel，夹在 1..16
 // 预期：网络好的可以调大，慢网络调小；与下载并发独立
 func (c Mount) UploadParallelism() int {
 	n := c.UploadParallel
 	if n <= 0 {
-		return 4
+		return DefaultUploadParallel
 	}
 	if n > 16 {
 		return 16
@@ -92,12 +107,12 @@ func (c Mount) UploadParallelism() int {
 // ReadChunk 返回读分片大小（字节）。
 //
 // 输入：无
-// 输出：字节数，默认 1MB，夹在 1..64MB
+// 输出：字节数，默认 DefaultReadChunkMB，夹在 1..64MB
 // 预期：网络快的可以调大减少请求数，网络慢的调小降低等待
 func (c Mount) ReadChunk() int64 {
 	mb := c.ReadChunkMB
 	if mb <= 0 {
-		mb = 8
+		mb = DefaultReadChunkMB
 	}
 	if mb > 64 {
 		mb = 64
@@ -108,12 +123,12 @@ func (c Mount) ReadChunk() int64 {
 // DownloadConnections 返回下载连接数。
 //
 // 输入：无
-// 输出：连接数，默认 4，夹在 1..8
+// 输出：连接数，默认 DefaultDownloadParallel，夹在 1..8
 // 预期：单条 MTProto 连接吃不满带宽，多条才有效；过多会互相挤占
 func (m Mount) DownloadConnections() int {
 	n := m.DownloadParallel
 	if n <= 0 {
-		return 4
+		return DefaultDownloadParallel
 	}
 	if n > 8 {
 		return 8

@@ -51,6 +51,26 @@ type SettingInfo struct {
 	Options []string `json:"options,omitempty"`
 }
 
+// settingDefaults 是缺省值：配置里没写这个键时，界面与运行时应看到的值。
+//
+// 直接引用运行时默认常量，避免面板显示 15 而实际按 8 秒跑这类分叉。
+var settingDefaults = map[string]string{
+	"web.port":                strconv.Itoa(DefaultWebPort),
+	"downloads.dir":           DefaultDir,
+	"mount.sync_seconds":      strconv.Itoa(DefaultSyncSeconds),
+	"mount.download_parallel": strconv.Itoa(DefaultDownloadParallel),
+	"mount.read_chunk_mb":     strconv.Itoa(DefaultReadChunkMB),
+	"mount.upload_parallel":   strconv.Itoa(DefaultUploadParallel),
+	"log.level":               DefaultLogLevel,
+}
+
+// DefaultValue 返回一个键的缺省值。
+//
+// 输入：name "section.key"
+// 输出：缺省字面量；未知键返回空串
+// 预期：面板读取缺省键时用它填值，不再显示类型零值
+func DefaultValue(name string) string { return settingDefaults[name] }
+
 // settingLimits 是整数键的合法范围（含端点）。
 //
 // 与各键的运行时夹取范围保持一致：调大只会被夹回，不如直接拒绝写入。

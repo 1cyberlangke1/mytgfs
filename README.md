@@ -123,7 +123,7 @@ go build -o mytgfs ./cmd/mytgfs
 - `[mount]`：`read_chunk_mb`（读分块，默认 8）、`download_parallel`（下载连接数，默认 4）、
   `upload_parallel`（上传并发分片，默认 4）、`sync_seconds`（自动同步间隔，默认 15 秒，负数关闭）。
 - `[web]`：`port`（面板端口，默认 8720，被占用时自动退回随机端口）。`mytgfs web` 只打印地址，不改浏览器；桌面托盘由 Wails 直接显示面板窗口。
-- `[downloads]`：`dir` 是面板「下载」页的落盘目录，留空用 `data/downloads`；可用 `mytgfs config set downloads.dir <路径>` 修改。
+- `[downloads]`：`dir` 是面板「下载」页的落盘目录，默认 `data/downloads`；相对路径按配置文件所在目录解析，绝对路径原样使用。可用 `mytgfs config set downloads.dir <路径>` 修改。
 - `[log]`：slog + 轮转日志，默认写到 `data/mytgfs.log`。
 
 ## 数据都放在哪

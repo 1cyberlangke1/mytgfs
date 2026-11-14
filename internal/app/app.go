@@ -92,6 +92,14 @@ func Load(opts Options) (*App, error) {
 // Config 返回底层配置，供调用方读取并发数、端口等只读字段。
 func (a *App) Config() config.Config { return a.cfg }
 
+// Bus 返回事件总线；未注入时为 nil。
+//
+// 输入：无
+// 输出：装配时传入的 *eventbus.Bus
+// 预期：卷打开完成这类「状态变了」的时点由调用方 Publish("status") 通知面板，
+// 前端因此不需要定时轮询
+func (a *App) Bus() *eventbus.Bus { return a.opts.Bus }
+
 // Volume 解析卷名与卷定义。
 //
 // 输入：name 卷名；空字符串表示取第一个卷

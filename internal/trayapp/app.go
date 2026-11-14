@@ -61,7 +61,7 @@ func SyncInterval(seconds int) time.Duration {
 	case seconds < 0:
 		return 0
 	case seconds == 0:
-		return 15 * time.Second
+		return config.DefaultSyncSeconds * time.Second
 	default:
 		return time.Duration(seconds) * time.Second
 	}
@@ -264,6 +264,7 @@ func Run(opts Options) error {
 
 	// trayVolume 是一个已挂载卷的运行时句柄，供状态展示与手动同步使用。
 	type trayVolume struct {
+		vf     *app.VolumeFS
 		name   string
 		idx    *index.Index
 		fsys   *vfs.FileSystem
@@ -352,8 +353,8 @@ func Run(opts Options) error {
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
 			// 桌面壳里的自启开关与托盘菜单写同一处注册项
 			Autostart: autostart.Control{},
-			// 下载目录留空时由面板回落到 data/downloads
-			DownloadsDir: cfg.Downloads.Dir,
+			// 下载目录：留空时由面板按 data/downloads 解析
+			DownloadsDir: cfg.Downloads.EffectiveDir(),
 			Status: func(ctx context.Context) (any, error) {
 				stateMu.Lock()
 				st := connText
@@ -363,46 +364,26 @@ func Run(opts Options) error {
 				vs := append([]*trayVolume(nil), volumes...)
 				volMu.Unlock()
 				list := make([]map[string]any, 0, len(vs))
+				var xfers []vfs.Transfer
+				var queued []queue.Item
 				for _, v := range vs {
-					children, err := v.idx.Children(ctx, 0)
+					if v.vf == nil {
+						continue
+					}
+					snap, err := v.vf.Snapshot(ctx)
 					if err != nil {
 						list = append(list, map[string]any{"name": v.name, "error": err.Error()})
 						continue
 					}
-					used, _ := v.idx.Used(ctx)
 					list = append(list, map[string]any{
-						"name": v.name, "entries": len(children), "used": used,
+						"name": snap.Name, "entries": snap.Entries, "used": snap.Used,
 					})
+					xfers = append(xfers, snap.Transfers...)
+					queued = append(queued, snap.Queue...)
 				}
 				auth := "ok"
 				if authLost.Load() {
 					auth = "lost"
-				}
-				// 下载进度：卷名 + 路径，供面板显示「正在下载」
-				var xfers []vfs.Transfer
-				for _, v := range vs {
-					if v.fsys == nil {
-						continue
-					}
-					for _, t := range v.fsys.Transfers() {
-						t.Path = v.name + ":" + t.Path
-						xfers = append(xfers, t)
-					}
-				}
-				// 上传队列：面板显示排队/重试中的上传，避免用户以为没反应
-				var queued []queue.Item
-				for _, v := range vs {
-					if v.fsys == nil {
-						continue
-					}
-					q := v.fsys.Queue()
-					if q == nil {
-						continue
-					}
-					for _, it := range q.Snapshot() {
-						it.Name = v.name + ":" + it.Name
-						queued = append(queued, it)
-					}
 				}
 				return map[string]any{
 					"state": st, "state_code": code, "auth": auth, "volumes": list,
@@ -603,11 +584,15 @@ func Run(opts Options) error {
 		}
 		idx, store, fsys, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-		tv := &trayVolume{name: name, idx: idx, fsys: fsys, fmgr: fmgr, store: store, differ: differ}
+		tv := &trayVolume{vf: vf, name: name, idx: idx, fsys: fsys, fmgr: fmgr, store: store, differ: differ}
 
 		volMu.Lock()
 		volumes = append(volumes, tv)
 		volMu.Unlock()
+		// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
+		if bus != nil {
+			bus.Publish("status")
+		}
 
 		var vwg sync.WaitGroup
 		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步

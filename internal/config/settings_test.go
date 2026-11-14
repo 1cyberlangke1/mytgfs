@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -197,3 +198,38 @@ func mustRead(t *testing.T, p string) string {
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
 func countSubstring(s, sub string) int { return strings.Count(s, sub) }
+
+// TestDefaultValueMatchesRuntime 面板缺省值必须等于运行时真实回落。
+//
+// 输入：零值 Mount；全部可编辑键
+// 输出：DefaultValue 与运行时 getter / 常量逐项相等
+// 预期：任何一处改默认数字都会让这个测试失败，避免面板显示 0 或与执行行为分叉
+func TestDefaultValueMatchesRuntime(t *testing.T) {
+	var m Mount
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"web.port", strconv.Itoa(DefaultWebPort)},
+		{"downloads.dir", DefaultDir},
+		{"mount.sync_seconds", strconv.Itoa(DefaultSyncSeconds)},
+		{"mount.download_parallel", strconv.Itoa(m.DownloadConnections())},
+		{"mount.upload_parallel", strconv.Itoa(m.UploadParallelism())},
+		{"mount.read_chunk_mb", strconv.Itoa(DefaultReadChunkMB)},
+		{"log.level", DefaultLogLevel},
+	}
+	for _, c := range cases {
+		if got := DefaultValue(c.key); got != c.want {
+			t.Errorf("DefaultValue(%q) = %q，期望 %q", c.key, got, c.want)
+		}
+	}
+	if got := m.ReadChunk(); got != int64(DefaultReadChunkMB)<<20 {
+		t.Errorf("ReadChunk() = %d，期望 %d", got, int64(DefaultReadChunkMB)<<20)
+	}
+	// 每个可编辑键都必须有默认值，否则面板又会显示空白或 0
+	for _, s := range Schema() {
+		if strings.TrimSpace(DefaultValue(s.Key)) == "" {
+			t.Errorf("键 %q 缺少默认值", s.Key)
+		}
+	}
+}

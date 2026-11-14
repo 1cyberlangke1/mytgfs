@@ -49,6 +49,8 @@ export interface TransferTask {
   errorMessage?: string;
   createdAt: string;
   category?: FileCategory;
+  // opKind 是服务端队列里的操作类型；前端本地上传任务固定为 upload
+  opKind?: 'upload' | 'download' | 'mkdir' | 'rename' | 'remove' | 'copy';
 }
 
 export interface AppSettingDef {
@@ -60,14 +62,9 @@ export interface AppSettingDef {
 }
 
 export interface AppSettings {
-  panelPort: number;
-  autoSyncIntervalSec: number;
-  downloadConnections: number;
-  uploadConcurrency: number;
-  readChunkSizeMb: number;
   /** 服务端 config.Schema() 返回的可编辑键，面板据此动态渲染 */
   schema: AppSettingDef[];
-  /** 配置文件里的原始字符串值，键为 section.key */
+  /** 服务端返回的真实生效值（配置值或运行时默认值），键为 section.key */
   values: Record<string, string>;
 }
 

@@ -6,16 +6,12 @@ package web
 //
 // 输入：dir 绝对路径
 // 输出：error；进程启动失败时返回
-// 预期：不打开控制台窗口；explorer 会自动把已存在的窗口切到前台
+// 预期：不设置 HideWindow —— explorer 是 GUI 进程，设置后连新建的文件夹窗口
+// 都会被一起隐藏（实测 9 次点击留下 9 个不可见窗口），表现为「点了没反应」。
 
-import (
-	"os/exec"
-	"syscall"
-)
+import "os/exec"
 
 func openDir(dir string) error {
 	cmd := exec.Command("explorer.exe", dir)
-	// GUI 子系统进程起控制台子进程会闪黑框，这里显式隐藏
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Start()
 }

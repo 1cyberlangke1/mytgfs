@@ -97,9 +97,8 @@
     "browseVolumeBtn": "Open",
     "emptyVolumesTitle": "No Volumes Configured",
     "emptyVolumesDesc": "Add at least one Telegram private channel in your configuration.",
-    "recentTransfersHeading": "Transfers",
-    "emptyTransfersTitle": "No Active Transfers",
-    "emptyTransfersDesc": "Active uploads and downloads will appear here.",
+    "recentTransfersHeading": "Operation Queue",
+    "emptyTransfersTitle": "Queue Idle",
     "transferUploading": "Uploading",
     "transferDownloading": "Downloading",
     "transferQueued": "Queued",
@@ -110,7 +109,16 @@
     "pauseBtn": "Pause",
     "resumeBtn": "Resume",
     "cancelBtn": "Cancel",
-    "clearCompletedBtn": "Clear Completed"
+    "clearCompletedBtn": "Clear Completed",
+    "queueRunning": "Running",
+    "queueKind": {
+      "upload": "Upload",
+      "download": "Download",
+      "mkdir": "New folder",
+      "rename": "Rename/Move",
+      "remove": "Delete",
+      "copy": "Copy"
+    }
   },
   "files": {
     "title": "Files",
@@ -236,7 +244,7 @@
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",
     "mount.read_chunk_mb": "Larger means fewer requests but worse on slow links",
     "log.level": "debug logs every remote fetch; enable only while diagnosing",
-    "downloads.dir": "Empty uses data/downloads; absolute paths are allowed"
+    "downloads.dir": "Defaults to data/downloads; relative paths resolve against the config file, absolute paths are allowed"
   },
   "volume": {
     "createBtn": "New volume",
@@ -324,5 +332,14 @@
     "savedToast": "Downloaded: {name}",
     "removedToast": "Local copy deleted",
     "openFailedToast": "Failed to open the downloads directory"
+  },
+  "errors": {
+    "title": "Something went wrong",
+    "connection": "Lost connection to the local service, reconnecting…",
+    "state": "Cannot read volume status: {message}",
+    "files": "Cannot read \"{volume}\": {message}",
+    "settings": "Cannot read settings: {message}",
+    "retry": "Retry",
+    "dismiss": "Dismiss"
   }
 }

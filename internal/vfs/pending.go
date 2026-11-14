@@ -1,5 +1,14 @@
 package vfs
 
+// 未提交上传的补传：把 pending 账本重新排进持久化队列。
+//
+// 输入：索引里的 pending 记录
+// 输出：无（异步）
+// 预期：
+//   - 不再阻塞启动：断网时任务留在库里，联网后自动跑
+//   - 只处理本程序记下的记录，不扫描频道里别的内容
+//   - 临时文件丢失或大小不符的账本直接清掉，避免永远卡住
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,14 +17,8 @@ import (
 	"os"
 
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/telegramstore"
+	"mytgfs/internal/queue"
 )
-
-// 未提交上传的补传账本。
-//
-// 输入：索引里的 pending 记录
-// 输出：补传结果
-// 预期：只处理本程序记下的记录，不扫描频道里别的内容
 
 func (d *FileSystem) ResumePending() error {
 	rows, err := d.idx.ListPending(d.ctx)
@@ -36,50 +39,36 @@ func (d *FileSystem) ResumePending() error {
 			_ = os.Remove(p.Temp)
 			continue
 		}
-		// 补传内容摘要按临时文件实际内容计算，作为断点键与去重依据
+		// 摘要按临时文件实际内容计算，作为断点键与去重依据
 		h := sha256.New()
-		_, copyErr := io.Copy(h, tmp)
-		if copyErr != nil {
-			_ = tmp.Close()
-			continue
-		}
-		sha := hex.EncodeToString(h.Sum(nil))
-		helper := &file{d: d, name: p.Path}
-		// 上次上传已成功（消息号已记下）但索引没写成：只补索引，不重传整份内容。
-		// 摘要不一致说明临时文件已被新内容覆盖，旧记账作废，走正常上传。
-		done, hasDone, derr := d.idx.GetPendingDone(d.ctx, p.Path)
-		if derr == nil && hasDone && done.MessageID > 0 && done.Sha256 == sha {
-			perr := helper.record(d.ctx, p.Path, sha, &telegramstore.Part{
-				MessageID:     done.MessageID,
-				DocumentID:    done.DocumentID,
-				AccessHash:    done.AccessHash,
-				FileReference: done.FileReference,
-				Size:          done.Size,
-			})
-			if perr != nil {
-				slog.Warn(i18n.T("log.pending_resume_failed", p.Path, perr), "path", p.Path, "err", perr)
-				_ = tmp.Close()
-				continue
-			}
-			_ = tmp.Close()
-			_ = d.idx.DeletePending(d.ctx, p.Path)
-			_ = os.Remove(p.Temp)
-			continue
-		}
-		if hasDone {
-			// 内容已变化：旧记账与本次提交无关，清掉避免下次误用
-			_ = d.idx.DeletePendingDone(d.ctx, p.Path)
-		}
-		if err := helper.commit(d.ctx, tmp, p.Path, sha); err != nil {
-			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, err), "path", p.Path, "err", err)
+		if _, cerr := io.Copy(h, tmp); cerr != nil {
 			_ = tmp.Close()
 			continue
 		}
 		_ = tmp.Close()
-		_ = d.idx.DeletePending(d.ctx, p.Path)
-		_ = os.Remove(p.Temp)
+		sha := hex.EncodeToString(h.Sum(nil))
+		parent, base, ok, perr := d.parentOf(d.ctx, p.Path)
+		if perr != nil || !ok {
+			// 父目录还没重建出来：留着账本，下次启动再试
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, perr), "path", p.Path)
+			continue
+		}
+		body, berr := nodeBody(base, parent.ID, false, sha)
+		if berr != nil {
+			continue
+		}
+		if d.q == nil {
+			continue
+		}
+		if _, err := d.q.EnqueueOnce(d.ctx, queue.Job{
+			Volume: d.volume, Kind: jobUpload, Name: p.Path,
+			Payload: mustJSON(uploadJob{
+				Path: p.Path, Temp: p.Temp, Size: p.Size, Sha: sha,
+				Base: base, Body: body, Parent: parent.ID,
+			}),
+		}); err != nil {
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, err), "path", p.Path)
+		}
 	}
 	return nil
 }
-
-// Mkdir 创建目录。

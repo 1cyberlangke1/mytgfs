@@ -5,6 +5,7 @@ package main
 import (
 	"testing"
 
+	"mytgfs/internal/app"
 	"mytgfs/internal/config"
 	"mytgfs/internal/index"
 )
@@ -29,7 +30,7 @@ func TestWebStatusSummarizesVolumes(t *testing.T) {
 		{Name: "demo", ChatID: 11},
 		{Name: "missing", ChatID: 22},
 	}}
-	vols := map[string]*webVolume{"demo": {idx: idx}}
+	vols := map[string]*webVolume{"demo": {vf: &app.VolumeFS{Name: "demo", Index: idx}}}
 
 	got := webStatus(ctx, cfg, vols)
 	m, ok := got.(map[string]any)
@@ -60,7 +61,7 @@ func TestWebStatusReportsIndexError(t *testing.T) {
 	}
 
 	cfg := config.Config{Volumes: []config.Volume{{Name: "demo", ChatID: 11}}}
-	got := webStatus(ctx, cfg, map[string]*webVolume{"demo": {idx: idx}})
+	got := webStatus(ctx, cfg, map[string]*webVolume{"demo": {vf: &app.VolumeFS{Name: "demo", Index: idx}}})
 	list := got.(map[string]any)["volumes"].([]map[string]any)
 	if len(list) != 1 || list[0]["error"] == nil {
 		t.Fatalf("期望带 error 的卷记录，得到 %#v", list)

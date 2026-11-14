@@ -611,8 +611,8 @@ func runWeb(args []string) {
 			Bus: bus,
 			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
-			// 下载目录留空时由面板回落到 data/downloads
-			DownloadsDir: cfg.Downloads.Dir,
+			// 下载目录：留空时由面板按 data/downloads 解析
+			DownloadsDir: cfg.Downloads.EffectiveDir(),
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil
@@ -634,6 +634,7 @@ func runWeb(args []string) {
 
 // webVolume 是一个卷在面板里用到的后端。
 type webVolume struct {
+	vf    *app.VolumeFS
 	mgr   *fm.Manager
 	davfs *vfs.FileSystem
 	idx   *index.Index
@@ -656,14 +657,22 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 			logging.Warn("tray.volume.open_failed", err, v.Name)
 			continue
 		}
-		out[v.Name] = &webVolume{mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
+		out[v.Name] = &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
+	}
+	// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
+	if bus := a.Bus(); bus != nil && len(out) > 0 {
+		bus.Publish("status")
 	}
 	return out
 }
 
-// closeWebVolumes 关闭所有索引。
+// closeWebVolumes 先停每个卷的队列，再关索引。
 func closeWebVolumes(vols map[string]*webVolume) {
 	for _, v := range vols {
+		if v.vf != nil {
+			_ = v.vf.Close()
+			continue
+		}
 		if v.idx != nil {
 			_ = v.idx.Close()
 		}

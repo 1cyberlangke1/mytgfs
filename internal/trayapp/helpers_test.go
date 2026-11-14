@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/eventbus"
 )
 
-// TestSyncInterval 同步间隔的三档语义：负数关闭、0 默认 15 秒、正数原样。
+// TestSyncInterval 同步间隔的三档语义：负数关闭、0 用运行时默认秒数、正数原样。
 func TestSyncInterval(t *testing.T) {
 	cases := []struct {
 		in   int
@@ -17,7 +18,7 @@ func TestSyncInterval(t *testing.T) {
 	}{
 		{-1, 0},
 		{-60, 0},
-		{0, 15 * time.Second},
+		{0, config.DefaultSyncSeconds * time.Second},
 		{5, 5 * time.Second},
 		{600, 600 * time.Second},
 	}

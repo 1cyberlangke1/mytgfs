@@ -12,7 +12,6 @@ import (
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
-	"mytgfs/internal/datadir"
 	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 )
@@ -124,11 +123,7 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 	mux.Handle("/api/files/remove", handleAPIRemove(api))
 	mux.Handle("/api/files/upload", handleAPIUpload(api))
 	mux.Handle("/api/file", handleAPIFile(api))
-	dlDir := opts.DownloadsDir
-	if dlDir == "" {
-		dlDir = datadir.Path("downloads")
-	}
-	dl := newDownloadStore(dlDir, func(v string) (fm.Files, bool) {
+	dl := newDownloadStore(resolveDownloadsDir(configPath, opts.DownloadsDir), func(v string) (fm.Files, bool) {
 		if api == nil {
 			return nil, false
 		}

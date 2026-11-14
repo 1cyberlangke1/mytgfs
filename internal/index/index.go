@@ -134,6 +134,13 @@ func (i *Index) ListPending(ctx context.Context) ([]PendingUpload, error) {
 // Close 关闭索引。
 func (i *Index) Close() error { return i.db.Close() }
 
+// DB 返回底层连接，供同一进程内的持久化队列共用。
+//
+// 输入：无
+// 输出：*sql.DB；调用方不得关闭
+// 预期：队列与索引共用一个库，任务与节点写入相互可见
+func (i *Index) DB() *sql.DB { return i.db }
+
 // PendingDone 是一条「已经上传成功、但还没写进节点表」的记录。
 type PendingDone struct {
 	Path          string

@@ -232,5 +232,8 @@
   "err.downloads_no_volume": "配置里没有这个卷",
   "err.downloads_bad_path": "文件路径不合法",
   "err.downloads_bad_name": "文件名不合法",
-  "err.downloads_list": "读取下载目录失败"
+  "err.downloads_list": "读取下载目录失败",
+  "err.queue_no_handler": "队列没有配置处理函数",
+  "log.queue_claim_failed": "队列领取任务失败: %v",
+  "log.queue_finish_failed": "队列写回任务状态失败: %v"
 }

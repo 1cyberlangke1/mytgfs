@@ -46,14 +46,6 @@ func (f *fakeStore) UploadResumable(context.Context, io.ReaderAt, int64, string,
 	return &telegramstore.Part{MessageID: 11, DocumentID: 99}, nil
 }
 
-// countingQueue 记录队列被调用几次。
-type countingQueue struct{ calls int }
-
-func (q *countingQueue) Do(ctx context.Context, _ string, fn func(context.Context) error) error {
-	q.calls++
-	return fn(ctx)
-}
-
 // TestHash 校验摘要与标准 sha256 一致。
 func TestHash(t *testing.T) {
 	got, err := Hash(strings.NewReader("abc"), 3)
@@ -66,13 +58,12 @@ func TestHash(t *testing.T) {
 	}
 }
 
-// TestWriteReusesExistingContent 命中同内容时只发引用消息，不占用队列。
+// TestWriteReusesExistingContent 命中同内容时只发引用消息，不上传字节。
 func TestWriteReusesExistingContent(t *testing.T) {
 	idx := fakeIndex{hit: index.Node{Path: "/a.bin", DocumentID: 9}, ok: true}
 	st := &fakeStore{}
-	q := &countingQueue{}
 	part, reused, err := Write(context.Background(), idx, st, Request{
-		Path: "/b.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h", Queue: q,
+		Path: "/b.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +71,8 @@ func TestWriteReusesExistingContent(t *testing.T) {
 	if !reused || part == nil || part.DocumentID != 9 {
 		t.Fatalf("应复用，得到 reused=%v part=%+v", reused, part)
 	}
-	if st.copies != 1 || st.uploads != 0 || q.calls != 0 {
-		t.Fatalf("引用=%d 上传=%d 队列=%d，期望 1/0/0", st.copies, st.uploads, q.calls)
+	if st.copies != 1 || st.uploads != 0 {
+		t.Fatalf("引用=%d 上传=%d，期望 1/0", st.copies, st.uploads)
 	}
 }
 
@@ -100,17 +91,17 @@ func TestWriteSkipsSelfHit(t *testing.T) {
 	}
 }
 
-// TestQueueWrapsUpload 队列只包住真正的上传。
-func TestQueueWrapsUpload(t *testing.T) {
+// TestWriteUploadsOnce 未命中时上传一次并返回消息。
+func TestWriteUploadsOnce(t *testing.T) {
 	st := &fakeStore{}
-	q := &countingQueue{}
-	if _, _, err := Write(context.Background(), fakeIndex{}, st, Request{
-		Path: "/c.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h", Queue: q,
-	}); err != nil {
+	part, reused, err := Write(context.Background(), fakeIndex{}, st, Request{
+		Path: "/c.bin", Reader: strings.NewReader("x"), Size: 1, SHA: "h",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if q.calls != 1 || st.uploads != 1 {
-		t.Fatalf("队列=%d 上传=%d，期望 1/1", q.calls, st.uploads)
+	if reused || st.uploads != 1 || part == nil {
+		t.Fatalf("上传=%d reused=%v part=%+v，期望 1/false/非空", st.uploads, reused, part)
 	}
 }
 

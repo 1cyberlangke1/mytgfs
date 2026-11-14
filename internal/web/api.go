@@ -573,13 +573,8 @@ func handleAPISettings(configPath string) http.HandlerFunc {
 					continue
 				}
 				if !ok {
-					// 缺省键给类型零值，面板显示「默认」而不是空白
-					switch s.Kind {
-					case "int":
-						v = "0"
-					case "bool":
-						v = "false"
-					}
+					// 缺省键给真实默认值，面板显示 15/8/4 而不是 0
+					v = config.DefaultValue(s.Key)
 				}
 				values[s.Key] = v
 			}

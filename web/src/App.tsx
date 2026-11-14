@@ -101,13 +101,8 @@ interface ToastMessage {
   text: string;
 }
 
-// EMPTY_SETTINGS 是服务端设置到达前的占位，值域与 config.Schema() 一致。
+// EMPTY_SETTINGS 是服务端设置到达前的占位；不携带任何默认数字，默认值只由服务端给。
 const EMPTY_SETTINGS: AppSettings = {
-  panelPort: 0,
-  autoSyncIntervalSec: 15,
-  downloadConnections: 4,
-  uploadConcurrency: 4,
-  readChunkSizeMb: 8,
   schema: [],
   values: {},
 };
@@ -148,23 +143,25 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
     totalChunks: 0,
     createdAt: new Date().toISOString(),
     category: inferFileCategory(name, false),
+    opKind: 'download',
   };
 }
 
 // queueFromServer 把服务端串行队列快照转成传输任务。
 //
-// 输入：q 队列项（name 形如 "demo:/path/a.txt"）；index 序号
-// 输出：state=queued 的上传任务
+// 输入：q 队列项（volume/kind/name 由服务端给出）；index 序号
+// 输出：state=queued 的任务，opKind 保留原始操作类型
 // 预期：与正在上传的同名任务去重，避免面板出现两行
 function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
-  const volumeId = q.name.includes(':') ? q.name.slice(0, q.name.indexOf(':')) : '';
+  const volumeId = q.volume || (q.name.includes(':') ? q.name.slice(0, q.name.indexOf(':')) : '');
   const name = q.name.includes(':') ? q.name.slice(q.name.indexOf(':') + 1) : q.name;
+  const kind = (q.kind || 'upload') as TransferTask['opKind'];
   return {
     id: `q-${index}-${q.id}`,
     fileName: name.split('/').pop() || name,
     volumeId,
     targetParentId: null,
-    direction: 'upload',
+    direction: kind === 'download' ? 'download' : 'upload',
     size: 0,
     transferredBytes: 0,
     state: q.state === 'running' ? 'transferring' : q.state === 'failed' ? 'failed' : 'queued',
@@ -176,6 +173,7 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     createdAt: new Date().toISOString(),
     category: inferFileCategory(name, false),
     errorMessage: q.error,
+    opKind: kind,
   };
 }
 
@@ -212,6 +210,10 @@ export default function App() {
 
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // 常驻错误：后台拉取失败、实时连接断开这类「用户必须知道」的问题。
+  // 用横幅而不是 toast，toast 几秒就消失，断网后用户会以为一切正常。
+  // key 用于同一来源重复失败只保留一条，恢复后按 key 清除。
+  const [problems, setProblems] = useState<Record<string, string>>({});
   // 卷管理能力来自服务端：桌面壳可建/删卷，纯网页模式可能只读
   const [caps, setCaps] = useState<{
     createVolume: boolean;
@@ -234,6 +236,7 @@ export default function App() {
   const t = DICTIONARY[locale] || DICTIONARY.zh;
   const localeMeta = getLocaleMeta(locale);
   const summary = computeOverviewSummary(volumes, files);
+  const problemList = useMemo(() => Object.values(problems), [problems]);
   const viewSpring = useInterruptibleViewSpring(activeTab);
 
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
@@ -242,6 +245,11 @@ export default function App() {
   // 速度采样：只展示真实测得的字节增量，不编造速率
   const uploadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
   const downloadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
+  // 文案与语言用 ref 读取：后台回调不因切语言而重建连接或定时器
+  const tRef = useRef(t);
+  tRef.current = t;
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
 
   // 合并上传中、下载中与服务端排队任务；同名的活动上传优先，避免重复行
   const transfers = useMemo(() => {
@@ -267,6 +275,37 @@ export default function App() {
       setToasts((prev) => prev.filter((item) => item.id !== id));
     }, 4500);
   };
+
+  // setProblem 记录一条常驻错误；同 key 同文案不重复渲染。
+  //
+  // 输入：key 错误来源；text 给用户看的原因
+  // 输出：无（写入 problems）
+  // 预期：最多保留 4 条，按来源覆盖；恢复时由 clearProblem 移除
+  const setProblem = useCallback((key: string, text: string) => {
+    setProblems((prev) => {
+      if (prev[key] === text) return prev;
+      const next = { ...prev, [key]: text };
+      const keys = Object.keys(next);
+      if (keys.length > 4) {
+        for (const k of keys.slice(0, keys.length - 4)) delete next[k];
+      }
+      return next;
+    });
+  }, []);
+
+  // clearProblem 清除某个来源的错误；来源恢复正常时调用。
+  const clearProblem = useCallback((key: string) => {
+    setProblems((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  // errText 把未知异常转成可展示文案。
+  const errText = (err: unknown): string =>
+    err instanceof Error ? err.message : String(err);
 
   // 服务端状态转连接状态码
   const connOf = (st?: ApiState['status']): ConnectionStatus => {
@@ -299,28 +338,45 @@ export default function App() {
     });
   }, []);
 
-  // reloadState 只刷新卷摘要与传输进度（轻量，用于轮询）
-  const reloadState = useCallback(async () => {
-    const st = await getState();
-    setVolumes(
-      st.volumes.map((v) => ({
-        id: v.name,
-        name: v.name,
-        hasCover: Boolean(v.cover),
-      }))
-    );
-    setConnectionStatus(connOf(st.status));
-    setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
-    setServerQueue((st.status?.queue ?? []).map(queueFromServer));
-    setCaps({
-      createVolume: Boolean(st.caps?.createVolume),
-      deleteVolume: Boolean(st.caps?.deleteVolume),
-      attachVolume: Boolean(st.caps?.attachVolume),
-      listChannels: Boolean(st.caps?.listChannels),
-      login: Boolean(st.caps?.login),
-      autostart: Boolean(st.caps?.autostart),
-    });
-  }, [sampleDownloads]);
+  // reloadState 只刷新卷摘要与传输进度（轻量，事件驱动）
+  //
+  // 输入：无
+  // 输出：卷名列表；失败返回 nil
+  // 预期：失败时写常驻横幅（后台失败不能静默），成功后清除该条；
+  // 当前选中的卷被删除时回落到第一个卷
+  const reloadState = useCallback(async (): Promise<string[] | null> => {
+    try {
+      const st = await getState();
+      const names = st.volumes.map((v) => v.name);
+      setVolumes(
+        st.volumes.map((v) => ({
+          id: v.name,
+          name: v.name,
+          hasCover: Boolean(v.cover),
+        }))
+      );
+      setActiveVolumeId((cur) => (cur && names.includes(cur) ? cur : names[0] ?? ''));
+      setConnectionStatus(connOf(st.status));
+      setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
+      setServerQueue((st.status?.queue ?? []).map(queueFromServer));
+      setCaps({
+        createVolume: Boolean(st.caps?.createVolume),
+        deleteVolume: Boolean(st.caps?.deleteVolume),
+        attachVolume: Boolean(st.caps?.attachVolume),
+        listChannels: Boolean(st.caps?.listChannels),
+        login: Boolean(st.caps?.login),
+        autostart: Boolean(st.caps?.autostart),
+      });
+      clearProblem('state');
+      return names;
+    } catch (err) {
+      setProblem(
+        'state',
+        interpolate(tRef.current.errors.state, { message: errText(err) }, localeRef.current)
+      );
+      return null;
+    }
+  }, [sampleDownloads, setProblem, clearProblem]);
 
   // reloadFiles 拉取所有卷的完整条目（索引查询，不进 Telegram）
   const volumesRef = useRef<VolumeInfo[]>([]);
@@ -334,95 +390,82 @@ export default function App() {
     const lists = await Promise.all(
       targets.map(async (name) => {
         try {
-          return await listFiles(name, true);
-        } catch {
+          const list = await listFiles(name, true);
+          clearProblem(`files:${name}`);
+          return list;
+        } catch (err) {
+          // 单个卷读失败不能当空目录：横幅里点名是哪个卷、原因是什么
+          setProblem(
+            `files:${name}`,
+            interpolate(
+              tRef.current.errors.files,
+              { volume: name, message: errText(err) },
+              localeRef.current
+            )
+          );
           return [] as ApiFile[];
         }
       })
     );
     setFiles(lists.flat().map(toFileItem));
-  }, []);
+  }, [setProblem, clearProblem]);
 
   const reloadSettings = useCallback(async () => {
-    const s = await getSettings();
-    const v = s.values ?? {};
-    const num = (key: string, fallback: number) => {
-      const n = Number(v[key]);
-      return Number.isFinite(n) && v[key] !== undefined && v[key] !== '' ? n : fallback;
-    };
-    setSettings((prev) => ({
-      ...prev,
-      schema: s.schema ?? [],
-      values: v,
-      panelPort: num('web.port', prev.panelPort || 8720),
-      autoSyncIntervalSec: num('mount.sync_seconds', 15),
-      downloadConnections: num('mount.download_parallel', 4),
-      uploadConcurrency: num('mount.upload_parallel', 4),
-      readChunkSizeMb: num('mount.read_chunk_mb', 8),
-    }));
-  }, []);
+    try {
+      const s = await getSettings();
+      // 面板只展示服务端给的真实生效值；前端不再自带任何默认数字
+      setSettings((prev) => ({
+        ...prev,
+        schema: s.schema ?? [],
+        values: s.values ?? {},
+      }));
+      clearProblem('settings');
+    } catch (err) {
+      setProblem(
+        'settings',
+        interpolate(tRef.current.errors.settings, { message: errText(err) }, localeRef.current)
+      );
+    }
+  }, [setProblem, clearProblem]);
 
-  // reloadDownloads 读取下载目录；目录不可用时保留旧列表，不打断页面
+  // reloadDownloads 读取下载目录；失败时在横幅里说明原因，而不是留一个空列表
   const reloadDownloads = useCallback(async () => {
     try {
       const res = await getDownloads();
       setDownloads(res.files ?? []);
       setDownloadsDir(res.dir ?? '');
-    } catch {
-      // 卷后端尚未就绪时接口返回 501，等切页或下载完成后会再拉
+      clearProblem('downloads');
+    } catch (err) {
+      setProblem(
+        'downloads',
+        interpolate(tRef.current.errors.settings, { message: errText(err) }, localeRef.current)
+      );
     }
-  }, []);
+  }, [setProblem, clearProblem]);
 
   // 切到下载页时拉一次，避免在其它页面反复扫磁盘
   useEffect(() => {
     if (activeTab === 'downloads') void reloadDownloads();
   }, [activeTab, reloadDownloads]);
 
-  // 首屏：设置 + 状态；卷挂载是异步的，卷名到达前每隔 1.5s 重试一次
+  // retryLoad 手动重试全部后台加载；失败会在各自回调里重新写回横幅
+  const retryLoad = () => {
+    setProblems({});
+    void reloadState();
+    void reloadFiles();
+    void reloadSettings();
+    void reloadDownloads();
+  };
+
+  // 首屏：只拉一次状态 + 设置；之后完全由 SSE 事件驱动，不做定时轮询。
+  // 卷可能还在挂载：服务端打开卷后会推 status，前端收到事件后自然刷新。
   useEffect(() => {
-    let alive = true;
-    let timer = 0;
-    const tick = async (attempt: number) => {
-      try {
-        const st = await getState();
-        if (!alive) return;
-        setConnectionStatus(connOf(st.status));
-        setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
-        setServerQueue((st.status?.queue ?? []).map(queueFromServer));
-        if (st.volumes.length === 0) {
-          if (attempt < 40) {
-            timer = window.setTimeout(() => void tick(attempt + 1), 1500);
-          }
-          return;
-        }
-        setVolumes(
-          st.volumes.map((v) => ({
-            id: v.name,
-            name: v.name,
-            hasCover: Boolean(v.cover),
-          }))
-        );
-        setActiveVolumeId((cur) => cur || st.volumes[0]?.name || '');
-        const lists = await Promise.all(st.volumes.map((v) => listFiles(v.name, true)));
-        const flat = lists.flat();
-        // 卷已列出但索引还没读到内容（挂载/重建进行中）：按状态里的 entries 继续重试
-        const expectEntries = st.volumes.some((v) => v.entries > 0);
-        if (flat.length === 0 && expectEntries && attempt < 40) {
-          timer = window.setTimeout(() => void tick(attempt + 1), 1500);
-          return;
-        }
-        if (alive) setFiles(flat.map(toFileItem));
-      } catch (err) {
-        if (alive) pushToast(err instanceof Error ? err.message : String(err), 'error');
-      }
-    };
-    void tick(0);
-    reloadSettings().catch(() => {});
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [reloadSettings]);
+    void (async () => {
+      const names = await reloadState();
+      if (names && names.length > 0) await reloadFiles(names);
+      await reloadSettings();
+    })();
+  }, [reloadState, reloadFiles, reloadSettings]);
 
   // 事件驱动：服务端有变化时才推送，前端收到后拉最新快照（取代定时轮询）
   useEffect(() => {
@@ -431,24 +474,23 @@ export default function App() {
     let filesTimer = 0;
     const scheduleState = () => {
       window.clearTimeout(stateTimer);
-      stateTimer = window.setTimeout(() => {
-        reloadState().catch(() => {});
-      }, 200);
+      stateTimer = window.setTimeout(() => void reloadState(), 200);
     };
     const scheduleFiles = () => {
       window.clearTimeout(filesTimer);
-      filesTimer = window.setTimeout(() => {
-        reloadFiles().catch(() => {});
-      }, 1500);
+      filesTimer = window.setTimeout(() => void reloadFiles(), 1500);
     };
 
     const es = new EventSource('/api/events');
+    // 断线时浏览器会一直静默重连；不提示的话用户会以为数据是实时的
+    es.onerror = () => setProblem('events', tRef.current.errors.connection);
     const onStatus = () => {
+      clearProblem('events');
       scheduleState();
       scheduleFiles();
     };
     const onConfig = () => {
-      reloadSettings().catch(() => {});
+      void reloadSettings();
       scheduleState();
       scheduleFiles();
     };
@@ -576,6 +618,7 @@ export default function App() {
         totalChunks: 1,
         createdAt: new Date().toISOString(),
         category: inferFileCategory(file.name, false),
+        opKind: 'upload',
       };
       uploadInputs.current.set(id, { file, volumeId, parentId });
       return task;
@@ -1120,6 +1163,50 @@ export default function App() {
 
         {/* Main Content Viewport: Persistent, velocity-preserving iOS spring (zero unmount flash, 100% mid-flight interruptible) */}
         <main className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full overflow-x-hidden">
+          {/* 常驻错误横幅：后台加载失败与实时连接断开必须一直可见，直到恢复或手动关闭 */}
+          <AnimatePresence initial={false}>
+            {problemList.length > 0 && (
+              <motion.div
+                role="alert"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={IOS_SOFT_SPRING}
+                className="mb-4 rounded-2xl border border-red-300/70 dark:border-red-900/70 bg-red-50/95 dark:bg-red-950/60 px-4 py-3"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600 dark:text-red-400" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-xs font-semibold text-red-700 dark:text-red-300">
+                      {t.errors.title}
+                    </p>
+                    {problemList.map((msg) => (
+                      <p
+                        key={msg}
+                        className="text-[11px] leading-relaxed text-red-700/90 dark:text-red-200/90 break-words"
+                      >
+                        {msg}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button type="button" variant="outline" size="sm" onClick={retryLoad}>
+                      {t.errors.retry}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setProblems({})}
+                      aria-label={t.errors.dismiss}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <motion.div
             style={{
               y: viewSpring.y,
