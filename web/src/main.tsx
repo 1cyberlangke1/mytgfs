@@ -1,5 +1,16 @@
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+// 字体必须随包内嵌：桌面壳与离线环境没有 Google Fonts，在线引用会静默回落到系统字体
+import '@fontsource/plus-jakarta-sans/latin-400.css';
+import '@fontsource/plus-jakarta-sans/latin-500.css';
+import '@fontsource/plus-jakarta-sans/latin-600.css';
+import '@fontsource/plus-jakarta-sans/latin-700.css';
+import '@fontsource/bricolage-grotesque/latin-500.css';
+import '@fontsource/bricolage-grotesque/latin-600.css';
+import '@fontsource/bricolage-grotesque/latin-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
+import '@fontsource/jetbrains-mono/latin-600.css';
 import './index.css';
 import { initPushRuntime } from './events';
 

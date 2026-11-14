@@ -262,7 +262,7 @@
     "createSuccess": "Volume {name} created",
     "deleteSuccess": "Volume {name} deleted",
     "coverSaved": "Channel avatar updated",
-    "coverDialogTitle": "Set channel avatar",
+    "coverDialogTitle": "Set cover",
     "coverDialogPick": "Choose an image",
     "coverDialogSave": "Save avatar",
     "coverDialogSaving": "Saving...",

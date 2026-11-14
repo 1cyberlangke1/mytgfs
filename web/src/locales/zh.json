@@ -262,7 +262,7 @@
     "createSuccess": "已创建卷 {name}",
     "deleteSuccess": "已删除卷 {name}",
     "coverSaved": "频道头像已更新",
-    "coverDialogTitle": "设置频道头像",
+    "coverDialogTitle": "设置封面",
     "coverDialogPick": "选择图片",
     "coverDialogSave": "保存头像",
     "coverDialogSaving": "保存中...",

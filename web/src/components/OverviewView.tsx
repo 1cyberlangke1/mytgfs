@@ -129,7 +129,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       </div>
 
       {/* 3-Card Summary Row */}
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
+      <section className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3.5 sm:gap-4">
         <motion.div
           whileHover={{ y: -2 }}
           transition={IOS_SPRING}
@@ -245,7 +245,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 min-[520px]:grid-cols-2 xl:grid-cols-3 gap-4">
             {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes, sharePct }) => {
               const isSelected = volume.id === activeVolumeId;
 
