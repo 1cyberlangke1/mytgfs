@@ -82,6 +82,8 @@ type Options struct {
 	Cover CoverSource
 	// Rebuild 按卷重建本地索引；nil 时接口返回 501
 	Rebuild RebuildFunc
+	// VideoThumb 取视频缩略图；nil 时 /api/vthumb 返回 501
+	VideoThumb VideoThumbFunc
 }
 
 // NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
@@ -137,6 +139,8 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/downloads/file", handleAPIDownloadFile(dl))
 	rt.route("/api/downloads/open-file", handleAPIDownloadOpenFile(dl))
 	rt.route("/api/thumb", handleFileThumb(api))
+	rt.route("/api/vthumb", handleFileVideoThumb(opts.ThumbDir, opts.VideoThumb))
+	rt.route("/api/poster", handleAPIPoster(opts.ThumbDir))
 	rt.route("/api/cover", handleVolumeCover(opts.Cover))
 	rt.route("/api/rebuild", handleAPIRebuild(opts))
 	rt.route("/api/volumes", handleAPIVolumes(opts))

@@ -74,6 +74,7 @@ import {
   setCover,
   triggerSync,
   uploadFile,
+  uploadPoster,
 } from './api';
 import { OverviewView } from './components/OverviewView';
 import { FilesView } from './components/FilesView';
@@ -91,6 +92,7 @@ import {
   useInterruptibleViewSpring,
 } from './components/ui';
 import { CustomScrollArea, WindowCustomScrollbar } from './components/CustomScrollbar';
+import { makeVideoPoster } from './utils/poster';
 
 const STORAGE_KEYS = {
   tab: 'mytgfs_active_tab_v1',
@@ -619,7 +621,7 @@ export default function App() {
       prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'transferring' } : tr))
     );
     try {
-      await uploadFile(
+      const res = await uploadFile(
         volumeId,
         parentId || '/',
         rel,
@@ -647,6 +649,15 @@ export default function App() {
         ctl.signal,
         resume
       );
+      // 视频补一张封面，失败不影响上传结果
+      if (file.type.startsWith('video/')) {
+        try {
+          const poster = await makeVideoPoster(file);
+          if (poster) await uploadPoster(volumeId, res.path, poster);
+        } catch {
+          // 浏览器不支持解码该视频时保持 Telegram 缩略图或占位图
+        }
+      }
       setUploadTasks((prev) =>
         prev.map((tr) =>
           tr.id === task.id

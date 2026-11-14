@@ -660,6 +660,14 @@ func runWeb(args []string) {
 				}
 				return map[string]any{"files": n}, nil
 			},
+			// 视频缩略图：Telegram 已生成的缩略图，按卷转发
+			VideoThumb: func(ctx context.Context, vol, path string) ([]byte, string, error) {
+				wv, ok := vols[vol]
+				if !ok {
+					return nil, "", os.ErrNotExist
+				}
+				return wv.vf.VideoThumb(ctx, path)
+			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil

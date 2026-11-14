@@ -599,3 +599,16 @@ export function finishUserLogin(body: {
 export function getIdentity(kind: 'bot' | 'user'): Promise<{ user: ApiIdentity }> {
   return request(`/api/identity?kind=${kind}`);
 }
+
+// uploadPoster 上传浏览器从视频里抽出的封面 JPEG。
+export async function uploadPoster(volume: string, path: string, poster: Blob): Promise<void> {
+  const q = new URLSearchParams({ vol: volume, path });
+  const res = await fetch(`/api/poster?${q.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: poster,
+  });
+  if (!res.ok) {
+    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
+  }
+}

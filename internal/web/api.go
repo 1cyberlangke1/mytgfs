@@ -98,8 +98,14 @@ func toFileItem(vol, p string, e fm.Entry) fileItem {
 		Category:  cat,
 		Path:      p,
 	}
-	if !e.Dir && cat == "image" {
-		it.ThumbnailURL = "/api/thumb?" + queryEscape("vol", vol, "path", p)
+	if !e.Dir {
+		switch cat {
+		case "image":
+			it.ThumbnailURL = "/api/thumb?" + queryEscape("vol", vol, "path", p)
+		case "video":
+			it.ThumbnailURL = "/api/vthumb?" + queryEscape(
+				"vol", vol, "path", p, "v", it.UpdatedAt)
+		}
 	}
 	if !e.Dir {
 		it.PreviewURL = "/api/file?" + queryEscape("vol", vol, "path", p, "inline", "1")

@@ -1,7 +1,7 @@
 # 构建 mytgfs。
 # 输入：-Package 额外产出可分发的 zip（含安装/卸载脚本与配置模板）
 # 输出：build\mytgfs.exe、build\mytgfs-tray.exe；失败时退出码 1
-# 预期：纯 Go 构建，不需要 WinFsp SDK、不需要 CGO
+# 预期：纯 Go 构建，不需要 CGO
 param([switch]$Package)
 
 New-Item -ItemType Directory -Force -Path 'build' | Out-Null

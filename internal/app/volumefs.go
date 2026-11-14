@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"strconv"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
@@ -116,6 +118,23 @@ func (v *VolumeFS) Snapshot(ctx context.Context) (Snapshot, error) {
 		snap.Queue = q.Snapshot()
 	}
 	return snap, nil
+}
+
+// VideoThumb 返回指定路径文件的 Telegram 缩略图。
+//
+// 输入：ctx；path 卷内路径
+// 输出：缩略图字节；版本（消息 ID）；error
+// 预期：目录或不存在返回 os.ErrNotExist，交给 handler 映射 404
+func (v *VolumeFS) VideoThumb(ctx context.Context, path string) ([]byte, string, error) {
+	n, ok, err := v.Index.NodeByPath(ctx, path)
+	if err != nil {
+		return nil, "", err
+	}
+	if !ok || n.IsDir {
+		return nil, "", os.ErrNotExist
+	}
+	data, terr := v.Store.Thumb(ctx, n.ID)
+	return data, strconv.Itoa(n.ID), terr
 }
 
 // ClearQueue 清空本卷已结束的任务记录。

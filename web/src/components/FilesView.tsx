@@ -371,7 +371,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   };
 
   const renderCategoryVisual = (item: FileItem) => {
-    if (item.category === 'image' && item.thumbnailUrl) {
+    if ((item.category === 'image' || item.category === 'video') && item.thumbnailUrl) {
       return (
         <img
           src={item.thumbnailUrl}
@@ -444,7 +444,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
           <Button
             type="button"
             variant="outline"
-            size="icon"
             disabled={refreshing}
             onClick={async () => {
               setRefreshing(true);
@@ -457,19 +456,20 @@ export const FilesView: React.FC<FilesViewProps> = ({
             aria-label={t.files.refreshBtn}
             title={t.files.refreshBtn}
           >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{t.files.refreshBtn}</span>
           </Button>
           {onRebuildVolume && (
             <Button
               type="button"
               variant="outline"
-              size="icon"
               disabled={rebuilding || !activeVolumeId}
               onClick={() => setShowRebuildConfirm(true)}
               aria-label={t.files.rebuildBtn}
               title={t.files.rebuildBtn}
             >
-              <Database className={`w-4 h-4 ${rebuilding ? 'animate-pulse' : ''}`} />
+              <Database className={`w-3.5 h-3.5 ${rebuilding ? 'animate-pulse' : ''}`} />
+              <span>{t.files.rebuildBtn}</span>
             </Button>
           )}
           {canCreateVolume && (

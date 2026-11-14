@@ -149,6 +149,8 @@
   "err.session_missing": "no login session yet, sign in first",
   "err.sync": "sync",
   "err.too_large": "file exceeds the Telegram single-message limit",
+  "err.thumb_missing": "this file has no thumbnail",
+  "err.thumb_fetch": "failed to fetch the thumbnail",
   "err.unknown_diff_type": "unknown channel difference type %T",
   "err.upload_bad_request": "Invalid upload request",
   "err.upload_empty": "cannot upload an empty file",

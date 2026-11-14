@@ -630,6 +630,18 @@ func Run(opts Options) error {
 				}
 				return nil, app.ErrVolumeNotFound{Name: name}
 			},
+			// 视频缩略图：Telegram 已生成的缩略图，按卷转发
+			VideoThumb: func(ctx context.Context, vol, path string) ([]byte, string, error) {
+				volMu.Lock()
+				vs := append([]*trayVolume(nil), volumes...)
+				volMu.Unlock()
+				for _, v := range vs {
+					if v.name == vol && v.vf != nil {
+						return v.vf.VideoThumb(ctx, path)
+					}
+				}
+				return nil, "", os.ErrNotExist
+			},
 		}
 		return web.NewHandler(cfgPath, webOpts)
 	}

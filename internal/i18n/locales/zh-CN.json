@@ -149,6 +149,8 @@
   "err.session_missing": "还没有登录会话，请先登录",
   "err.sync": "同步失败",
   "err.too_large": "文件超过 Telegram 单条消息上限",
+  "err.thumb_missing": "这个文件没有缩略图",
+  "err.thumb_fetch": "读取缩略图失败",
   "err.unknown_diff_type": "未知的频道差异类型 %T",
   "err.upload_bad_request": "上传参数不合法",
   "err.upload_empty": "空文件不能上传",
