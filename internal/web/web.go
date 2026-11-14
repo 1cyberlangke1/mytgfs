@@ -12,8 +12,8 @@ import (
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
+	"mytgfs/internal/push"
 )
 
 // StatusFunc 返回面板需要的状态快照。
@@ -70,12 +70,14 @@ type Options struct {
 	TempDir string
 	// DownloadsDir 是下载目录；空则 data/downloads
 	DownloadsDir string
-	// Bus 用于把配置变更推给托盘；nil 时只影响当前页面
-	Bus *eventbus.Bus
+	// Push 是推送分发点：写操作成功后自动通知面板；nil 时不实时刷新
+	Push *push.Hub
 	// ThumbDir 是缩略图缓存目录；空则 data/thumbs
 	ThumbDir string
 	// Autostart 控制开机自启；nil 时接口返回 501、面板不显示开关
 	Autostart AutostartControl
+	// ClearQueue 删除所有已结束（成功/失败）的任务记录；nil 时接口返回 501
+	ClearQueue func(ctx context.Context) (int64, error)
 }
 
 // NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
@@ -107,51 +109,57 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 // newMux 组装 JSON API 与内嵌前端。
 //
 // 输入：configPath 配置文件路径；opts 面板能力
-// 输出：*http.ServeMux
+// 输出：*router（写操作在注册点统一包上「成功即推送」）
 // 预期：所有 /api/* 路由先于 "/" 注册，前端路由不会吞掉接口
-func newMux(configPath string, opts Options) *http.ServeMux {
-	mux := http.NewServeMux()
+func newMux(configPath string, opts Options) *router {
+	rt := newRouter(opts.Push)
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
-	if api != nil {
-		api.setBus(opts.Bus)
-	}
 
-	mux.Handle("/api/state", handleAPIState(api, opts))
-	mux.Handle("/api/files", handleAPIFiles(api))
-	mux.Handle("/api/files/mkdir", handleAPIMkdir(api))
-	mux.Handle("/api/files/move", handleAPIMove(api))
-	mux.Handle("/api/files/remove", handleAPIRemove(api))
-	mux.Handle("/api/files/upload", handleAPIUpload(api))
-	mux.Handle("/api/file", handleAPIFile(api))
+	rt.route("/api/state", handleAPIState(api, opts))
+	rt.route("/api/files", handleAPIFiles(api))
+	rt.route("/api/files/mkdir", handleAPIMkdir(api))
+	rt.route("/api/files/move", handleAPIMove(api))
+	rt.route("/api/files/remove", handleAPIRemove(api))
+	rt.route("/api/file", handleAPIFile(api))
 	dl := newDownloadStore(resolveDownloadsDir(configPath, opts.DownloadsDir), func(v string) (fm.Files, bool) {
 		if api == nil {
 			return nil, false
 		}
 		return api.lookup(v)
+	}, opts.Push)
+	rt.route("/api/downloads", handleAPIDownloads(dl))
+	rt.route("/api/downloads/task", handleAPIDownloadTask(dl))
+	rt.route("/api/downloads/open", handleAPIDownloadsOpen(dl))
+	rt.route("/api/downloads/file", handleAPIDownloadFile(dl))
+	rt.route("/api/downloads/open-file", handleAPIDownloadOpenFile(dl))
+	rt.route("/api/thumb", handleFileThumb(api))
+	rt.route("/api/cover", handleVolumeCover(api))
+	rt.route("/api/volumes", handleAPIVolumes(opts))
+	rt.route("/api/volumes/attach", handleAPIAttachVolume(opts))
+	rt.route("/api/channels", handleAPIChannels(opts))
+	rt.route("/api/credentials", handleAPICredentials(opts))
+	rt.route("/api/login/bot", handleAPILoginBot(opts))
+	rt.route("/api/login/user/start", handleAPIUserStart(opts))
+	rt.route("/api/login/user/code", handleAPIUserFinish(opts))
+	rt.route("/api/identity", handleAPIIdentity(opts))
+	rt.route("/api/settings", handleAPISettings(configPath))
+	rt.route("/api/autostart", handleAPIAutostart(opts))
+	rt.route("/api/sync", handleAPISync(opts))
+	rt.route("/api/queue", handleAPIQueue(opts))
+	rt.route("/api/events", handleAPIEvents(opts.Push))
+	// 网页版没有 Wails 框架默认链：给空运行时脚本，避免 index.html 里 script 报错；
+	// 桌面壳该路径由框架在进入 mux 之前处理，不会到这里。
+	rt.routeFunc("/wails/runtime.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
 	})
-	mux.Handle("/api/downloads", handleAPIDownloads(dl))
-	mux.Handle("/api/downloads/open", handleAPIDownloadsOpen(dl))
-	mux.Handle("/api/thumb", handleFileThumb(api))
-	mux.Handle("/api/cover", handleVolumeCover(api))
-	mux.Handle("/api/volumes", handleAPIVolumes(opts))
-	mux.Handle("/api/volumes/attach", handleAPIAttachVolume(opts))
-	mux.Handle("/api/channels", handleAPIChannels(opts))
-	mux.Handle("/api/credentials", handleAPICredentials(opts))
-	mux.Handle("/api/login/bot", handleAPILoginBot(opts))
-	mux.Handle("/api/login/user/start", handleAPIUserStart(opts))
-	mux.Handle("/api/login/user/code", handleAPIUserFinish(opts))
-	mux.Handle("/api/identity", handleAPIIdentity(opts))
-	mux.Handle("/api/settings", handleAPISettings(configPath))
-	mux.Handle("/api/autostart", handleAPIAutostart(opts))
-	mux.Handle("/api/sync", handleAPISync(opts))
-	mux.Handle("/api/events", handleAPIEvents(opts.Bus))
 
 	// 分片上传会话（大文件续传）
 	up := newUploadAPI(opts.Files, opts.TempDir)
-	mux.HandleFunc("/api/upload/init", up.handleInit)
-	mux.HandleFunc("/api/upload/chunk", up.handleChunk)
-	mux.HandleFunc("/api/upload/commit", up.handleCommit)
-	mux.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
+	rt.routeFunc("/api/upload/init", up.handleInit)
+	rt.routeFunc("/api/upload/chunk", up.handleChunk)
+	rt.routeFunc("/api/upload/commit", up.handleCommit)
+	rt.routeFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			up.handleStatus(w, r)
@@ -162,6 +170,6 @@ func newMux(configPath string, opts Options) *http.ServeMux {
 		}
 	})
 
-	mux.Handle("/", spaHandler())
-	return mux
+	rt.route("/", spaHandler())
+	return rt
 }

@@ -49,7 +49,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 		if rerr := a.RebuildIndexIfEmpty(ctx, s.Index, s.Volume.ChatID); rerr != nil {
 			logging.Warn("err.fs_rebuild", rerr)
 		}
-		davfs := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
+		davfs := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
 		davfs.SetTempDir(datadir.Path("tmp"))
 		return fn(ctx, volName, fm.New(davfs))
 	})

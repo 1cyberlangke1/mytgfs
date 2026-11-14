@@ -167,6 +167,56 @@ func TestUploadAPIRejectsTraversal(t *testing.T) {
 	}
 }
 
+// TestUploadAPIRejectsEmpty 空文件在 init 阶段被拒绝。
+//
+// 输入：size = 0
+// 输出：400
+// 预期：Telegram 不接受 0 字节文档，早失败而不是发出空分片后报 400
+func TestUploadAPIRejectsEmpty(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/upload/init",
+		strings.NewReader(`{"vol":"demo","dir":"/","name":"a.bin","size":0}`))
+	api.handleInit(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d，期望 400", rec.Code)
+	}
+}
+
+// TestUploadAPICreatesParents 文件夹上传保留层级，父目录自动建出来。
+//
+// 输入：rel = "a/b/c.txt"
+// 输出：/a、/a/b 两个目录 + 文件落在 /a/b/c.txt
+// 预期：已存在的目录不算失败，重复上传同一个文件夹也能成功
+func TestUploadAPICreatesParents(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	id := initSession(t, api, `{"vol":"demo","dir":"/","rel":"a/b/c.txt","name":"c.txt","size":2}`)
+	putChunk(t, api, id, 0, "hi")
+
+	rec := httptest.NewRecorder()
+	api.handleCommit(rec, httptest.NewRequest(http.MethodPost, "/api/upload/commit?id="+id, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if !f.dirs["/a"] || !f.dirs["/a/b"] {
+		t.Fatalf("目录层级缺失: %v", f.dirs)
+	}
+	if got := f.uploads["/a/b/c.txt"]; got != "hi" {
+		t.Fatalf("落盘路径/内容不符: %v", f.uploads)
+	}
+
+	// 同一层级再传一次：已存在目录应被忽略
+	id = initSession(t, api, `{"vol":"demo","dir":"/","rel":"a/b/d.txt","name":"d.txt","size":2}`)
+	putChunk(t, api, id, 0, "yo")
+	rec = httptest.NewRecorder()
+	api.handleCommit(rec, httptest.NewRequest(http.MethodPost, "/api/upload/commit?id="+id, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("重复层级 commit code = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestUploadAPIStatus 查询进度用于断线续传。
 func TestUploadAPIStatus(t *testing.T) {
 	f := newFakeFiles()

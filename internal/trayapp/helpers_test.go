@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"mytgfs/internal/config"
-	"mytgfs/internal/eventbus"
+	"mytgfs/internal/push"
 )
 
 // TestSyncInterval 同步间隔的三档语义：负数关闭、0 用运行时默认秒数、正数原样。
@@ -29,34 +29,29 @@ func TestSyncInterval(t *testing.T) {
 	}
 }
 
-// TestStatusNotifierNilBus 没有事件总线时返回 nil，调用方据此跳过通知。
-func TestStatusNotifierNilBus(t *testing.T) {
+// TestStatusNotifierNilEvents 没有推送通道时返回 nil，调用方据此跳过通知。
+func TestStatusNotifierNilEvents(t *testing.T) {
 	if fn := StatusNotifier(nil); fn != nil {
-		t.Fatal("nil 总线应返回 nil")
+		t.Fatal("nil 通道应返回 nil")
 	}
 }
 
 // TestStatusNotifierPublishesOnChange 有增删才推 status，空轮不打扰面板。
 //
-// 输入：订阅 status；先空轮再带变更各调一次
-// 输出：只收到一次事件
+// 输入：记录器；先空轮再带变更各调一次
+// 输出：只有带变更的两次推送
 func TestStatusNotifierPublishesOnChange(t *testing.T) {
-	bus := eventbus.New()
-	ch, cancel := bus.Subscribe("status")
-	defer cancel()
+	rec := push.NewRecorder()
+	fn := StatusNotifier(rec)
 
-	fn := StatusNotifier(bus)
 	fn(nil, nil)
-	if len(ch) != 0 {
-		t.Fatal("空轮不应推送")
+	if got := rec.Count(push.TopicStatus); got != 0 {
+		t.Fatalf("空轮不应推送，实际 %d", got)
 	}
 	fn([]string{"/a"}, nil)
-	if len(ch) != 1 {
-		t.Fatalf("收到 %d 次，期望 1 次", len(ch))
-	}
 	fn(nil, []string{"/b"})
-	if len(ch) != 2 {
-		t.Fatalf("收到 %d 次，期望 2 次", len(ch))
+	if got := rec.Count(push.TopicStatus); got != 2 {
+		t.Fatalf("推送 %d 次，期望 2 次", got)
 	}
 }
 

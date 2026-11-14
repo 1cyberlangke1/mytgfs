@@ -1499,7 +1499,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                         >
                           {ch.chat_id}
                           {ch.username ? ` · @${ch.username}` : ''}
-                          {ch.creator ? ' · owner' : ''}
+                          {ch.creator ? ' · owner' : ch.admin ? ' · admin' : ''}
                         </span>
                       </button>
                     ))}

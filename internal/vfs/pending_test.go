@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mytgfs/internal/index"
+	"mytgfs/internal/push"
 	"mytgfs/internal/queue"
 )
 
@@ -130,7 +131,7 @@ func TestResumePendingUploadsAndIndexes(t *testing.T) {
 	}
 
 	st := newFakeStore()
-	fsys := New(ctx, idx, st, 1<<20)
+	fsys := New(ctx, idx, st, 1<<20, push.NewRecorder())
 	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
@@ -197,7 +198,7 @@ func TestResumePendingReusesUploadedPart(t *testing.T) {
 	}
 
 	st := newFakeStore()
-	fsys := New(ctx, idx, st, 1<<20)
+	fsys := New(ctx, idx, st, 1<<20, push.NewRecorder())
 	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)
@@ -233,7 +234,7 @@ func TestResumePendingDropsMissingTemp(t *testing.T) {
 	}
 
 	st := newFakeStore()
-	fsys := New(ctx, idx, st, 1<<20)
+	fsys := New(ctx, idx, st, 1<<20, push.NewRecorder())
 	q := attachQueue(t, fsys)
 	if err := fsys.ResumePending(); err != nil {
 		t.Fatal(err)

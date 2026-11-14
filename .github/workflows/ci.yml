@@ -70,9 +70,9 @@ jobs:
       - name: 安装前端依赖
         working-directory: web
         run: npm ci --no-audit --no-fund
-      - name: 类型检查
+      - name: 类型检查与推送约束
         working-directory: web
-        run: npx tsc --noEmit
+        run: npm run lint
       - name: 构建产物与源码一致
         working-directory: web
         run: |

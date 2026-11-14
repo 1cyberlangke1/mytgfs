@@ -19,6 +19,7 @@ import {
   AppSettings,
   ConnectionStatus,
   DownloadItem,
+  DownloadTask,
   FileCategory,
   FileItem,
   IndexStatus,
@@ -29,6 +30,7 @@ import {
   VolumeInfo,
 } from './types';
 import { computeOverviewSummary, formatBytes, inferFileCategory } from './utils/fsLogic';
+import { subscribePush } from './events';
 import {
   DICTIONARY,
   LOCALE_OPTIONS,
@@ -43,16 +45,25 @@ import {
   ApiQueueItem,
   ApiState,
   ApiTransfer,
+  UploadResume,
+  UploadPaused,
   attachVolume,
+  discardUpload,
+  clearQueue,
   createVolume,
   deleteVolume,
-  downloadToDir,
+  cancelDownload,
+  pauseDownload,
+  resumeDownload,
+  startDownload,
   getDownloads,
   getSettings,
   getState,
   listFiles,
+  localFileURL,
   mkdir,
   moveItems,
+  openDownloadedFile,
   openDownloads,
   removeDownload,
   removeItems,
@@ -150,12 +161,20 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
 // queueFromServer 把服务端串行队列快照转成传输任务。
 //
 // 输入：q 队列项（volume/kind/name 由服务端给出）；index 序号
-// 输出：state=queued 的任务，opKind 保留原始操作类型
-// 预期：与正在上传的同名任务去重，避免面板出现两行
+// 输出：按服务端 state 映射的传输任务（done→completed，failed 带原因）
+// 预期：已完成的活儿必须显示「已完成」，不能一律当成排队中
 function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
   const volumeId = q.volume || (q.name.includes(':') ? q.name.slice(0, q.name.indexOf(':')) : '');
   const name = q.name.includes(':') ? q.name.slice(q.name.indexOf(':') + 1) : q.name;
   const kind = (q.kind || 'upload') as TransferTask['opKind'];
+  const state: TransferTask['state'] =
+    q.state === 'done'
+      ? 'completed'
+      : q.state === 'failed'
+      ? 'failed'
+      : q.state === 'running'
+      ? 'transferring'
+      : 'queued';
   return {
     id: `q-${index}-${q.id}`,
     fileName: name.split('/').pop() || name,
@@ -164,7 +183,7 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     direction: kind === 'download' ? 'download' : 'upload',
     size: 0,
     transferredBytes: 0,
-    state: q.state === 'running' ? 'transferring' : q.state === 'failed' ? 'failed' : 'queued',
+    state,
     speedBps: 0,
     isChunkedResume: false,
     chunkSize: 0,
@@ -201,6 +220,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
   // 下载目录列表由服务端扫描磁盘得到，页面只负责展示与刷新
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [downloadsDir, setDownloadsDir] = useState('');
 
   const [activeVolumeId, setActiveVolumeId] = useState<string>(() =>
@@ -209,6 +229,7 @@ export default function App() {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
 
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [localPreview, setLocalPreview] = useState<DownloadItem | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   // 常驻错误：后台拉取失败、实时连接断开这类「用户必须知道」的问题。
   // 用横幅而不是 toast，toast 几秒就消失，断网后用户会以为一切正常。
@@ -241,7 +262,13 @@ export default function App() {
 
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
   const uploadAbort = useRef(new Map<string, AbortController>());
-  const uploadInputs = useRef(new Map<string, { file: File; volumeId: string; parentId: string | null }>());
+  // rel 保留浏览器给的相对路径（文件夹上传），重发时层级不能丢
+  const uploadInputs = useRef(
+    new Map<
+      string,
+      { file: File; volumeId: string; parentId: string | null; rel: string; resume?: UploadResume }
+    >()
+  );
   // 速度采样：只展示真实测得的字节增量，不编造速率
   const uploadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
   const downloadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
@@ -433,6 +460,7 @@ export default function App() {
     try {
       const res = await getDownloads();
       setDownloads(res.files ?? []);
+      setDownloadTasks(res.tasks ?? []);
       setDownloadsDir(res.dir ?? '');
       clearProblem('downloads');
     } catch (err) {
@@ -480,29 +508,39 @@ export default function App() {
       window.clearTimeout(filesTimer);
       filesTimer = window.setTimeout(() => void reloadFiles(), 1500);
     };
+    // 下载进度也要跟着推送走：只读本地目录，代价很低
+    let dlTimer = 0;
+    const scheduleDownloads = () => {
+      window.clearTimeout(dlTimer);
+      dlTimer = window.setTimeout(() => void reloadDownloads(), 300);
+    };
 
-    const es = new EventSource('/api/events');
-    // 断线时浏览器会一直静默重连；不提示的话用户会以为数据是实时的
-    es.onerror = () => setProblem('events', tRef.current.errors.connection);
     const onStatus = () => {
       clearProblem('events');
       scheduleState();
       scheduleFiles();
+      scheduleDownloads();
     };
     const onConfig = () => {
       void reloadSettings();
       scheduleState();
       scheduleFiles();
     };
-    es.addEventListener('status', onStatus);
-    es.addEventListener('config', onConfig);
-    // 断线重连后补拉一次，覆盖断线期间丢失的事件
-    es.addEventListener('ready', onStatus);
+
+    // 桌面壳与网页版共用 subscribePush：组件里不再出现传输通道判断
+    const unsubscribe = subscribePush(
+      { status: onStatus, config: onConfig },
+      {
+        onConnect: onStatus,
+        // 断线时浏览器会一直静默重连；不提示的话用户会以为数据是实时的
+        onError: () => setProblem('events', tRef.current.errors.connection),
+      }
+    );
 
     return () => {
       window.clearTimeout(stateTimer);
       window.clearTimeout(filesTimer);
-      es.close();
+      unsubscribe();
     };
   }, [reloadState, reloadFiles, reloadSettings]);
 
@@ -534,9 +572,17 @@ export default function App() {
   }, [activeVolumeId]);
 
   // 单文件上传：更新任务进度，成功后刷新索引
-  const runUpload = async (task: TransferTask, file: File, volumeId: string, parentId: string | null) => {
+  // 断点保存在 uploadInputs 里：暂停后继续从已传字节接着发
+  const runUpload = async (
+    task: TransferTask,
+    file: File,
+    volumeId: string,
+    parentId: string | null,
+    rel: string
+  ) => {
     const ctl = new AbortController();
     uploadAbort.current.set(task.id, ctl);
+    const resume = uploadInputs.current.get(task.id)?.resume;
     setUploadTasks((prev) =>
       prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'transferring' } : tr))
     );
@@ -544,7 +590,7 @@ export default function App() {
       await uploadFile(
         volumeId,
         parentId || '/',
-        '',
+        rel,
         file,
         (ratio) => {
           const bytes = Math.round(task.size * ratio);
@@ -566,7 +612,8 @@ export default function App() {
             )
           );
         },
-        ctl.signal
+        ctl.signal,
+        resume
       );
       setUploadTasks((prev) =>
         prev.map((tr) =>
@@ -579,28 +626,44 @@ export default function App() {
       await reloadFiles();
       await reloadState();
     } catch (err) {
+      // 暂停时保留服务端会话与已传字节，继续时从断点续传
+      const paused = err instanceof UploadPaused;
       const aborted = err instanceof Error && err.message === 'aborted';
+      const stopped = paused || aborted;
+      if (paused) {
+        const input = uploadInputs.current.get(task.id);
+        if (input) {
+          input.resume = { id: err.id, offset: err.offset };
+        } else {
+          // 取消上传会先删掉 uploadInputs 再 abort，这里据此丢弃服务端临时文件
+          void discardUpload(err.id);
+        }
+      }
       setUploadTasks((prev) =>
         prev.map((tr) =>
           tr.id === task.id
             ? {
                 ...tr,
-                state: aborted ? 'paused' : 'failed',
+                state: stopped ? 'paused' : 'failed',
                 speedBps: 0,
-                errorMessage: aborted ? undefined : err instanceof Error ? err.message : String(err),
+                errorMessage: stopped ? undefined : err instanceof Error ? err.message : String(err),
               }
             : tr
         )
       );
       uploadAbort.current.delete(task.id);
-      if (!aborted) pushToast(err instanceof Error ? err.message : String(err), 'error');
+      if (!stopped) pushToast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
   const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
     const incoming = Array.from(fileList);
     if (incoming.length === 0) return;
-    const plan = incoming.map((file) => {
+    // 文件夹上传由 input[webkitdirectory] 提供相对路径；普通选择时为空
+    const rels = incoming.map(
+      (file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
+    );
+    const plan = incoming.map((file, index) => {
       const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const task: TransferTask = {
         id,
@@ -620,7 +683,7 @@ export default function App() {
         category: inferFileCategory(file.name, false),
         opKind: 'upload',
       };
-      uploadInputs.current.set(id, { file, volumeId, parentId });
+      uploadInputs.current.set(id, { file, volumeId, parentId, rel: rels[index] ?? '' });
       return task;
     });
     setUploadTasks((prev) => [...prev, ...plan]);
@@ -629,7 +692,7 @@ export default function App() {
       'success'
     );
     for (let i = 0; i < plan.length; i++) {
-      void runUpload(plan[i], incoming[i], volumeId, parentId);
+      void runUpload(plan[i], incoming[i], volumeId, parentId, rels[i] ?? '');
     }
   };
 
@@ -643,7 +706,7 @@ export default function App() {
     if (task.state === 'paused') {
       const input = uploadInputs.current.get(taskId);
       if (!input) return;
-      void runUpload(task, input.file, input.volumeId, input.parentId);
+      void runUpload(task, input.file, input.volumeId, input.parentId, input.rel);
     }
   };
 
@@ -655,7 +718,13 @@ export default function App() {
   };
 
   const handleClearCompletedTransfers = () => {
-    setUploadTasks((prev) => prev.filter((tr) => tr.state !== 'completed'));
+    // 服务端持久化表才是队列的真实来源：只清本地数组等于假按钮
+    clearQueue()
+      .then(() => {
+        setUploadTasks((prev) => prev.filter((tr) => tr.state !== 'completed' && tr.state !== 'failed'));
+        pushToast(t.overview.queueClearedToast, 'success');
+      })
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
   const handleCreateFolder = (volumeId: string, parentId: string | null, name: string) => {
@@ -695,16 +764,23 @@ export default function App() {
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
-  // handleDownloadFile 让服务端把文件写进下载目录，再由页面刷新列表
+  // handleDownloadFile 启动后台下载：立刻反馈，进度由事件推送
   const handleDownloadFile = (file: FileItem) => {
-    downloadToDir(file.volumeId, file.id)
+    startDownload(file.volumeId, file.id)
       .then((res) => {
-        setDownloadsDir(res.dir);
+        setDownloadTasks((prev) => [...prev.filter((t) => t.id !== res.task.id), res.task]);
+        pushToast(interpolate(t.downloads.startedToast, { name: file.name }, locale), 'success');
         return reloadDownloads();
       })
-      .then(() =>
-        pushToast(interpolate(t.downloads.savedToast, { name: file.name }, locale), 'success')
-      )
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
+
+  // handleDownloadTask 暂停/继续/取消单个下载任务
+  const handleDownloadTask = (id: string, action: 'pause' | 'resume' | 'cancel') => {
+    const call =
+      action === 'pause' ? pauseDownload(id) : action === 'resume' ? resumeDownload(id) : cancelDownload(id);
+    call
+      .then(() => reloadDownloads())
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
@@ -724,6 +800,36 @@ export default function App() {
         pushToast(`${t.downloads.openFailedToast}：${msg}`, 'error');
       });
   };
+
+  // downloadedPreview 把本地下载文件包成 FileItem，复用同一个预览弹窗
+  // 媒体源由 streamOverride 指向 /api/downloads/file，不经过卷索引
+  const downloadedPreview = useMemo<FileItem | null>(() => {
+    if (!localPreview) return null;
+    const category = inferFileCategory(localPreview.name, false);
+    return {
+      id: `download:${localPreview.name}`,
+      volumeId: '',
+      parentId: null,
+      name: localPreview.name,
+      isDir: false,
+      size: localPreview.size,
+      updatedAt: localPreview.mod,
+      category,
+      previewUrl: category === 'image' ? localFileURL(localPreview.name) : undefined,
+    };
+  }, [localPreview]);
+
+  // handlePreviewDownloaded 打开本地文件预览；文件已被删则只刷新列表
+  const handlePreviewDownloaded = (name: string) => {
+    const item = downloads.find((f) => f.name === name);
+    if (item) setLocalPreview(item);
+  };
+
+  // handleOpenDownloaded 交给系统默认程序打开
+  const handleOpenDownloaded = (name: string) =>
+    openDownloadedFile(name)
+      .then(() => undefined)
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
 
   // handleSaveSettings 只提交卡片里的键，成功后本地合并，不再整页重拉
   const handleSaveSettings = (values: Record<string, string>) => {
@@ -1290,9 +1396,12 @@ export default function App() {
                 locale={locale}
                 dir={downloadsDir}
                 files={downloads}
+                tasks={downloadTasks}
                 onRefresh={() => void reloadDownloads()}
                 onOpenDir={handleOpenDownloads}
                 onRemove={handleRemoveDownload}
+                onTask={handleDownloadTask}
+                onPreview={handlePreviewDownloaded}
               />
             )}
           </motion.div>
@@ -1362,6 +1471,18 @@ export default function App() {
         locale={locale}
         onClose={() => setPreviewFile(null)}
         onDownload={handleDownloadFile}
+      />
+
+      {/* 下载页本地预览：媒体源指向 /api/downloads/file，主按钮交给系统默认程序 */}
+      <FilePreviewModal
+        file={downloadedPreview}
+        allFiles={[]}
+        t={t}
+        locale={locale}
+        onClose={() => setLocalPreview(null)}
+        onDownload={(f) => void handleOpenDownloaded(f.name)}
+        streamOverride={localPreview ? localFileURL(localPreview.name) : undefined}
+        actionLabel={t.downloads.openBtn}
       />
 
       {/* iOS Dynamic Toast Notification Stack */}

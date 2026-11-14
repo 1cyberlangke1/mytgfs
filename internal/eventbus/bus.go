@@ -19,6 +19,8 @@ type Bus struct {
 	mu   sync.Mutex
 	subs map[string]map[chan struct{}]struct{}
 	last map[string]time.Time
+	// later 记录每个主题待补发的尾沿推送；只有被合并掉的那次才需要
+	later map[string]*time.Timer
 }
 
 // New 创建空总线。
@@ -59,7 +61,8 @@ func (b *Bus) Subscribe(topic string) (<-chan struct{}, func()) {
 //
 // 输入：topic 主题名；every 最小推送间隔（<=0 等价于 Publish）
 // 输出：无
-// 预期：间隔内的后续调用被合并丢弃；状态类事件重发即可，不会累积
+// 预期：间隔内的调用被合并成一次，但合并后仍会在间隔结束时补发尾沿，
+// 保证「最后一个状态」（例如任务结束）一定送到订阅者，不会永久丢失
 func (b *Bus) PublishEvery(topic string, every time.Duration) {
 	if every <= 0 {
 		b.Publish(topic)
@@ -72,6 +75,20 @@ func (b *Bus) PublishEvery(topic string, every time.Duration) {
 	}
 	last, ok := b.last[topic]
 	if ok && now.Sub(last) < every {
+		// 本次被合并：确保有一个尾沿推送在间隔结束时发出
+		if b.later == nil {
+			b.later = make(map[string]*time.Timer)
+		}
+		if _, pending := b.later[topic]; !pending {
+			delay := every - now.Sub(last)
+			b.later[topic] = time.AfterFunc(delay, func() {
+				b.mu.Lock()
+				delete(b.later, topic)
+				b.last[topic] = time.Now()
+				b.mu.Unlock()
+				b.Publish(topic)
+			})
+		}
 		b.mu.Unlock()
 		return
 	}

@@ -17,9 +17,9 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/push"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
@@ -44,8 +44,8 @@ type Options struct {
 	// UserSessionPath 是 user 会话路径，默认 secrets/user.session
 	UserSessionPath string
 	KeyPath         string // 默认 secrets/session.key
-	// Bus 可选：非空时卷的可见变化会以 status 事件推给订阅者
-	Bus *eventbus.Bus
+	// Push 可选：非空时卷的可见变化会以 status 事件推给面板
+	Push *push.Hub
 }
 
 // ErrVolumeNotFound 表示配置里没有这个卷。
@@ -92,13 +92,13 @@ func Load(opts Options) (*App, error) {
 // Config 返回底层配置，供调用方读取并发数、端口等只读字段。
 func (a *App) Config() config.Config { return a.cfg }
 
-// Bus 返回事件总线；未注入时为 nil。
+// Bus 返回推送分发点；未注入时为 nil。
 //
 // 输入：无
-// 输出：装配时传入的 *eventbus.Bus
-// 预期：卷打开完成这类「状态变了」的时点由调用方 Publish("status") 通知面板，
+// 输出：装配时传入的 *push.Hub
+// 预期：卷打开完成这类「状态变了」的时点由调用方 Publish(push.TopicStatus) 通知面板，
 // 前端因此不需要定时轮询
-func (a *App) Bus() *eventbus.Bus { return a.opts.Bus }
+func (a *App) Bus() *push.Hub { return a.opts.Push }
 
 // Volume 解析卷名与卷定义。
 //

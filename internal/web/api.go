@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"mytgfs/internal/config"
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 )
@@ -43,8 +42,6 @@ type filesAPI struct {
 	// stats 可选：返回卷内文件数与已用字节
 	stats  func(volume string) (files, used int64, ok bool)
 	thumbs *thumbCache
-	// bus 可选：变更后广播，让托盘与其它页面跟着刷新
-	bus *eventbus.Bus
 
 	// coverMu/coverCache 缓存「这卷有没有封面」，避免每次状态轮询都列目录
 	coverMu    sync.Mutex
@@ -67,9 +64,6 @@ func newFilesAPI(manager func(volume string) (fm.Files, bool), volumes func() []
 	}
 	return &filesAPI{manager: manager, volumes: volumes, stats: stats, thumbs: newThumbCache(thumbDir)}
 }
-
-// setBus 挂上事件总线。
-func (api *filesAPI) setBus(bus *eventbus.Bus) { api.bus = bus }
 
 // dropCover 让某卷的封面探测缓存立即失效（上传/删除封面后调用）。
 func (api *filesAPI) dropCover(volume string) {
@@ -117,13 +111,6 @@ func (api *filesAPI) lookup(volume string) (fm.Files, bool) {
 		return nil, false
 	}
 	return api.manager(volume)
-}
-
-// publishChange 通知面板其它部分与托盘：文件已变。
-func (api *filesAPI) publishChange() {
-	if api != nil && api.bus != nil {
-		api.bus.Publish("status")
-	}
 }
 
 // fileItem 是前端 FileItem 的序列化形态；id 直接用绝对路径。
@@ -348,11 +335,15 @@ func handleAPIFiles(api *filesAPI) http.HandlerFunc {
 }
 
 // jsonBody 是写操作的公共入参。
+//
+// Dest 是改名/移动时的完整目标路径（例如 /a/b.txt），前端在改名时必填；
+// 批量移动只给 To（目标目录），此时目标文件名沿用原名。
 type jsonBody struct {
 	Vol   string   `json:"vol"`
 	Dir   string   `json:"dir"`
 	Name  string   `json:"name"`
 	To    string   `json:"to"`
+	Dest  string   `json:"dest"`
 	Paths []string `json:"paths"`
 }
 
@@ -391,7 +382,6 @@ func handleAPIMkdir(api *filesAPI) http.HandlerFunc {
 			replyJSONError(w, http.StatusBadGateway, fmError(err))
 			return
 		}
-		api.publishChange()
 		replyJSON(w, http.StatusOK, map[string]any{"path": target})
 	}
 }
@@ -416,18 +406,36 @@ func handleAPIMove(api *filesAPI) http.HandlerFunc {
 			replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
 			return
 		}
+		// 单条给了 dest 就是改名（可能同时换目录）：名字必须按 dest 走，
+		// 否则 path.Base(src) 会把新名字丢掉、只做同目录无操作
+		dest := ""
+		if len(body.Paths) == 1 && body.Dest != "" {
+			raw := strings.TrimSpace(body.Dest)
+			// 先查原始串里的 ..：path.Clean 会把 /../x 折成 /x，越界就看不出来了
+			if !strings.HasPrefix(raw, "/") || strings.Contains(raw, "..") {
+				replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
+				return
+			}
+			dest = path.Clean(raw)
+			if dest == "/" {
+				replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
+				return
+			}
+		}
 		for _, src := range body.Paths {
 			if strings.Contains(src, "..") {
 				replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
 				return
 			}
 			dst := path.Join(normalizeDir(body.To), path.Base(src))
+			if dest != "" {
+				dst = dest
+			}
 			if err := m.Move(r.Context(), src, dst); err != nil {
 				replyJSONError(w, http.StatusBadGateway, fmError(err))
 				return
 			}
 		}
-		api.publishChange()
 		replyJSON(w, http.StatusOK, map[string]any{"moved": len(body.Paths)})
 	}
 }
@@ -463,52 +471,12 @@ func handleAPIRemove(api *filesAPI) http.HandlerFunc {
 			}
 		}
 		api.dropCover(body.Vol)
-		api.publishChange()
 		replyJSON(w, http.StatusOK, map[string]any{"removed": len(body.Paths)})
 	}
 }
 
-// handleAPIUpload 接收 multipart 单文件上传。
-//
-// 输入：vol 卷名；dir 目标目录；rel 相对子路径（可空）；file 文件内容
-// 输出：{path}
-// 预期：rel 里出现 .. 直接 400
-func handleAPIUpload(api *filesAPI) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
-			return
-		}
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			replyJSONError(w, http.StatusBadRequest, i18n.T("err.web_bad_json"))
-			return
-		}
-		vol := r.FormValue("vol")
-		m, ok := api.lookup(vol)
-		if !ok {
-			replyJSONError(w, http.StatusNotFound, i18n.T("err.fm_no_volume"))
-			return
-		}
-		file, hdr, err := r.FormFile("file")
-		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, i18n.T("err.web_bad_json"))
-			return
-		}
-		defer file.Close()
-		target, terr := uploadTarget(r.FormValue("dir"), r.FormValue("rel"), hdr.Filename)
-		if terr != nil {
-			replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
-			return
-		}
-		if err := m.Upload(r.Context(), target, file); err != nil {
-			replyJSONError(w, http.StatusBadGateway, fmError(err))
-			return
-		}
-		api.dropCover(vol)
-		api.publishChange()
-		replyJSON(w, http.StatusCreated, map[string]any{"path": target})
-	}
-}
+// handleAPIUpload 已移除：桌面壳的 AssetServer 无法可靠传递 multipart 请求体
+// （Wails issue #5845/#6068），前端改用 /api/upload/init|chunk|commit 发送原始字节。
 
 // handleAPIFile 输出原文件，支持 Range 与 inline。
 func handleAPIFile(api *filesAPI) http.HandlerFunc {
@@ -638,9 +606,6 @@ func handleAPISync(opts Options) http.HandlerFunc {
 		if err != nil {
 			replyJSONError(w, http.StatusBadGateway, err.Error())
 			return
-		}
-		if opts.Bus != nil {
-			opts.Bus.Publish("status")
 		}
 		replyJSON(w, http.StatusOK, res)
 	}

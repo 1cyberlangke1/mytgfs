@@ -26,13 +26,25 @@ import (
 // 预期：每个用例互不共享库文件，避免状态串味
 func newTestQueue(t *testing.T, workers int) *Queue {
 	t.Helper()
+	q, _ := newTestQueueWithNotify(t, workers)
+	return q
+}
+
+// newTestQueueWithNotify 同上，并返回状态变化计数器，用于验证推送时机。
+//
+// 输入：t 测试；workers 并发槽数
+// 输出：已 Start 的 *Queue；已接入的 *notifyCounter
+// 预期：入队、开始、结束都会让计数器自增
+func newTestQueueWithNotify(t *testing.T, workers int) (*Queue, *notifyCounter) {
+	t.Helper()
 	// 与 index.Open 同款 pragma：WAL + busy_timeout，否则多协程写会直接 SQLITE_BUSY
 	dsn := filepath.Join(t.TempDir(), "queue.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	q, err := Open(db, workers)
+	counter := &notifyCounter{}
+	q, err := Open(db, workers, counter.bump)
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}
@@ -41,7 +53,7 @@ func newTestQueue(t *testing.T, workers int) *Queue {
 		q.Close()
 		_ = db.Close()
 	})
-	return q
+	return q, counter
 }
 
 // TestEnqueueRunsAndWaits 入队的任务被执行，Wait 在完成后返回 nil。
@@ -190,7 +202,7 @@ func TestRestartRequeuesRunning(t *testing.T) {
 	}
 	defer db.Close()
 
-	first, err := Open(db, 1)
+	first, err := Open(db, 1, func() {})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -203,7 +215,7 @@ func TestRestartRequeuesRunning(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	q, err := Open(db, 1)
+	q, err := Open(db, 1, func() {})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

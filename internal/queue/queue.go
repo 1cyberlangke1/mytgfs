@@ -44,7 +44,11 @@ const (
 
 // 运行参数。
 const (
-	keepFinished   = 100 // 保留的已结束任务条数
+	// keepFinished 是持久化保留的已结束任务条数：超出就按 id 删最旧的，
+	// 避免 jobs 表随使用时间无限增长。
+	keepFinished = 20
+	// maxPending 是排队中 + 执行中的任务上限：防止一次批量操作把表撑爆。
+	maxPending     = 2000
 	waitPoll       = 50 * time.Millisecond
 	defaultWorkers = 4
 	minBackoff     = time.Second
@@ -73,6 +77,17 @@ type Item struct {
 	Err     string `json:"error,omitempty"`
 }
 
+// ErrQueueFull 表示排队任务已达上限。
+//
+// 输入：无
+// 输出：可直接返回的错误
+// 预期：批量操作超过上限时立刻报错，而不是把数据库当无限队列
+type errQueueFull struct{}
+
+func (errQueueFull) Error() string { return i18n.T("err.queue_full") }
+
+var ErrQueueFull error = errQueueFull{}
+
 // Handler 执行一条任务；必须能从 Job 的字段完全重建操作，不能依赖闭包。
 type Handler func(ctx context.Context, j Job) error
 
@@ -83,6 +98,8 @@ type Queue struct {
 
 	mu      sync.RWMutex
 	handler Handler
+	// onChange 可选：任务入队、开始、结束时各回调一次，供上层推送状态
+	onChange func()
 
 	wake     chan struct{}
 	ctx      context.Context
@@ -110,10 +127,11 @@ CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, id);
 
 // Open 准备任务表，并把上次进程残留的 running 任务退回排队。
 //
-// 输入：db 本地索引库；workers 并发槽数（<=0 用默认 4）
+// 输入：db 本地索引库；workers 并发槽数（<=0 用默认 4）；
+// onChange 任务入队/开始/结束时的通知回调（必填，接前端推送）
 // 输出：*Queue，尚未启动
 // 预期：Open 只做建表与崩溃恢复，调用方必须再调 Start 才会执行任务
-func Open(db *sql.DB, workers int) (*Queue, error) {
+func Open(db *sql.DB, workers int, onChange func()) (*Queue, error) {
 	if db == nil {
 		return nil, errors.New("queue: nil db")
 	}
@@ -130,9 +148,10 @@ func Open(db *sql.DB, workers int) (*Queue, error) {
 		return nil, err
 	}
 	return &Queue{
-		db:      db,
-		workers: workers,
-		wake:    make(chan struct{}, 1),
+		db:       db,
+		workers:  workers,
+		wake:     make(chan struct{}, 1),
+		onChange: onChange,
 	}, nil
 }
 
@@ -145,6 +164,20 @@ func (q *Queue) SetHandler(fn Handler) {
 	q.mu.Lock()
 	q.handler = fn
 	q.mu.Unlock()
+}
+
+// changed 在锁外调用状态变化回调。
+//
+// 输入：无
+// 输出：无
+// 预期：回调在 Open 时给定；回调里出错不影响队列
+func (q *Queue) changed() {
+	q.mu.RLock()
+	fn := q.onChange
+	q.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // Start 启动工作协程。
@@ -196,6 +229,9 @@ func (q *Queue) Enqueue(ctx context.Context, job Job) (int64, error) {
 	if job.Volume == "" || job.Kind == "" {
 		return 0, errors.New("queue: job needs volume and kind")
 	}
+	if err := q.checkCapacity(ctx); err != nil {
+		return 0, err
+	}
 	now := nowUnix()
 	res, err := q.db.ExecContext(ctx, `
 INSERT INTO jobs(volume, kind, name, payload, state, attempt, err, created_at, updated_at)
@@ -209,6 +245,7 @@ VALUES(?, ?, ?, ?, ?, 0, '', ?, ?)`,
 		return 0, err
 	}
 	q.signal()
+	q.changed()
 	return id, nil
 }
 
@@ -221,6 +258,21 @@ func (q *Queue) EnqueueOnce(ctx context.Context, job Job) (int64, error) {
 	if job.Volume == "" || job.Kind == "" {
 		return 0, errors.New("queue: job needs volume and kind")
 	}
+	id, err := q.enqueueOnce(ctx, job)
+	if err != nil {
+		return 0, err
+	}
+	q.signal()
+	q.changed()
+	return id, nil
+}
+
+// enqueueOnce 在锁内完成查重与写入，避免并发下同一条任务插两次。
+//
+// 输入：ctx；job 任务描述
+// 输出：任务 ID
+// 预期：已有 queued/running 的同参任务时直接复用；否则新建
+func (q *Queue) enqueueOnce(ctx context.Context, job Job) (int64, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var id int64
@@ -230,10 +282,12 @@ WHERE volume = ? AND kind = ? AND name = ? AND payload = ? AND state IN (?, ?)
 ORDER BY id LIMIT 1`,
 		job.Volume, job.Kind, job.Name, job.Payload, stateQueued, stateRunning).Scan(&id)
 	if err == nil {
-		q.signal()
 		return id, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if err := q.checkCapacity(ctx); err != nil {
 		return 0, err
 	}
 	now := nowUnix()
@@ -244,12 +298,41 @@ VALUES(?, ?, ?, ?, ?, 0, '', ?, ?)`,
 	if err != nil {
 		return 0, err
 	}
-	newID, err := res.LastInsertId()
+	return res.LastInsertId()
+}
+
+// checkCapacity 确认还能再收一条任务。
+//
+// 输入：ctx
+// 输出：ErrQueueFull 表示排队中 + 执行中已达 maxPending
+// 预期：已结束记录不占额度，被保留上限裁掉的旧记录也不会卡住新任务
+func (q *Queue) checkCapacity(ctx context.Context) error {
+	var n int
+	if err := q.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE state IN (?, ?)`,
+		stateQueued, stateRunning).Scan(&n); err != nil {
+		return err
+	}
+	if n >= maxPending {
+		return ErrQueueFull
+	}
+	return nil
+}
+
+// ClearFinished 删除所有已结束（成功/失败）的任务记录。
+//
+// 输入：ctx
+// 输出：删除条数
+// 预期：排队中与执行中的任务保留；删完推一次状态，面板立即刷新
+func (q *Queue) ClearFinished(ctx context.Context) (int64, error) {
+	res, err := q.db.ExecContext(ctx,
+		`DELETE FROM jobs WHERE state IN (?, ?)`, stateDone, stateFailed)
 	if err != nil {
 		return 0, err
 	}
-	q.signal()
-	return newID, nil
+	n, _ := res.RowsAffected()
+	q.changed()
+	return n, nil
 }
 
 // Wait 等待一条任务结束。
@@ -349,6 +432,8 @@ func (q *Queue) loop(ctx context.Context) {
 			}
 			continue
 		}
+		// 开始执行也要推一次：面板要把「排队中」换成「执行中」
+		q.changed()
 		q.run(ctx, job)
 	}
 }
@@ -467,6 +552,8 @@ func (q *Queue) finish(id int64, err error) {
 DELETE FROM jobs WHERE state IN (?, ?) AND id NOT IN (
 	SELECT id FROM jobs WHERE state IN (?, ?) ORDER BY id DESC LIMIT ?
 )`, stateDone, stateFailed, stateDone, stateFailed, keepFinished)
+	// 结束（成功或失败）必须推一次：这是面板从「执行中」变成最终状态的唯一时点
+	q.changed()
 }
 
 // Retryable 判断错误是否值得重试。

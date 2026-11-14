@@ -20,6 +20,7 @@ import (
 	"mytgfs/internal/dirent"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/push"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 )
@@ -58,34 +59,32 @@ type FileSystem struct {
 	// tr 记录正在下载的文件进度；键是卷内路径
 	trMu sync.Mutex
 	tr   map[string]*Transfer
-	// onChange 可选：有可见变化（进度、提交、删除、改名）时回调
-	onChange func()
+	// events 是写操作完成后通知前端的通道；构造时必填，忘接就编译不过
+	events push.Events
 }
 
-// SetOnChange 挂上「有可见变化」回调，供上层推送状态事件。
+// notify 推送一次「卷内容变了」。
 //
-// 输入：fn 回调；nil 表示不通知
+// 输入：无
 // 输出：无
-// 预期：回调必须快且非阻塞，内部会在持锁路径之外调用
-func (d *FileSystem) SetOnChange(fn func()) { d.onChange = fn }
-
-// notify 触发变化回调。
+// 预期：由所有会改动频道的路径调用；没有推送通道时（命令行单跑）直接返回
 func (d *FileSystem) notify() {
-	if d.onChange != nil {
-		d.onChange()
+	if d.events == nil {
+		return
 	}
+	d.events.Publish(push.TopicStatus)
 }
 
 // New 创建卷内文件系统。
 //
-// 输入：ctx；idx 索引；store 存储；chunk 读块大小
+// 输入：ctx；idx 索引；store 存储；chunk 读块大小；events 状态推送通道（必填）
 // 输出：*FileSystem
-// 预期：所有路径都相对于卷根 "/"
-func New(ctx context.Context, idx *index.Index, store Store, chunk int64) *FileSystem {
+// 预期：所有路径都相对于卷根 "/"；events 为 nil 表示当前进程没有面板可通知
+func New(ctx context.Context, idx *index.Index, store Store, chunk int64, events push.Events) *FileSystem {
 	if chunk <= 0 {
 		chunk = 1 << 20
 	}
-	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk}
+	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk, events: events}
 }
 
 // SetQueue 挂上串行队列（测试可注入内存实现）。

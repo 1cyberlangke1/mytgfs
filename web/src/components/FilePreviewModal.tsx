@@ -23,6 +23,10 @@ interface FilePreviewModalProps {
   locale: Locale;
   onClose: () => void;
   onDownload: (file: FileItem) => void;
+  /** 覆盖媒体源：下载页预览本地文件时指向 /api/downloads/file */
+  streamOverride?: string;
+  /** 主按钮文案；本地文件是「打开」而不是「下载」 */
+  actionLabel?: string;
 }
 
 export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
@@ -32,6 +36,8 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   locale,
   onClose,
   onDownload,
+  streamOverride,
+  actionLabel,
 }) => {
   const [imgZoomed, setImgZoomed] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -73,7 +79,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
             {(() => {
               const fullPath = getItemFullPath(allFiles, file);
               // 真实媒体流地址：服务端 /api/file 支持 Range，可直接喂给 video/audio/iframe
-              const streamUrl = fileURL(file.volumeId, fullPath, true);
+              const streamUrl = streamOverride ?? fileURL(file.volumeId, fullPath, true);
 
               return (
                 <>
@@ -301,7 +307,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                             className="w-full"
                           >
                             <Download className="w-4 h-4" />
-                            <span>{t.files.actionDownload}</span>
+                            <span>{actionLabel ?? t.files.actionDownload}</span>
                           </Button>
                         </div>
                       )}

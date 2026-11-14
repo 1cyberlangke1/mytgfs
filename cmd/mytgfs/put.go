@@ -72,7 +72,7 @@ func runPut(args []string) {
 
 	okCount, failCount := 0, 0
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
-		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk())
+		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
 		fsys.SetVolume(volName)
 		// 与面板共用同一套持久化队列：中途断网/断电后任务还在
 		if _, qerr := fsys.AttachQueue(ctx); qerr != nil {

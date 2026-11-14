@@ -66,7 +66,8 @@ type uploadJob struct {
 // 输出：已启动的队列
 // 预期：同一卷只调用一次；队列与索引共用一个 SQLite 库，崩溃后自动重排
 func (d *FileSystem) AttachQueue(ctx context.Context) (*queue.Queue, error) {
-	q, err := queue.Open(d.idx.DB(), 0)
+	// 任务入队/开始/结束都推一次状态，面板的操作队列才能实时走完队列→执行→完成
+	q, err := queue.Open(d.idx.DB(), 0, d.notify)
 	if err != nil {
 		return nil, err
 	}

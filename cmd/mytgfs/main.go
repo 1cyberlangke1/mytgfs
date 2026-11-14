@@ -28,11 +28,11 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
+	"mytgfs/internal/push"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
@@ -432,10 +432,10 @@ func runWeb(args []string) {
 		return web.ServeWith(ctx, addr, cfgPath, opts)
 	}
 
-	bus := eventbus.New()
+	pushHub := push.NewHub(ctx)
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑
-		if err := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); err != nil {
+		if err := serve(web.Options{Push: pushHub, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); err != nil {
 			fatal(err.Error())
 		}
 		return
@@ -453,7 +453,7 @@ func runWeb(args []string) {
 			return perr
 		}
 		defer closePool()
-		vols := openWebVolumes(ctx, app.New(cfg, app.Options{Bus: bus}), api)
+		vols := openWebVolumes(ctx, app.New(cfg, app.Options{Push: pushHub}), api)
 		defer closeWebVolumes(vols)
 
 		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
@@ -470,7 +470,7 @@ func runWeb(args []string) {
 				}
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
 				vwg.Go(func() {
-					trayapp.AutoSync(vsync, trayapp.StatusNotifier(bus), wv.idx, differ, wv.store, interval, nil)
+					trayapp.AutoSync(vsync, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil)
 				})
 			}
 		}
@@ -608,11 +608,23 @@ func runWeb(args []string) {
 				}
 				return int64(files), used, true
 			},
-			Bus: bus,
+			Push: pushHub,
 			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
 			// 下载目录：留空时由面板按 data/downloads 解析
 			DownloadsDir: cfg.Downloads.EffectiveDir(),
+			// 清空已结束的队列记录：面板按钮直接落到各卷的持久化表
+			ClearQueue: func(ctx context.Context) (int64, error) {
+				var total int64
+				for _, wv := range vols {
+					n, cerr := wv.vf.ClearQueue(ctx)
+					if cerr != nil {
+						return total, cerr
+					}
+					total += n
+				}
+				return total, nil
+			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
 				return webStatus(ctx, cfg, vols), nil
@@ -624,7 +636,7 @@ func runWeb(args []string) {
 	}
 	if tgclient.IsAuthLost(err) {
 		ui.Errf("%s\n", i18n.T("err.auth_lost_hint"))
-		if serr := serve(web.Options{Bus: bus, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); serr != nil {
+		if serr := serve(web.Options{Push: pushHub, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); serr != nil {
 			fatal(serr.Error())
 		}
 		return
@@ -660,8 +672,8 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 		out[v.Name] = &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
 	}
 	// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
-	if bus := a.Bus(); bus != nil && len(out) > 0 {
-		bus.Publish("status")
+	if len(out) > 0 {
+		a.Events().Publish(push.TopicStatus)
 	}
 	return out
 }

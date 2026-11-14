@@ -109,7 +109,7 @@ func runCopy(args []string) {
 
 		srcStore := s.Store()
 		dstStore := s.StoreFor(dstVolume.ChatID)
-		dstFS := vfs.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk())
+		dstFS := vfs.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk(), nil)
 		srcPart := upload.Part(source)
 		body, cerr := dstFS.NodeBody(ctx, dst, source.Sha256)
 		if cerr != nil {

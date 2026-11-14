@@ -14,6 +14,7 @@ package web
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -24,10 +25,10 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 )
@@ -58,10 +59,8 @@ type uploadSession struct {
 type uploadAPI struct {
 	manager func(volume string) (fm.Files, bool)
 	tmpDir  string
-	// bus 可选：提交成功后广播 status，让面板立刻刷新
-	bus  *eventbus.Bus
-	mu   sync.Mutex
-	sess map[string]*uploadSession
+	mu      sync.Mutex
+	sess    map[string]*uploadSession
 }
 
 // newUploadAPI 创建分片上传接口。
@@ -101,8 +100,8 @@ func (u *uploadAPI) handleInit(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
 		return
 	}
-	if req.Size < 0 {
-		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+	if req.Size <= 0 {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_empty"))
 		return
 	}
 	if _, ok := u.manager(req.Vol); !ok {
@@ -206,16 +205,43 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 文件夹上传会带上相对路径：先把缺失的父目录补出来，再落文件
+	if err := ensureParents(r.Context(), m, s.target); err != nil {
+		u.drop(s.id)
+		replyJSONError(w, http.StatusBadRequest, fmError(err))
+		return
+	}
 	if err := m.Upload(r.Context(), s.target, s.file); err != nil {
 		u.drop(s.id)
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
 	u.drop(s.id)
-	if u.bus != nil {
-		u.bus.Publish("status")
-	}
 	replyJSON(w, http.StatusOK, map[string]any{"path": s.target})
+}
+
+// ensureParents 建好目标文件的父目录层级。
+//
+// 输入：ctx；m 文件后端；target 卷内绝对文件路径
+// 输出：error；父目录无法创建时返回
+// 预期：
+//   - 文件夹上传带相对路径时，层级要原样保留
+//   - 已存在的目录视为成功（重复上传同一个文件夹不报错）
+func ensureParents(ctx context.Context, m fm.Files, target string) error {
+	dir := path.Dir(target)
+	if dir == "/" || dir == "." {
+		return nil
+	}
+	var cur string
+	for seg := range strings.SplitSeq(strings.TrimPrefix(dir, "/"), "/") {
+		cur += "/" + seg
+		err := m.Mkdir(ctx, cur)
+		if err == nil || errors.Is(err, fm.ErrExists) || errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 // handleAbort 放弃会话（DELETE /api/upload?id=）。

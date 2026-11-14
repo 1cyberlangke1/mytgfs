@@ -75,6 +75,20 @@ export interface DownloadItem {
   mod: string;
 }
 
+/** 下载任务状态：完成的任务会直接进入文件列表 */
+export type DownloadTaskState = 'running' | 'paused' | 'failed';
+
+export interface DownloadTask {
+  id: string;
+  name: string;
+  vol: string;
+  path: string;
+  size: number;
+  done: number;
+  state: DownloadTaskState;
+  error?: string;
+}
+
 export type SortField = 'name' | 'size' | 'updatedAt';
 export type SortOrder = 'asc' | 'desc';
 export type NavTab = 'overview' | 'files' | 'settings' | 'downloads';

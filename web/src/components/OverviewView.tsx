@@ -357,7 +357,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               </span>
             )}
           </h2>
-          {transfers.some((tr) => tr.state === 'completed') && (
+          {transfers.some((tr) => tr.state === 'completed' || tr.state === 'failed') && (
             <Button
               type="button"
               variant="ghost"

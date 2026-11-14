@@ -29,11 +29,11 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
-	"mytgfs/internal/eventbus"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
+	"mytgfs/internal/push"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
@@ -82,18 +82,18 @@ func AutoSync(ctx context.Context, notify func(changed, removed []string), idx *
 
 // StatusNotifier 把自动同步的增删转成 status 事件，面板据此刷新。
 //
-// 输入：bus 事件总线；nil 时返回 nil
+// 输入：events 推送通道；nil 时返回 nil
 // 输出：AutoSync 的 notify 回调
 // 预期：只有真的增删了条目才推送，空轮不打扰面板
-func StatusNotifier(bus *eventbus.Bus) func(changed, removed []string) {
-	if bus == nil {
+func StatusNotifier(events push.Events) func(changed, removed []string) {
+	if events == nil {
 		return nil
 	}
 	return func(changed, removed []string) {
 		if len(changed) == 0 && len(removed) == 0 {
 			return
 		}
-		bus.Publish("status")
+		events.Publish(push.TopicStatus)
 	}
 }
 
@@ -157,7 +157,7 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 	}
 }
 
-// Run 运行托盘主管进程，阻塞到「卸载并退出」。
+// Run 运行托盘主管进程，阻塞到「退出」。
 //
 // 输入：opts 启动参数
 // 输出：只有启动阶段失败才返回 error；正常退出返回 nil
@@ -214,6 +214,7 @@ func Run(opts Options) error {
 		Description:    "Telegram channel file volumes",
 		Icon:           brand.Large,
 		SingleInstance: single,
+		Windows:        application.WindowsOptions{AdditionalBrowserArgs: e2eBrowserArgs()},
 		Assets: application.AssetOptions{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hmu.RLock()
@@ -322,8 +323,9 @@ func Run(opts Options) error {
 		}
 	}
 
-	// bus 把配置/状态变更立刻推给面板，不走轮询
-	bus := eventbus.New()
+	// pushHub 是面板推送的唯一入口：配置/状态变更立刻推给 WebView
+	pushHub := push.NewHub(rootCtx)
+	defer pushHub.Close()
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
@@ -561,7 +563,22 @@ func Run(opts Options) error {
 			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
 			// 事件推送：面板保存配置/文件变化后，托盘立刻同步
-			Bus: bus,
+			Push: pushHub,
+			// 清空已结束的队列记录：面板按钮直接落到各卷的持久化表
+			ClearQueue: func(ctx context.Context) (int64, error) {
+				volMu.Lock()
+				vs := append([]*trayVolume(nil), volumes...)
+				volMu.Unlock()
+				var total int64
+				for _, v := range vs {
+					n, cerr := v.vf.ClearQueue(ctx)
+					if cerr != nil {
+						return total, cerr
+					}
+					total += n
+				}
+				return total, nil
+			},
 		}
 		return web.NewHandler(cfgPath, webOpts)
 	}
@@ -575,7 +592,7 @@ func Run(opts Options) error {
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、文件系统语义与文件管理统一由装配根给出
-		vf, oerr := app.New(cfg, app.Options{Bus: bus}).OpenVolume(vctx, name, api)
+		vf, oerr := app.New(cfg, app.Options{Push: pushHub}).OpenVolume(vctx, name, api)
 		if oerr != nil {
 			logging.Warn("log.index_open_failed", oerr)
 			vcancel()
@@ -590,9 +607,7 @@ func Run(opts Options) error {
 		volumes = append(volumes, tv)
 		volMu.Unlock()
 		// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
-		if bus != nil {
-			bus.Publish("status")
-		}
+		pushHub.Publish(push.TopicStatus)
 
 		var vwg sync.WaitGroup
 		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
@@ -601,7 +616,7 @@ func Run(opts Options) error {
 			interval = SyncInterval(0)
 		}
 		vwg.Go(func() {
-			AutoSyncWhile(vctx, StatusNotifier(bus), idx, differ, store, interval, &tv.mu, syncSwitch.On)
+			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncSwitch.On)
 		})
 
 		mu.Lock()
@@ -790,6 +805,13 @@ func Run(opts Options) error {
 
 	// 面板路由直接挂到 webview：不监听端口、不开浏览器
 	setHandler(buildPanel())
+
+	// 桌面传输通道：Hub 统一扇出，这里只把主题翻成 Wails 原生事件名。
+	// 网页版在同一个 Hub 上注册 SSE 订阅者，两端共用一份契约。
+	unsubscribe := pushHub.Subscribe(func(topic string) {
+		wailsApp.Event.Emit(push.DesktopEvent(topic))
+	})
+	defer unsubscribe()
 
 	if err := wailsApp.Run(); err != nil {
 		return err

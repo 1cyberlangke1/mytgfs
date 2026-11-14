@@ -4,20 +4,29 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
+	"mytgfs/internal/push"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/vfs"
 )
 
-// statusEventGap 是状态事件的最小推送间隔：进度按块触发，节流后前端每秒最多几次。
-const statusEventGap = 400 * time.Millisecond
+// Events 返回写操作的推送通道。
+//
+// 输入：无
+// 输出：push.Events；装配时没给 Hub 时是 nil（空实现）
+// 预期：所有构造卷的地方都从这里取，忘接推送会编译不过
+func (a *App) Events() push.Events {
+	if a.opts.Push == nil {
+		return nil
+	}
+	return a.opts.Push
+}
 
 // VolumeFS 是一个卷的文件系统后端。
 type VolumeFS struct {
@@ -53,7 +62,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		logging.Warn("log.volume_warn", rerr, volName)
 	}
 
-	fsys := vfs.New(ctx, idx, store, a.cfg.Mount.ReadChunk())
+	fsys := vfs.New(ctx, idx, store, a.cfg.Mount.ReadChunk(), a.Events())
 	fsys.SetVolume(volName)
 	// 所有改动频道的操作先落库再执行：断电/断网后重启继续
 	if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
@@ -61,11 +70,6 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		return nil, qerr
 	}
 	fsys.SetTempDir(datadir.Path("tmp"))
-	// 面板靠事件刷新状态：进度、提交、删除都推一次，节流避免高频刷屏
-	if a.opts.Bus != nil {
-		bus := a.opts.Bus
-		fsys.SetOnChange(func() { bus.PublishEvery("status", statusEventGap) })
-	}
 	// 只补传本程序记下的记录，不动频道里别的内容
 	if rerr := fsys.ResumePending(); rerr != nil {
 		logging.Warn("log.volume_warn", rerr, volName)
@@ -112,6 +116,22 @@ func (v *VolumeFS) Snapshot(ctx context.Context) (Snapshot, error) {
 		snap.Queue = q.Snapshot()
 	}
 	return snap, nil
+}
+
+// ClearQueue 清空本卷已结束的任务记录。
+//
+// 输入：ctx
+// 输出：删除条数
+// 预期：只删 done/failed；排队与执行中的任务不受影响，队列未接线时返回 0
+func (v *VolumeFS) ClearQueue(ctx context.Context) (int64, error) {
+	if v.FS == nil {
+		return 0, nil
+	}
+	q := v.FS.Queue()
+	if q == nil {
+		return 0, nil
+	}
+	return q.ClearFinished(ctx)
 }
 
 // Close 先停队列再关索引；在跑任务被取消后等下次启动重排。

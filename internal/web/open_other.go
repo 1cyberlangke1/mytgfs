@@ -6,6 +6,6 @@ package web
 
 import "errors"
 
-func openDir(string) error {
+func openPath(string) error {
 	return errors.New("open directory is not supported on this platform")
 }

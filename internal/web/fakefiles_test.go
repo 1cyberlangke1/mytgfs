@@ -42,6 +42,9 @@ func (f *fakeFiles) Info(ctx context.Context, p string) (fm.Entry, error) {
 }
 
 func (f *fakeFiles) Mkdir(ctx context.Context, p string) error {
+	if f.dirs[p] {
+		return fm.ErrExists
+	}
 	f.dirs[p] = true
 	return nil
 }

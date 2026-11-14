@@ -28,32 +28,48 @@ type Item struct {
 // 输出：频道列表
 // 预期：creator 与拥有管理权限的管理员频道都会返回；普通成员频道不返回
 func List(ctx context.Context, api API) ([]Item, error) {
-	res, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-		OffsetPeer: &tg.InputPeerEmpty{},
-		Limit:      200,
-	})
-	if err != nil {
-		return nil, err
-	}
-
+	// 主文件夹与归档文件夹各拉一次：归档里的私有频道同样是可用存储卷，
+	// 只查主文件夹会让它们凭空消失。
 	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesDialogs:
-		chats = m.Chats
-	case *tg.MessagesDialogsSlice:
-		chats = m.Chats
+	for _, folder := range []int{0, 1} {
+		req := &tg.MessagesGetDialogsRequest{
+			OffsetPeer: &tg.InputPeerEmpty{},
+			Limit:      200,
+		}
+		if folder > 0 {
+			req.SetFolderID(folder)
+		}
+		res, err := api.MessagesGetDialogs(ctx, req)
+		if err != nil {
+			// 没有归档文件夹的账号调用会报错，忽略即可，不影响主文件夹结果
+			if folder > 0 {
+				continue
+			}
+			return nil, err
+		}
+		switch m := res.(type) {
+		case *tg.MessagesDialogs:
+			chats = append(chats, m.Chats...)
+		case *tg.MessagesDialogsSlice:
+			chats = append(chats, m.Chats...)
+		}
 	}
 
+	seen := make(map[int64]struct{}, len(chats))
 	out := make([]Item, 0, len(chats))
 	for _, c := range chats {
 		ch, ok := c.(*tg.Channel)
 		if !ok {
 			continue
 		}
+		if _, dup := seen[ch.ID]; dup {
+			continue
+		}
 		rights, hasRights := ch.GetAdminRights()
 		if !ch.Creator && !(hasRights && canManage(rights)) {
 			continue
 		}
+		seen[ch.ID] = struct{}{}
 		out = append(out, Item{
 			ID:         ch.ID,
 			AccessHash: ch.AccessHash,

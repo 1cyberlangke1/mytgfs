@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && node scripts/check-push-contract.mjs",
+    "e2e:desktop": "node scripts/e2e-desktop.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

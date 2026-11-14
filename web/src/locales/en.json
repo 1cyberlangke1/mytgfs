@@ -109,7 +109,8 @@
     "pauseBtn": "Pause",
     "resumeBtn": "Resume",
     "cancelBtn": "Cancel",
-    "clearCompletedBtn": "Clear Completed",
+    "clearCompletedBtn": "Clear history",
+    "queueClearedToast": "Queue history cleared",
     "queueRunning": "Running",
     "queueKind": {
       "upload": "Upload",
@@ -329,9 +330,18 @@
     "confirmDelete": "Delete this copy?",
     "confirmDeleteBtn": "Delete",
     "cancelBtn": "Cancel",
-    "savedToast": "Downloaded: {name}",
+    "startedToast": "Downloading: {name}",
     "removedToast": "Local copy deleted",
-    "openFailedToast": "Failed to open the downloads directory"
+    "openFailedToast": "Failed to open the downloads directory",
+    "tasksTitle": "Downloading",
+    "stateRunning": "Downloading",
+    "statePaused": "Paused",
+    "stateFailed": "Failed",
+    "taskPause": "Pause",
+    "taskResume": "Resume",
+    "taskCancel": "Cancel task",
+    "previewBtn": "Preview local file",
+    "openBtn": "Open"
   },
   "errors": {
     "title": "Something went wrong",

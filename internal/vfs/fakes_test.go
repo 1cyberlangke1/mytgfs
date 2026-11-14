@@ -11,6 +11,7 @@ import (
 
 	"mytgfs/internal/dirent"
 	"mytgfs/internal/index"
+	"mytgfs/internal/push"
 	"mytgfs/internal/telegramstore"
 )
 
@@ -163,13 +164,25 @@ func (f *fakeStore) Delete(_ context.Context, ids ...int) error {
 // newTestFS 建一个临时索引与假存储；卷根是虚拟的，不需要根消息。
 func newTestFS(t *testing.T) (*FileSystem, *fakeStore, func()) {
 	t.Helper()
+	fsys, st, _, cleanup := newTestFSWithEvents(t)
+	return fsys, st, cleanup
+}
+
+// newTestFSWithEvents 同上，并返回推送记录器，用于验证写操作一定推送。
+//
+// 输入：t 测试
+// 输出：文件系统、假存储、推送记录器、清理函数
+// 预期：所有写路径都往记录器里写 status 主题
+func newTestFSWithEvents(t *testing.T) (*FileSystem, *fakeStore, *push.Recorder, func()) {
+	t.Helper()
 	ctx := t.Context()
 	idx, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	st := newFakeStore()
-	return New(ctx, idx, st, 1<<20), st, func() { idx.Close() }
+	rec := push.NewRecorder()
+	return New(ctx, idx, st, 1<<20, rec), st, rec, func() { idx.Close() }
 }
 
 // putFile 通过写句柄上传一个文件，返回生成的消息号。

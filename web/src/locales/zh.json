@@ -109,7 +109,8 @@
     "pauseBtn": "暂停",
     "resumeBtn": "继续",
     "cancelBtn": "取消",
-    "clearCompletedBtn": "清除已完成",
+    "clearCompletedBtn": "清空记录",
+    "queueClearedToast": "已清空队列记录",
     "queueRunning": "执行中",
     "queueKind": {
       "upload": "上传",
@@ -329,9 +330,18 @@
     "confirmDelete": "确定删除？",
     "confirmDeleteBtn": "删除",
     "cancelBtn": "取消",
-    "savedToast": "已下载：{name}",
+    "startedToast": "开始下载：{name}",
     "removedToast": "已删除本地文件",
-    "openFailedToast": "打开下载目录失败"
+    "openFailedToast": "打开下载目录失败",
+    "tasksTitle": "正在下载",
+    "stateRunning": "下载中",
+    "statePaused": "已暂停",
+    "stateFailed": "下载失败",
+    "taskPause": "暂停",
+    "taskResume": "继续",
+    "taskCancel": "取消任务",
+    "previewBtn": "预览本地文件",
+    "openBtn": "打开"
   },
   "errors": {
     "title": "出错了",
