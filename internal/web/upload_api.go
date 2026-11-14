@@ -232,10 +232,10 @@ func ensureParents(ctx context.Context, m fm.Files, target string) error {
 	if dir == "/" || dir == "." {
 		return nil
 	}
-	var cur string
+	var cur strings.Builder
 	for seg := range strings.SplitSeq(strings.TrimPrefix(dir, "/"), "/") {
-		cur += "/" + seg
-		err := m.Mkdir(ctx, cur)
+		cur.WriteString("/" + seg)
+		err := m.Mkdir(ctx, cur.String())
 		if err == nil || errors.Is(err, fm.ErrExists) || errors.Is(err, os.ErrExist) {
 			continue
 		}

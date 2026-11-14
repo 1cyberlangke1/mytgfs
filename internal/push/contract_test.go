@@ -67,8 +67,8 @@ func TestNoDirectPublish(t *testing.T) {
 		}
 		text := string(data)
 		for _, needle := range []string{`"mytgfs/internal/eventbus"`, ".PublishEvery("} {
-			if i := strings.Index(text, needle); i >= 0 {
-				line := 1 + strings.Count(text[:i], "\n")
+			if before, _, ok := strings.Cut(text, needle); ok {
+				line := 1 + strings.Count(before, "\n")
 				violations = append(violations, rel+":"+itoa(line)+" 直接使用 "+needle)
 				break
 			}

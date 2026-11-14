@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/natefinch/atomic"
@@ -29,12 +30,9 @@ func VolumeNameExists(path, name string) bool {
 	if err != nil {
 		return false
 	}
-	for _, v := range cfg.Volumes {
-		if strings.EqualFold(v.Name, name) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cfg.Volumes, func(v Volume) bool {
+		return strings.EqualFold(v.Name, name)
+	})
 }
 
 // VolumeChatExists 判断频道是否已经挂成某个卷。
@@ -46,12 +44,9 @@ func VolumeChatExists(path string, chatID int64) bool {
 	if err != nil {
 		return false
 	}
-	for _, v := range cfg.Volumes {
-		if v.ChatID == chatID {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cfg.Volumes, func(v Volume) bool {
+		return v.ChatID == chatID
+	})
 }
 
 // AppendVolume 在配置文件末尾追加一个 [[volumes]] 条目。

@@ -87,16 +87,13 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 		slog.Info(i18n.T("log.rebuild_no_user"))
 		return nil
 	}
-	nodes, err := a.AllNodes(ctx, channelID)
+	count, err := a.RebuildIndex(ctx, idx, channelID)
 	if err != nil {
 		return err
 	}
-	if len(nodes) == 0 {
+	if count == 0 {
 		slog.Info(i18n.T("log.rebuild_empty"), "channel", channelID)
 		return nil
-	}
-	if _, err := tgsync.Rebuild(ctx, idx, nodes); err != nil {
-		return err
 	}
 	slog.Info(i18n.T("log.rebuild_done"), "channel", channelID)
 	return nil
@@ -106,7 +103,7 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 //
 // 输入：ctx；idx 索引；channelID 该卷频道 ID
 // 输出：写入的节点数
-// 预期：远端为空时返回 0 且不改本地；没有 user 会话时返回错误
+// 预期：远端为空或没有 user 会话时返回 0 且不改本地
 func (a *App) RebuildIndex(ctx context.Context, idx *index.Index, channelID int64) (int, error) {
 	nodes, err := a.AllNodes(ctx, channelID)
 	if err != nil {
