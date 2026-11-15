@@ -97,6 +97,9 @@ jobs:
       - name: 类型检查与推送约束
         working-directory: web
         run: npm run lint
+      - name: 前端单元测试
+        working-directory: web
+        run: npm test
       - name: 构建前端
         working-directory: web
         run: npm run build

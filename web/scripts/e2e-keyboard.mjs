@@ -400,7 +400,6 @@ try {
     return true;
   })()`);
   await waitFor('删除确认框关闭', () => evaluate(`!document.querySelector('dialog[open]')`));
-  await sleep(200);
   check('取消删除不改数据', (await listFiles()).length === countAfterDialog);
 
   await focusList();
@@ -495,22 +494,20 @@ try {
   const before = await focusInfo();
   const steps = [];
   let stuck = '';
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 10; i += 1) {
     const from = await focusInfo();
     await key('ArrowRight');
     const to = await focusInfo();
-    steps.push(from.id + '→' + to.id);
     if (to.id === from.id) {
-      stuck = from.id;
+      // 到了这一行最后一个控件，右边没有候选是正常结束；
+      // 只有卡在下拉/输入框上走不掉才算回归
+      if (from.kind === 'select' || from.kind === 'input') stuck = from.id + ' 卡住走不掉';
       break;
     }
-    // 同一控件上按 → 不能改选项值（改选项要 Enter 进入编辑才算）
-    if (from.kind === 'select' && to.id === from.id && to.value !== from.value) {
-      stuck = from.id + ' 选项被左右键改掉';
-      break;
-    }
+    steps.push(from.id + '→' + to.id);
   }
   check('工具栏连续 → 不卡住（含下拉框）', stuck === '', stuck || steps.join(' | '));
+  check('连续 → 至少走过三个控件', steps.length >= 3, String(steps.length));
   check('连续步进起点在工具栏', before.kind === 'input' || before.kind === 'select' || before.kind === 'other', JSON.stringify(before));
 
   // 5.6 连续 ← 走回搜索框，验证反向同样通
