@@ -40,6 +40,24 @@ func TestEncodeParseDir(t *testing.T) {
 	}
 }
 
+// TestEncodeTombstoneRoundTrip 删除标记只含类型字段，解析回 Tombstone=true 的空节点。
+func TestEncodeTombstoneRoundTrip(t *testing.T) {
+	body, err := EncodeTombstone()
+	if err != nil {
+		t.Fatalf("EncodeTombstone: %v", err)
+	}
+	if body != `{"v":2,"t":"x"}` {
+		t.Fatalf("删除标记正文不符: %s", body)
+	}
+	got, ok := Parse(body)
+	if !ok {
+		t.Fatalf("Parse 失败: %s", body)
+	}
+	if !got.Tombstone || got.Name != "" || got.Parent != 0 || got.Dir || got.Sha != "" {
+		t.Fatalf("解析结果不符: %+v", got)
+	}
+}
+
 // TestParseRejectsLegacy 旧路径格式与坏 JSON 一律拒绝。
 func TestParseRejectsLegacy(t *testing.T) {
 	for _, s := range []string{

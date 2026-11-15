@@ -31,7 +31,6 @@ type fakeStore struct {
 	// uploadCaptions 记录上传时写进文件消息的 caption
 	uploadCaptions []string
 	uploadSizes    []int64
-	deleted        []int
 	copiedSrc      []int64
 	readErr        error
 	uploadErr      error
@@ -153,12 +152,15 @@ func (f *fakeStore) UploadResumable(_ context.Context, _ io.ReaderAt, size int64
 	return part, nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, ids ...int) error {
-	for _, id := range ids {
-		delete(f.msgs, id)
+// tombstoneCount 统计已编辑成正文中删除标记的消息数。
+func tombstoneCount(f *fakeStore) int {
+	n := 0
+	for _, body := range f.edits {
+		if node, ok := dirent.Parse(body); ok && node.Tombstone {
+			n++
+		}
 	}
-	f.deleted = append(f.deleted, ids...)
-	return nil
+	return n
 }
 
 // newTestFS 建一个临时索引与假存储；卷根是虚拟的，不需要根消息。

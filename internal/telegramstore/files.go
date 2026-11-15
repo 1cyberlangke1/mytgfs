@@ -20,6 +20,8 @@ type NodeInfo struct {
 	Parent    int
 	IsDir     bool
 	Sha       string
+	// Tombstone 表示这是删除标记消息：节点已删除，其余字段无意义。
+	Tombstone bool
 	// 以下字段只有文件节点有意义。
 	DocumentID    int64
 	AccessHash    int64
@@ -44,9 +46,10 @@ func NodeOf(msg *tg.Message, body string) (NodeInfo, bool) {
 		Parent:    n.Parent,
 		IsDir:     n.Dir,
 		Sha:       n.Sha,
+		Tombstone: n.Tombstone,
 		Mtime:     int64(msg.Date),
 	}
-	if n.Dir {
+	if n.Tombstone || n.Dir {
 		return info, true
 	}
 	doc, ok := documentOf(msg.Media)

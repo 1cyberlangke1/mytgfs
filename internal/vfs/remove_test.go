@@ -1,16 +1,19 @@
 package vfs
 
-// 删除测试：删目录按子树批量删消息，本地索引一起清。
+// 删除测试：删目录只给目录自己的消息打删除标记，子节点消息不动，
+// 本地索引整棵子树一起清。
 
 import (
 	"errors"
 	"os"
-	"slices"
 	"testing"
+
+	"mytgfs/internal/dirent"
 )
 
-// TestRemoveAllDirectoryRemovesSubtree 删目录时子树里每个节点的消息都进删除批次。
-func TestRemoveAllDirectoryRemovesSubtree(t *testing.T) {
+// TestRemoveAllDirectoryTombstonesSubtreeRoot 删目录时只有目录消息被打标记，
+// 子节点消息远端不动，本地索引整棵子树清空。
+func TestRemoveAllDirectoryTombstonesSubtreeRoot(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
 	ctx := t.Context()
@@ -23,12 +26,17 @@ func TestRemoveAllDirectoryRemovesSubtree(t *testing.T) {
 	if err := fsys.RemoveAll(ctx, "/d"); err != nil {
 		t.Fatalf("删目录应成功: %v", err)
 	}
-	for _, id := range append([]int{dirID, subID}, fileIDs...) {
-		if !slices.Contains(st.deleted, id) {
-			t.Fatalf("消息 %d 应被删除，实际 %v", id, st.deleted)
+	node, ok := dirent.Parse(st.edits[dirID])
+	if !ok || !node.Tombstone {
+		t.Fatalf("目录消息应被打删除标记，实际 %q", st.edits[dirID])
+	}
+	// 子节点消息只保留原文，不被编辑也不被删
+	for _, id := range append([]int{subID}, fileIDs...) {
+		if _, edited := st.edits[id]; edited {
+			t.Fatalf("子节点消息 %d 不应被编辑", id)
 		}
-		if _, exists := st.msgs[id]; exists {
-			t.Fatalf("远端消息 %d 应被删", id)
+		if _, exists := st.msgs[id]; !exists {
+			t.Fatalf("子节点消息 %d 应在远端保留", id)
 		}
 	}
 	for _, p := range []string{"/d", "/d/f1.bin", "/d/sub", "/d/sub/f2.bin"} {
@@ -38,8 +46,9 @@ func TestRemoveAllDirectoryRemovesSubtree(t *testing.T) {
 	}
 }
 
-// TestRemoveAllFileDeletesMessage 单文件删除只删自己的消息，同目录其它文件不受影响。
-func TestRemoveAllFileDeletesMessage(t *testing.T) {
+// TestRemoveAllFileTombstonesOwnMessage 单文件删除只标记自己的消息，
+// 同目录其它文件不受影响。
+func TestRemoveAllFileTombstonesOwnMessage(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
 	ctx := t.Context()
@@ -49,8 +58,9 @@ func TestRemoveAllFileDeletesMessage(t *testing.T) {
 	if err := fsys.RemoveAll(ctx, "/d/f1.bin"); err != nil {
 		t.Fatalf("删文件应成功: %v", err)
 	}
-	if len(st.deleted) != 1 || st.deleted[0] != id {
-		t.Fatalf("应只删消息 %d，实际 %v", id, st.deleted)
+	node, ok := dirent.Parse(st.edits[id])
+	if !ok || !node.Tombstone {
+		t.Fatalf("文件消息应被打删除标记，实际 %q", st.edits[id])
 	}
 	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/d/sub/f2.bin"); !ok {
 		t.Fatal("同目录其它文件不应受影响")
@@ -71,8 +81,8 @@ func TestRemoveAllKeepsRoot(t *testing.T) {
 	if err := fsys.RemoveAll(ctx, "/"); err == nil {
 		t.Fatal("根目录删除应报错")
 	}
-	if len(st.deleted) != 0 {
-		t.Fatalf("被拒绝时不应删任何消息，实际 %v", st.deleted)
+	if len(st.edits) != 0 {
+		t.Fatalf("被拒绝时不应编辑任何消息，实际 %v", st.edits)
 	}
 	if _, ok, _ := fsys.idx.NodeByPath(ctx, "/x.bin"); !ok {
 		t.Fatal("被拒绝时索引不应变动")

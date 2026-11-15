@@ -21,6 +21,9 @@ const (
 	TypeFile = "f"
 	// TypeDir 目录节点：消息是纯文本，没有 document。
 	TypeDir = "d"
+	// TypeTombstone 删除标记：节点已被删除，消息保留仅作标记。
+	// 子节点消息不改动，拉取时按「父已删除则整棵子树丢弃」处理。
+	TypeTombstone = "x"
 )
 
 // CaptionLimit 是 Telegram 单条 caption 的字节上限。
@@ -48,13 +51,15 @@ type Node struct {
 	Dir bool
 	// Sha 是文件内容的 sha256（小写十六进制），目录恒为空。
 	Sha string
+	// Tombstone 表示这条消息是删除标记：节点已删除，仅消息本体保留。
+	Tombstone bool
 }
 
 // body 是节点消息的 JSON 结构。
 type body struct {
 	Version int    `json:"v"`
 	Type    string `json:"t"`
-	Name    string `json:"n"`
+	Name    string `json:"n,omitempty"`
 	Parent  int    `json:"p,omitempty"`
 	Sha     string `json:"s,omitempty"`
 }
@@ -103,10 +108,24 @@ func Encode(n Node) (string, error) {
 	return string(b), nil
 }
 
+// EncodeTombstone 生成删除标记消息的 body。
+//
+// 输入：无
+// 输出：JSON 字符串；error
+// 预期：只含类型标记，不带名字与父消息号；Parse 可还原出 Tombstone=true 的节点
+func EncodeTombstone() (string, error) {
+	b, err := json.Marshal(body{Version: Version, Type: TypeTombstone})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 // Parse 解析节点消息的 body。
 //
 // 输入：body 字符串
 // 输出：节点描述；ok=false 表示不是本包格式（含旧版带 path 的 caption）
+// 预期：删除标记返回 Tombstone=true 的空节点，不做名字校验
 func Parse(s string) (Node, bool) {
 	var b body
 	if err := json.Unmarshal([]byte(s), &b); err != nil {
@@ -114,6 +133,9 @@ func Parse(s string) (Node, bool) {
 	}
 	if b.Version != Version {
 		return Node{}, false
+	}
+	if b.Type == TypeTombstone {
+		return Node{Tombstone: true}, true
 	}
 	if b.Type != TypeFile && b.Type != TypeDir {
 		return Node{}, false

@@ -16,7 +16,7 @@ func TestRenameDirectoryOnlyEditsOwnMessage(t *testing.T) {
 	defer done()
 	ctx := t.Context()
 	putRenameFixture(t, fsys)
-	uploads, copies, deletes := len(st.uploadKeys), len(st.copiedSrc), len(st.deleted)
+	uploads, copies, tombs := len(st.uploadKeys), len(st.copiedSrc), tombstoneCount(st)
 	dirID := nodeID(t, fsys, "/d")
 
 	before := map[string]int{}
@@ -32,8 +32,8 @@ func TestRenameDirectoryOnlyEditsOwnMessage(t *testing.T) {
 		t.Fatalf("目录改名应成功: %v", err)
 	}
 
-	if len(st.uploadKeys) != uploads || len(st.copiedSrc) != copies || len(st.deleted) != deletes {
-		t.Fatalf("改名不应产生上传/引用/删除: keys=%v copy=%v del=%v", st.uploadKeys, st.copiedSrc, st.deleted)
+	if len(st.uploadKeys) != uploads || len(st.copiedSrc) != copies || tombstoneCount(st) != tombs {
+		t.Fatalf("改名不应产生上传/引用/删除标记: keys=%v copy=%v tombs=%v", st.uploadKeys, st.copiedSrc, st.edits)
 	}
 	// 只编辑了目录自己那条消息
 	if len(st.edits) != 1 {

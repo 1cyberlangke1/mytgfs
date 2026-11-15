@@ -44,8 +44,8 @@ func TestWriteStoresHashAndCaption(t *testing.T) {
 	}
 }
 
-// TestOverwriteDeletesOldMessage 覆盖写删掉旧消息，节点指向新消息。
-func TestOverwriteDeletesOldMessage(t *testing.T) {
+// TestOverwriteTombstonesOldMessage 覆盖写把旧消息打成删除标记，节点指向新消息。
+func TestOverwriteTombstonesOldMessage(t *testing.T) {
 	fsys, st, done := newTestFS(t)
 	defer done()
 	ctx := t.Context()
@@ -55,8 +55,9 @@ func TestOverwriteDeletesOldMessage(t *testing.T) {
 	if first == second {
 		t.Fatal("覆盖写应产生新消息号")
 	}
-	if len(st.deleted) != 1 || st.deleted[0] != first {
-		t.Fatalf("应删除旧消息 %d，实际 %v", first, st.deleted)
+	node, ok := dirent.Parse(st.edits[first])
+	if !ok || !node.Tombstone {
+		t.Fatalf("旧消息 %d 应被打删除标记，实际 %q", first, st.edits[first])
 	}
 	if _, ok, _ := fsys.idx.NodeByID(ctx, first); ok {
 		t.Fatal("旧节点应从索引移除")

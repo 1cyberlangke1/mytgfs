@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 
+	"mytgfs/internal/dirent"
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
@@ -207,21 +208,27 @@ func (d *FileSystem) renameNow(ctx context.Context, id, parent int, name string)
 	return nil
 }
 
-// removeNow 删除子树；节点已不在视为已完成。
+// removeNow 删除子树：给节点消息打删除标记，本地整棵移除。
+//
+// 输入：ctx；id 被删节点消息号
+// 输出：error
+// 预期：
+//   - O(1) 次远端编辑：只标记节点自己，子节点消息不动，
+//     子树由「父已删除」语义一并视为删除
+//   - 重复执行时再打一次标记无害（幂等）
+//   - 远端消息已不存在：直接清本地
 func (d *FileSystem) removeNow(ctx context.Context, id int) error {
 	if _, ok, err := d.idx.NodeByID(ctx, id); err != nil {
 		return err
 	} else if !ok {
 		return nil
 	}
-	ids, err := d.idx.SubtreeIDs(ctx, id)
+	body, err := dirent.EncodeTombstone()
 	if err != nil {
 		return err
 	}
-	if len(ids) > 0 {
-		if err := d.store.Delete(ctx, ids...); err != nil && !telegramstore.IsMessageGone(err) {
-			return err
-		}
+	if err := d.store.EditNode(ctx, id, body); err != nil && !telegramstore.IsMessageGone(err) {
+		return err
 	}
 	if _, err := d.idx.DeleteSubtree(ctx, id); err != nil {
 		return d.reconcileNode(ctx, id)

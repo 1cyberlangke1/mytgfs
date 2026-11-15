@@ -18,6 +18,7 @@ import (
 	"path"
 	"time"
 
+	"mytgfs/internal/dirent"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/telegramstore"
@@ -136,10 +137,13 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	}); err != nil {
 		return err
 	}
-	// 远端旧消息最后删：删失败只留下孤儿消息，本地视图已经正确
+	// 远端旧消息最后打删除标记：标记失败只留下未标记的旧节点，
+	// 重建时同路径按消息号新者胜，本地视图不受影响
 	if hadOld && old.ID > 0 && old.ID != part.MessageID {
-		if derr := f.d.store.Delete(ctx, old.ID); derr != nil {
-			slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.ID, "err", derr)
+		if tb, terr := dirent.EncodeTombstone(); terr == nil {
+			if derr := f.d.store.EditNode(ctx, old.ID, tb); derr != nil {
+				slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.ID, "err", derr)
+			}
 		}
 	}
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {

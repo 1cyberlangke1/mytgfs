@@ -3,7 +3,7 @@ package vfs
 // 卷内虚拟文件系统：把频道内容暴露成文件系统语义。
 //
 // 远端每条消息自述名字与父消息号，改名/移动只编辑这一条消息，
-// 删除按子树批量删消息；本地索引里的 path 只是派生缓存。
+// 删除只给节点自己那条消息打删除标记；本地索引里的 path 只是派生缓存。
 
 import (
 	"context"
@@ -35,7 +35,6 @@ type Store interface {
 	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
 	// Copy 引用已有 document 发一条新消息，不重传字节（写时去重用）
 	Copy(ctx context.Context, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, error)
-	Delete(ctx context.Context, ids ...int) error
 
 	// 节点消息读写
 	SendNode(ctx context.Context, body string) (int, error)
@@ -263,13 +262,6 @@ func (d *FileSystem) RemoveAll(ctx context.Context, name string) error {
 	}
 	if !ok {
 		return os.ErrNotExist
-	}
-	ids, err := d.idx.SubtreeIDs(ctx, n.ID)
-	if err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		return nil
 	}
 	return d.enqueue(ctx, jobRemove, name, removeJob{ID: n.ID})
 }

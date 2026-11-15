@@ -97,6 +97,43 @@ func TestLayoutLargerIDWinsOnSameName(t *testing.T) {
 	}
 }
 
+// TestLayoutDropsTombstoneSubtree 删除标记自身与后代整棵丢弃，不入索引也不挂根。
+func TestLayoutDropsTombstoneSubtree(t *testing.T) {
+	nodes := testNodes()
+	// 目录 1 打了删除标记：它和 a.txt/sub/b.txt 全部不应出现
+	nodes[0].Tombstone = true
+	layout, err := Layout(nodes)
+	if err != nil {
+		t.Fatalf("Layout: %v", err)
+	}
+	if len(layout) != 0 {
+		t.Fatalf("删除子树不应入索引: %+v", layout)
+	}
+}
+
+// TestLayoutDropsDescendantOfTombstone 只有深层后代带祖先标记时同样丢弃。
+func TestLayoutDropsDescendantOfTombstone(t *testing.T) {
+	nodes := testNodes()
+	// 只标记 sub(3)：sub 和 b.txt(4) 丢弃，dir 与 a.txt 保留
+	nodes[2].Tombstone = true
+	layout, err := Layout(nodes)
+	if err != nil {
+		t.Fatalf("Layout: %v", err)
+	}
+	if _, ok := layout[3]; ok {
+		t.Fatal("被标记节点不应入索引")
+	}
+	if _, ok := layout[4]; ok {
+		t.Fatal("被标记节点的后代不应入索引")
+	}
+	if _, ok := layout[1]; !ok {
+		t.Fatal("未标记的兄弟链应保留")
+	}
+	if _, ok := layout[2]; !ok {
+		t.Fatal("未标记的兄弟链应保留")
+	}
+}
+
 // TestRebuildWritesIndex 全量重建清空旧索引后写入全部节点。
 func TestRebuildWritesIndex(t *testing.T) {
 	ctx := t.Context()
@@ -164,6 +201,42 @@ func TestRefreshNodeDeletedRemovesSubtree(t *testing.T) {
 	}
 	if _, exists, _ := idx.NodeByID(ctx, 4); exists {
 		t.Fatal("后代应被删")
+	}
+}
+
+// TestRefreshNodeTombstoneRemovesSubtree 远端打删除标记时本地连子树一起删。
+func TestRefreshNodeTombstoneRemovesSubtree(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	_, _ = Rebuild(ctx, idx, testNodes())
+	nodes := newFakeNodes()
+	for _, n := range testNodes() {
+		n.Tombstone = n.MessageID == 1
+		nodes.nodes[n.MessageID] = n
+	}
+	p, ok, err := RefreshNode(ctx, idx, nodes, 1)
+	if err != nil || ok || p != "/dir" {
+		t.Fatalf("RefreshNode=(%q,%v,%v)", p, ok, err)
+	}
+	if _, exists, _ := idx.NodeByID(ctx, 4); exists {
+		t.Fatal("删除标记的后代应被删")
+	}
+}
+
+// TestRefreshNodeParentTombstonedNotInserted 新节点的父链上有删除标记时不入库。
+func TestRefreshNodeParentTombstonedNotInserted(t *testing.T) {
+	ctx := t.Context()
+	idx := newTestIndex(t)
+	nodes := newFakeNodes()
+	nodes.nodes[1] = telegramstore.NodeInfo{MessageID: 1, Tombstone: true}
+	nodes.put(2, "a.txt", 1, false, 3, "aa")
+
+	p, ok, err := RefreshNode(ctx, idx, nodes, 2)
+	if err != nil || ok || p != "" {
+		t.Fatalf("RefreshNode=(%q,%v,%v)", p, ok, err)
+	}
+	if _, exists, _ := idx.NodeByID(ctx, 2); exists {
+		t.Fatal("父已删除的节点不应入索引")
 	}
 }
 

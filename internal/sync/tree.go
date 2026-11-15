@@ -45,6 +45,29 @@ func Layout(nodes []telegramstore.NodeInfo) (map[int]index.Node, error) {
 	ids := slices.Sorted(maps.Keys(byID))
 	slices.Reverse(ids)
 
+	// tomb 是删除标记消息；祖先链（含自身）上有删除标记的节点整棵丢弃，
+	// 既不入索引也不挂根——父已删除时子树视为一并删除。
+	tomb := make(map[int]bool)
+	for _, n := range nodes {
+		if n.Tombstone {
+			tomb[n.MessageID] = true
+		}
+	}
+	dead := func(id int) bool {
+		cur := id
+		for range maxParentHops {
+			if tomb[cur] {
+				return true
+			}
+			info, ok := byID[cur]
+			if !ok || info.Parent <= 0 {
+				return false
+			}
+			cur = info.Parent
+		}
+		return false
+	}
+
 	// parentOf 给出「有效父消息号」：父不存在、自指、或落在环里时归零。
 	// 先按每个节点上溯一次父链，把检测到的环上所有节点标成归零，
 	// 这样写进本地索引的 parent_id 本身就不成环，而不是只靠遍历时 visited 兜底。
@@ -111,6 +134,9 @@ func Layout(nodes []telegramstore.NodeInfo) (map[int]index.Node, error) {
 	used := map[string]bool{}
 	for _, id := range ids {
 		n := byID[id]
+		if dead(id) {
+			continue
+		}
 		p := resolve(id, 0)
 		if used[p] {
 			continue
@@ -178,9 +204,29 @@ func RefreshNode(ctx context.Context, idx *index.Index, st NodeSource, id int) (
 		}
 		return local.Path, false, nil
 	}
-	pid, err := ensureParent(ctx, idx, st, info.Parent)
+	if info.Tombstone {
+		// 远端已打删除标记：整棵子树从本地移除
+		if !known {
+			return "", false, nil
+		}
+		if _, derr := idx.DeleteSubtree(ctx, id); derr != nil {
+			return local.Path, false, derr
+		}
+		return local.Path, false, nil
+	}
+	pid, pok, err := ensureParent(ctx, idx, st, info.Parent)
 	if err != nil {
 		return "", false, err
+	}
+	if !pok {
+		// 父链上有删除标记：节点不入库；本地已有的连同子树一并移除
+		if !known {
+			return "", false, nil
+		}
+		if _, derr := idx.DeleteSubtree(ctx, id); derr != nil {
+			return local.Path, false, derr
+		}
+		return local.Path, false, nil
 	}
 	if !known {
 		p := joinPath(dirPath(ctx, idx, pid), info.Name)
@@ -231,6 +277,10 @@ func ApplyChange(ctx context.Context, idx *index.Index, st NodeSource, id int) (
 		return nil, nil, false, perr
 	}
 	if !exists {
+		if p == "" {
+			// 本地本来就没有：无需报告移除路径
+			return nil, nil, true, nil
+		}
 		return nil, []string{p}, true, nil
 	}
 	return []string{p}, nil, true, nil
@@ -255,20 +305,22 @@ func DeleteRemote(ctx context.Context, idx *index.Index, id int) (removed []stri
 // ensureParent 补齐全新节点的父链，返回可用的父消息号。
 //
 // 输入：ctx；idx；st；parentID 目标父消息号
-// 输出：本地可用的父消息号（父链缺失时为 0）；error
-// 预期：沿父链上溯最多 maxParentHops 层，成环即停在缺失处挂根
-func ensureParent(ctx context.Context, idx *index.Index, st NodeSource, parentID int) (int, error) {
+// 输出：本地可用的父消息号（父链缺失时为 0）；ok=false 表示父链上有删除标记；error
+// 预期：沿父链上溯最多 maxParentHops 层，成环即停在缺失处挂根；
+// 遇到删除标记时不插入任何节点，调用方应放弃入库
+func ensureParent(ctx context.Context, idx *index.Index, st NodeSource, parentID int) (int, bool, error) {
 	if parentID <= 0 {
-		return 0, nil
+		return 0, true, nil
 	}
 	if _, ok, err := idx.NodeByID(ctx, parentID); err != nil {
-		return 0, err
+		return 0, false, err
 	} else if ok {
-		return parentID, nil
+		return parentID, true, nil
 	}
 	infos := map[int]telegramstore.NodeInfo{}
 	order := make([]int, 0, 4)
 	seen := map[int]bool{}
+	dead := false
 	cur := parentID
 	for range maxParentHops {
 		if cur <= 0 || seen[cur] {
@@ -276,21 +328,28 @@ func ensureParent(ctx context.Context, idx *index.Index, st NodeSource, parentID
 		}
 		seen[cur] = true
 		if _, ok, err := idx.NodeByID(ctx, cur); err != nil {
-			return 0, err
+			return 0, false, err
 		} else if ok {
 			break
 		}
 		metas, err := st.FetchNodes(ctx, []int{cur})
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		info, ok := metas[cur]
 		if !ok {
 			break
 		}
+		if info.Tombstone {
+			dead = true
+			break
+		}
 		infos[cur] = info
 		order = append(order, cur)
 		cur = info.Parent
+	}
+	if dead {
+		return 0, false, nil
 	}
 	// 从最靠根的一层往下插入，保证派生路径可算
 	for i := len(order) - 1; i >= 0; i-- {
@@ -307,13 +366,13 @@ func ensureParent(ctx context.Context, idx *index.Index, st NodeSource, parentID
 			FileReference: info.FileReference, Size: info.Size, Mtime: info.Mtime,
 			Sha256: info.Sha,
 		}); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if _, ok, _ := idx.NodeByID(ctx, parentID); ok {
-		return parentID, nil
+		return parentID, true, nil
 	}
-	return 0, nil
+	return 0, true, nil
 }
 
 // dirPath 返回父目录的派生路径；父不存在时按卷根。
