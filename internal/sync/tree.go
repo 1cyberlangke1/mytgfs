@@ -165,7 +165,7 @@ func Layout(nodes []telegramstore.NodeInfo) (map[int]index.Node, error) {
 			ID: id, ParentID: parentOf[id], Name: n.Name, IsDir: n.IsDir, Path: p,
 			DocumentID: n.DocumentID, AccessHash: n.AccessHash,
 			FileReference: n.FileReference, Size: n.Size, Mtime: n.Mtime,
-			Sha256: n.Sha,
+			Sha256: n.Sha, Thumb: n.Thumb,
 		}
 	}
 	return out, nil

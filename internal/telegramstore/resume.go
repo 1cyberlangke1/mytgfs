@@ -435,5 +435,6 @@ func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume
 		AccessHash:    doc.AccessHash,
 		FileReference: doc.FileReference,
 		Size:          doc.Size,
+		Thumb:         strippedOf(doc),
 	}, nil
 }

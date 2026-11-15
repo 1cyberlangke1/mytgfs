@@ -55,6 +55,9 @@ type fakeAPI struct {
 	fullCalls int
 	fullPhoto tg.PhotoClass
 	fullErr   error
+
+	// docThumbs 控制 sendMedia 回显 document 里的缩略图档位
+	docThumbs []tg.PhotoSizeClass
 }
 
 func newFakeAPI() *fakeAPI {
@@ -81,6 +84,7 @@ func (f *fakeAPI) docMessage(id int, size int64) tg.UpdatesClass {
 				AccessHash:    5000 + int64(id),
 				FileReference: []byte{1, 2, 3},
 				Size:          size,
+				Thumbs:        f.docThumbs,
 			}},
 		}},
 	}}

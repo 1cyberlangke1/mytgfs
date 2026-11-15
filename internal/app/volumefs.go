@@ -133,7 +133,16 @@ func (v *VolumeFS) VideoThumb(ctx context.Context, path string) ([]byte, string,
 	if !ok || n.IsDir {
 		return nil, "", os.ErrNotExist
 	}
+	// 索引里已有 stripped 展开：零网络，直接出图
+	if len(n.Thumb) > 0 {
+		return n.Thumb, strconv.Itoa(n.ID), nil
+	}
 	data, terr := v.Store.Thumb(ctx, n.ID)
+	if terr == nil && len(data) > 0 {
+		// 回源成功顺手入库：下次也零请求
+		n.Thumb = data
+		_ = v.Index.PutNode(ctx, n)
+	}
 	return data, strconv.Itoa(n.ID), terr
 }
 

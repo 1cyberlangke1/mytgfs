@@ -3,6 +3,7 @@ package sync
 // 全量重建与节点刷新单测：父指针、父缺失挂根、成环防死循环、改名/移动刷新。
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -30,6 +31,24 @@ func TestLayoutBuildsTree(t *testing.T) {
 		if layout[id].Path != p {
 			t.Fatalf("id=%d path=%q want %q", id, layout[id].Path, p)
 		}
+	}
+}
+
+// TestLayoutCarriesThumb stripped 缩略图随节点进索引：封面展示零网络。
+func TestLayoutCarriesThumb(t *testing.T) {
+	nodes := testNodes()
+	thumb := []byte{0xFF, 0xD8, 0x07}
+	for i := range nodes {
+		if nodes[i].MessageID == 2 {
+			nodes[i].Thumb = thumb
+		}
+	}
+	layout, err := Layout(nodes)
+	if err != nil {
+		t.Fatalf("Layout: %v", err)
+	}
+	if !bytes.Equal(layout[2].Thumb, thumb) {
+		t.Fatalf("id=2 Thumb = %d bytes; want %d bytes", len(layout[2].Thumb), len(thumb))
 	}
 }
 

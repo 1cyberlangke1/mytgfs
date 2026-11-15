@@ -50,6 +50,11 @@ func (s *Store) Thumb(ctx context.Context, messageID int) ([]byte, error) {
 		return nil, ErrNoDocument
 	}
 
+	// stripped 缩略图随消息免费到达：展开即用，零网络请求
+	if jpeg := strippedOf(doc); jpeg != nil {
+		return jpeg, nil
+	}
+
 	size, ok := largestThumb(doc.Thumbs)
 	if !ok {
 		return nil, fmt.Errorf("%s", i18n.T("err.thumb_missing"))

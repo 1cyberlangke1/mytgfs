@@ -64,6 +64,7 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		AccessHash:    doc.AccessHash,
 		FileReference: doc.FileReference,
 		Size:          doc.Size,
+		Thumb:         strippedOf(doc),
 	}, nil
 }
 

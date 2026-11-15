@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
+	"github.com/gotd/td/telegram/thumbnail"
 	"github.com/gotd/td/tg"
 	"golang.org/x/time/rate"
 
@@ -31,6 +32,28 @@ type Part struct {
 	AccessHash    int64
 	FileReference []byte
 	Size          int64
+	// Thumb 是消息自带的 stripped 缩略图展开后的 JPEG 字节，可能为 nil。
+	Thumb []byte
+}
+
+// strippedOf 取 document 自带的 stripped 缩略图并展开成 JPEG。
+//
+// 输入：doc document（可含 Thumbs）
+// 输出：展开后的 JPEG 字节；没有 stripped 档时返回 nil
+// 预期：与消息一起免费到达，零网络请求；展开失败不致命，走下载兜底
+func strippedOf(doc *tg.Document) []byte {
+	for _, t := range doc.Thumbs {
+		stripped, ok := t.(*tg.PhotoStrippedSize)
+		if !ok || len(stripped.Bytes) == 0 {
+			continue
+		}
+		jpeg, err := thumbnail.Expand(stripped.Bytes)
+		if err != nil || len(jpeg) == 0 {
+			return nil
+		}
+		return jpeg
+	}
+	return nil
 }
 
 // API 是 Store 用到的 Telegram RPC 子集。

@@ -134,6 +134,7 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 		Size:          part.Size,
 		Mtime:         nowUnix(),
 		Sha256:        sha,
+		Thumb:         part.Thumb,
 	}); err != nil {
 		return err
 	}

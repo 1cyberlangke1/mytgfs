@@ -361,6 +361,7 @@ func (d *FileSystem) Import(ctx context.Context, dst string, part *telegramstore
 		ID: part.MessageID, ParentID: parent.ID, Name: base, Path: dst,
 		DocumentID: part.DocumentID, AccessHash: part.AccessHash,
 		FileReference: part.FileReference, Size: part.Size, Mtime: mtime, Sha256: sha,
+		Thumb: part.Thumb,
 	}); err != nil {
 		return err
 	}

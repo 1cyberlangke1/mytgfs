@@ -100,5 +100,6 @@ func (s *Store) sendDocRef(ctx context.Context, peer tg.InputPeerClass, src *Par
 		AccessHash:    doc.AccessHash,
 		FileReference: doc.FileReference,
 		Size:          doc.Size,
+		Thumb:         strippedOf(doc),
 	}, nil
 }

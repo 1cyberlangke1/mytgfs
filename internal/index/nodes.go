@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 	file_reference BLOB,
 	size INTEGER NOT NULL DEFAULT 0,
 	mtime INTEGER NOT NULL DEFAULT 0,
-	sha256 TEXT NOT NULL DEFAULT ''
+	sha256 TEXT NOT NULL DEFAULT '',
+	thumb BLOB
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_name ON nodes(parent_id, name);
 CREATE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path);
@@ -50,23 +51,53 @@ type Node struct {
 	Size          int64
 	Mtime         int64
 	Sha256        string
+	// Thumb 是视频/图片的 stripped 缩略图展开后的 JPEG（nil 表示没有）。
+	// 与消息一起免费到达，封面展示零网络请求。
+	Thumb []byte
 }
 
 // ensureNodes 建节点表；Open 时调用。
+// 旧库没有 thumb 列：ALTER 补上，已有数据不受影响。
 func (i *Index) ensureNodes(ctx context.Context) error {
-	_, err := i.db.ExecContext(ctx, nodesSchema)
-	return err
+	if _, err := i.db.ExecContext(ctx, nodesSchema); err != nil {
+		return err
+	}
+	rows, err := i.db.QueryContext(ctx, `PRAGMA table_info(nodes)`)
+	if err != nil {
+		return err
+	}
+	hasThumb := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "thumb" {
+			hasThumb = true
+		}
+	}
+	rows.Close()
+	if !hasThumb {
+		if _, err := i.db.ExecContext(ctx, `ALTER TABLE nodes ADD COLUMN thumb BLOB`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // nodeColumns 是节点查询的固定列顺序。
-const nodeColumns = `id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256`
+const nodeColumns = `id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256, thumb`
 
 // scanNode 把一行扫进 Node。
 func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 	var n Node
 	var isDir int
 	err := sc.Scan(&n.ID, &n.ParentID, &n.Name, &isDir, &n.Path,
-		&n.DocumentID, &n.AccessHash, &n.FileReference, &n.Size, &n.Mtime, &n.Sha256)
+		&n.DocumentID, &n.AccessHash, &n.FileReference, &n.Size, &n.Mtime, &n.Sha256, &n.Thumb)
 	n.IsDir = isDir != 0
 	return n, err
 }
@@ -160,10 +191,10 @@ func (i *Index) PutNode(ctx context.Context, n Node) error {
 		isDir = 1
 	}
 	_, err := i.db.ExecContext(ctx, `
-INSERT OR REPLACE INTO nodes(id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT OR REPLACE INTO nodes(id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256, thumb)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		n.ID, n.ParentID, n.Name, isDir, p, n.DocumentID, n.AccessHash,
-		n.FileReference, n.Size, n.Mtime, n.Sha256)
+		n.FileReference, n.Size, n.Mtime, n.Sha256, n.Thumb)
 	return err
 }
 

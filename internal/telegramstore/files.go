@@ -28,6 +28,9 @@ type NodeInfo struct {
 	FileReference []byte
 	Size          int64
 	Mtime         int64
+	// Thumb 是消息自带的 stripped 缩略图展开后的 JPEG，nil 表示没有。
+	// 与消息一起免费到达，同步时入库后封面零网络请求。
+	Thumb []byte
 }
 
 // NodeOf 把一条 Telegram 消息与它的正文解析成节点描述。
@@ -60,6 +63,7 @@ func NodeOf(msg *tg.Message, body string) (NodeInfo, bool) {
 	info.AccessHash = doc.AccessHash
 	info.FileReference = doc.FileReference
 	info.Size = doc.Size
+	info.Thumb = strippedOf(doc)
 	return info, true
 }
 
