@@ -298,6 +298,10 @@ export default function App() {
   tRef.current = t;
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  // 连接状态跃迁回调：变成已连接时立即重拉文件与下载（由下方 effect 填充）
+  const onConnectedRef = useRef<() => void>(() => {});
+  // 上一次连接状态：reloadState 是唯一能观察到跃迁的位置
+  const connRef = useRef<ConnectionStatus>('connecting');
 
   // 合并上传中、下载中与服务端排队任务；同名的活动上传优先，避免重复行
   const transfers = useMemo(() => {
@@ -404,7 +408,14 @@ export default function App() {
         }))
       );
       setActiveVolumeId((cur) => (cur && names.includes(cur) ? cur : names[0] ?? ''));
-      setConnectionStatus(connOf(st.status));
+      // 非已连接 → 已连接的跃迁：断线/启动期间错过的变化立刻补拉，
+      // 不等下一个推送事件（SSE 重连自带 ready，也会走这条路）
+      const next = connOf(st.status);
+      if (connRef.current !== 'connected' && next === 'connected') {
+        onConnectedRef.current();
+      }
+      connRef.current = next;
+      setConnectionStatus(next);
       setServerTransfers(sampleDownloads(st.status?.transfers ?? []));
       setServerQueue((st.status?.queue ?? []).map(queueFromServer));
       setCaps({
@@ -560,6 +571,11 @@ export default function App() {
           scheduleDownloads();
         }
       }, 400);
+    };
+    // 连接从「连接中/重连中」跳到「已连接」时立即补拉：断线期间错过的变化不再等推送
+    onConnectedRef.current = () => {
+      scheduleFiles();
+      scheduleDownloads();
     };
 
     const onStatus = () => {
