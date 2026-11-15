@@ -6,29 +6,20 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 export type ShortcutAction =
-  | 'tabOverview'
-  | 'tabFiles'
-  | 'tabSettings'
-  | 'tabDownloads'
-  | 'focusSearch'
   | 'moveUp'
   | 'moveDown'
-  | 'rename'
-  | 'delete'
-  | 'selectAll'
-  | 'toggleSelect'
+  | 'clearOrUp'
   | 'open'
-  | 'clearOrUp';
+  | 'toggleSelect'
+  | 'selectAll'
+  | 'rename'
+  | 'delete';
 
 export type ShortcutMap = Record<ShortcutAction, string>;
 
-// SHORTCUT_ACTIONS 是设置页展示顺序：页面级在前，文件操作在后
+// SHORTCUT_ACTIONS 是设置页展示顺序，也是配置校验白名单。
+// 只放文件操作：切页面这类全局跳转不占用可配置键位。
 export const SHORTCUT_ACTIONS: ShortcutAction[] = [
-  'tabOverview',
-  'tabFiles',
-  'tabSettings',
-  'tabDownloads',
-  'focusSearch',
   'moveUp',
   'moveDown',
   'clearOrUp',
@@ -40,11 +31,6 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
 ];
 
 export const DEFAULT_SHORTCUTS: ShortcutMap = {
-  tabOverview: 'Alt+1',
-  tabFiles: 'Alt+2',
-  tabSettings: 'Alt+3',
-  tabDownloads: 'Alt+4',
-  focusSearch: '/',
   moveUp: 'ArrowUp',
   moveDown: 'ArrowDown',
   rename: 'F2',

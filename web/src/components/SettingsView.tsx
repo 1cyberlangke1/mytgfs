@@ -29,16 +29,6 @@ interface SettingsViewProps {
 // shortcutLabel 取动作的中文/英文说明，与文件页的快捷键一致。
 function shortcutLabel(t: Translations, action: ShortcutAction): string {
   switch (action) {
-    case 'tabOverview':
-      return t.settings.shortcutTabOverview;
-    case 'tabFiles':
-      return t.settings.shortcutTabFiles;
-    case 'tabSettings':
-      return t.settings.shortcutTabSettings;
-    case 'tabDownloads':
-      return t.settings.shortcutTabDownloads;
-    case 'focusSearch':
-      return t.settings.shortcutFocusSearch;
     case 'moveUp':
       return t.files.shortcutMoveUp;
     case 'moveDown':

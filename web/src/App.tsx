@@ -38,7 +38,8 @@ import {
   validateAndPlanUpload,
   volumeDisplayName,
 } from './utils/fsLogic';
-import { loadShortcuts, matchesShortcut, saveShortcuts, type ShortcutMap } from './utils/shortcuts';
+import { loadShortcuts, saveShortcuts, type ShortcutMap } from './utils/shortcuts';
+import { arrowStep, moveFocusBy, rovingTabIndex } from './utils/keynav';
 import { runViewTransition } from './utils/viewTransition';
 import { subscribePush } from './events';
 import {
@@ -255,34 +256,6 @@ export default function App() {
     saveShortcuts(next);
     setShortcuts(next);
   };
-
-  // 页面级快捷键：Alt+1..4 切页签。
-  //
-  // 输入：document keydown
-  // 输出：切换 activeTab
-  // 预期：输入框内、已打开弹窗时不抢；命中后阻止默认行为
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (document.querySelector('dialog[open]')) return;
-      const tabs: { id: NavTab; spec: string }[] = [
-        { id: 'overview', spec: shortcuts.tabOverview },
-        { id: 'files', spec: shortcuts.tabFiles },
-        { id: 'settings', spec: shortcuts.tabSettings },
-        { id: 'downloads', spec: shortcuts.tabDownloads },
-      ];
-      for (const item of tabs) {
-        if (!matchesShortcut(e, item.spec)) continue;
-        e.preventDefault();
-        if (item.id !== activeTab) runViewTransition(() => setActiveTab(item.id));
-        return;
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [shortcuts, activeTab]);
 
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -1430,8 +1403,20 @@ export default function App() {
 
             {/* Navigation Section with iOS Liquid Spring Pill & Tactile Press */}
             <LayoutGroup id="desktop-sidebar-nav">
-              <nav aria-label={t.a11y.primaryNav} className="space-y-1">
-                {navItems.map((item) => {
+              <nav
+                aria-label={t.a11y.primaryNav}
+                className="space-y-1"
+                onKeyDown={(e) => {
+                  if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+                  const step = arrowStep(e.key);
+                  if (!step) return;
+                  // 挪不动就让浏览器自己滚动，不吞方向键
+                  if (moveFocusBy(e.currentTarget, document.activeElement, 'a[href^="#"]', step)) {
+                    e.preventDefault();
+                  }
+                }}
+              >
+                {navItems.map((item, navIndex) => {
                   const isActive = activeTab === item.id;
                   return (
                     <motion.a
@@ -1446,6 +1431,10 @@ export default function App() {
                       }}
                       title={sidebarCollapsed ? item.label : undefined}
                       aria-current={isActive ? 'page' : undefined}
+                      tabIndex={rovingTabIndex(
+                        navIndex,
+                        navItems.findIndex((n) => n.id === activeTab)
+                      )}
                       className={`relative w-full h-10 ${
                         sidebarCollapsed ? 'justify-center px-0' : 'justify-between px-3'
                       } rounded-xl text-xs font-medium flex items-center transition-colors select-none z-10 ${
@@ -1491,7 +1480,19 @@ export default function App() {
 
             {/* Total Used Header + Per-Volume Usage (xxG xx%) */}
             {!sidebarCollapsed && (
-              <div className="space-y-2 pt-4 border-t border-zinc-200/80 dark:border-zinc-800/80">
+              <div
+                className="space-y-2 pt-4 border-t border-zinc-200/80 dark:border-zinc-800/80"
+                onKeyDown={(e) => {
+                  if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+                  const step = arrowStep(e.key);
+                  if (!step) return;
+                  if (
+                    moveFocusBy(e.currentTarget, document.activeElement, 'button[data-side-volume]', step)
+                  ) {
+                    e.preventDefault();
+                  }
+                }}
+              >
                 <div className="px-2.5 py-1 flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
                   <span className="truncate">{t.sidebar.totalUsed}</span>
                   <span
@@ -1501,13 +1502,18 @@ export default function App() {
                     {formatBytes(summary.totalBytes, 1, locale)}
                   </span>
                 </div>
-                {summary.perVolume.map(({ volume, totalBytes, sharePct = 0 }) => {
+                {summary.perVolume.map(({ volume, totalBytes, sharePct = 0 }, volIndex) => {
                   const isCurrentVol = activeVolumeId === volume.id && activeTab === 'files';
                   const visualWidth = Math.min(100, Math.max(6, sharePct));
                   return (
                     <motion.button
                       key={volume.id}
                       type="button"
+                      data-side-volume={volume.id}
+                      tabIndex={rovingTabIndex(
+                        volIndex,
+                        summary.perVolume.findIndex((v) => v.volume.id === activeVolumeId)
+                      )}
                       whileTap={{ scale: 0.93 }}
                       whileHover={{ scale: 1.015 }}
                       transition={IOS_BOUNCE_SPRING}
@@ -1804,9 +1810,19 @@ export default function App() {
         <nav
           aria-label={t.a11y.primaryNav}
           className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white/88 dark:bg-[#0C0E14]/92 backdrop-blur-2xl px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+          onKeyDown={(e) => {
+            if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+            const step = arrowStep(e.key, true);
+            if (!step) return;
+            if (
+              moveFocusBy(e.currentTarget, document.activeElement, 'a[href^="#"]', step)
+            ) {
+              e.preventDefault();
+            }
+          }}
         >
           <div className="flex gap-1 max-w-md mx-auto">
-            {navItems.map((item) => {
+            {navItems.map((item, navIndex) => {
               const isActive = activeTab === item.id;
               const badgeCount =
                 item.id === 'files'
@@ -1825,6 +1841,10 @@ export default function App() {
                     runViewTransition(() => setActiveTab(item.id));
                   }}
                   aria-current={isActive ? 'page' : undefined}
+                  tabIndex={rovingTabIndex(
+                    navIndex,
+                    navItems.findIndex((n) => n.id === activeTab)
+                  )}
                   className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${
                     isActive
                       ? 'text-[#007AFF] dark:text-[#0A84FF] font-semibold'

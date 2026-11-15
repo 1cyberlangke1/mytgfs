@@ -125,7 +125,7 @@ interface FilesViewProps {
   onRefresh: () => Promise<void>;
   /** 按频道历史重建索引；nil 表示服务端不支持 */
   onRebuildVolume?: (volumeId: string) => Promise<void>;
-  /** 键盘快捷键映射（设置页可改） */
+  /** 文件操作快捷键映射（设置页可改） */
   shortcuts: ShortcutMap;
 }
 
@@ -246,7 +246,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
-  // 搜索框引用：页面级「聚焦搜索」快捷键用
+  // 搜索框引用：Esc 离开搜索框后把焦点还给列表
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   // 列表容器引用：Esc 离开搜索框后把焦点还给列表
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -405,7 +405,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
     handleFolderClick(currentDir?.parentId ?? null);
   };
 
-  // Esc（或用户自定义键）统一在 document 上监听：
+  // Esc 统一在 document 上监听：
   // 空目录里列表容器不渲染，挂在容器上就按不到。
   //
   // 输入：键盘事件
@@ -442,25 +442,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
     // handleUpOneLevel 依赖 files/currentFolderId，直接把这些放进依赖里重新绑定
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIds, cursorId, currentFolderId, files, shortcuts]);
-
-  // 聚焦搜索：页面级快捷键，只在文件页挂载时生效。
-  //
-  // 输入：document keydown
-  // 输出：焦点移到搜索框并全选
-  // 预期：已经在输入框里时不抢；弹窗打开时不抢
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !matchesShortcut(e, shortcuts.focusSearch)) return;
-      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (document.querySelector('dialog[open]')) return;
-      e.preventDefault();
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [shortcuts]);
 
   // 键盘移动游标时把目标行滚进视口，避免光标跑到屏幕外
   useEffect(() => {
@@ -558,7 +539,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   //
   // 输入：键盘事件；焦点在列表容器上
   // 输出：无（改选中集/游标/打开弹窗）
-  // 预期：具体键位来自设置页的 shortcuts；返回上级由全局 keydown 统一处理
+  // 预期：键位来自设置页的 shortcuts；返回上级由文档级 Esc 统一处理
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     const items = paginatedItems;
     if (items.length === 0) return;

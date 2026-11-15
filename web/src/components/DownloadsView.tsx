@@ -6,6 +6,7 @@ import { formatBytes, inferFileCategory } from '../utils/fsLogic';
 import { Translations, formatDateTime, formatPercent } from '../utils/i18n';
 import { RichFileTypeEmblem } from './VisualAssets';
 import { Button } from './ui';
+import { arrowStep, moveFocusBy } from '../utils/keynav';
 
 interface DownloadsViewProps {
   t: Translations;
@@ -201,12 +202,33 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
         </section>
       ) : (
         <section className="surface-card rounded-2xl overflow-hidden">
-          <ul className="divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+          <ul
+            className="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
+            onKeyDown={(e) => {
+              if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+              const step = arrowStep(e.key);
+              if (step) {
+                if (moveFocusBy(e.currentTarget, document.activeElement, 'button[data-dl-open]', step)) {
+                  e.preventDefault();
+                }
+                return;
+              }
+              if (e.key === 'Delete') {
+                const row = (document.activeElement as HTMLElement | null)?.closest('[data-dl-name]');
+                const name = row?.getAttribute('data-dl-name');
+                if (name) {
+                  e.preventDefault();
+                  setConfirming(name);
+                }
+              }
+            }}
+          >
             {files.map((f) => {
               const confirmingThis = confirming === f.name;
               return (
                 <li
                   key={f.name}
+                  data-dl-name={f.name}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900/40 transition-colors"
                 >
                   <RichFileTypeEmblem category={inferFileCategory(f.name, false)} size="sm" />
@@ -223,7 +245,9 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
                       <span className="text-[11px] text-red-600 dark:text-red-400">
                         {t.downloads.confirmDelete}
                       </span>
-                      <Button type="button" variant="destructive" onClick={() => remove(f.name)}>
+                      <Button type="button" variant="destructive" autoFocus onKeyDown={(e) => {
+                        if (e.key === 'Escape') setConfirming('');
+                      }} onClick={() => remove(f.name)}>
                         {t.downloads.confirmDeleteBtn}
                       </Button>
                       <Button type="button" variant="outline" onClick={() => setConfirming('')}>
@@ -235,6 +259,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
                       <Button
                         type="button"
                         variant="ghost"
+                        data-dl-open={f.name}
                         aria-label={t.downloads.previewBtn}
                         title={t.downloads.previewBtn}
                         onClick={() => onPreview(f.name)}
