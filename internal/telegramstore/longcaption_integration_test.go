@@ -94,7 +94,7 @@ func TestSmokeLongCaption(t *testing.T) {
 			fmt.Println("KEEP: 已保留消息")
 			return nil
 		}
-		return store.Delete(ctx, part.MessageID, ref.Ref)
+		return deleteTestMessages(ctx, store, client.API(), part.MessageID, ref.Ref)
 	})
 	if err != nil {
 		t.Fatal(err)

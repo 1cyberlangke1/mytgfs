@@ -24,7 +24,6 @@ type fakeAPI struct {
 	sendMedia    []*tg.MessagesSendMediaRequest
 	sendMessage  []*tg.MessagesSendMessageRequest
 	editMessage  []*tg.MessagesEditMessageRequest
-	deleteMsgs   []*tg.ChannelsDeleteMessagesRequest
 	getFile      []*tg.UploadGetFileRequest
 	getMessages  []*tg.ChannelsGetMessagesRequest
 
@@ -113,11 +112,6 @@ func (f *fakeAPI) MessagesEditMessage(_ context.Context, req *tg.MessagesEditMes
 		f.texts[req.ID] = msg
 	}
 	return &tg.Updates{}, nil
-}
-
-func (f *fakeAPI) ChannelsDeleteMessages(_ context.Context, req *tg.ChannelsDeleteMessagesRequest) (*tg.MessagesAffectedMessages, error) {
-	f.deleteMsgs = append(f.deleteMsgs, req)
-	return &tg.MessagesAffectedMessages{}, nil
 }
 
 func (f *fakeAPI) ChannelsGetFullChannel(context.Context, tg.InputChannelClass) (*tg.MessagesChatFull, error) {
@@ -305,41 +299,17 @@ func TestRename(t *testing.T) {
 	}
 }
 
-// TestDelete 删除消息：空列表不发请求，非空按 ID 删除。
-func TestDelete(t *testing.T) {
-	api := newFakeAPI()
-	s := newTestStore(api)
-	ctx := context.Background()
-
-	if err := s.Delete(ctx); err != nil {
-		t.Fatalf("空删除应成功: %v", err)
-	}
-	if len(api.deleteMsgs) != 0 {
-		t.Fatal("空删除不应发请求")
-	}
-	if err := s.Delete(ctx, 7, 8); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if len(api.deleteMsgs) != 1 {
-		t.Fatalf("应调用 1 次删除，实际 %d", len(api.deleteMsgs))
-	}
-	got := api.deleteMsgs[0]
-	if len(got.ID) != 2 || got.ID[0] != 7 || got.ID[1] != 8 {
-		t.Fatalf("删除 ID 错误: %v", got.ID)
-	}
-}
-
 // TestResolveChannelCached 频道只解析一次，后续复用 access_hash。
 func TestResolveChannelCached(t *testing.T) {
 	api := newFakeAPI()
 	s := newTestStore(api)
 	ctx := context.Background()
 
-	if err := s.Delete(ctx, 1); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := s.EditText(ctx, 1, "x"); err != nil {
+		t.Fatalf("EditText: %v", err)
 	}
-	if err := s.Delete(ctx, 2); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := s.EditText(ctx, 2, "x"); err != nil {
+		t.Fatalf("EditText: %v", err)
 	}
 	if api.channelCalls != 1 {
 		t.Fatalf("频道应只解析 1 次，实际 %d", api.channelCalls)

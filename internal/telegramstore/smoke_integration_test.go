@@ -16,10 +16,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gotd/td/tg"
+
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
 )
+
+// deleteTestMessages 直调底层 API 删除测试消息；生产代码已无批量删除入口，
+// 清理能力只保留在集成测试里。
+//
+// 输入：ctx；s 用于解析频道 access_hash；api 真实 Telegram 客户端；ids 消息号
+// 输出：error
+// 预期：空列表不发请求
+func deleteTestMessages(ctx context.Context, s *Store, api *tg.Client, ids ...int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ch, err := s.resolve(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+		Channel: &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
+		ID:      ids,
+	})
+	return err
+}
 
 func TestSmokeUploadReadDelete(t *testing.T) {
 	channelID, _ := strconv.ParseInt(os.Getenv("MYTGFS_TEST_CHANNEL"), 10, 64)
@@ -59,7 +82,7 @@ func TestSmokeUploadReadDelete(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		defer store.Delete(ctx, part.MessageID)
+		defer deleteTestMessages(ctx, store, client.API(), part.MessageID)
 
 		offset := int64(512 << 10)
 		got, err := store.ReadRange(ctx, part, offset, 1024, nil)
