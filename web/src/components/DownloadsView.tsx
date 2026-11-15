@@ -150,7 +150,14 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
                     </div>
                   </div>
                   {task.size > 0 && (
-                    <div className="h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
+                    <div
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(task.state === 'failed' ? 100 : pct)}
+                      aria-label={task.name}
+                      className="h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden"
+                    >
                       <div
                         className={`h-full rounded-full transition-[width] duration-300 ${
                           failed ? 'bg-[#FF3B30]' : 'bg-[#007AFF]'

@@ -9,6 +9,7 @@ import {
   HardDrive,
   Pause,
   Play,
+  RotateCw,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -41,6 +42,7 @@ interface OverviewViewProps {
   onSelectVolumeAndBrowse: (volumeId: string) => void;
   onUploadFiles: (fileList: FileList, volumeId: string, parentId: string | null) => void;
   onToggleTransferPause: (taskId: string) => void;
+  onRetryTransfer: (taskId: string) => void;
   onCancelTransfer: (taskId: string) => void;
   onClearCompletedTransfers: () => void;
   /** 设置频道头像；nil 表示服务端不支持（面板隐藏入口） */
@@ -68,6 +70,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onSelectVolumeAndBrowse,
   onUploadFiles,
   onToggleTransferPause,
+  onRetryTransfer,
   onCancelTransfer,
   onClearCompletedTransfers,
   onSetCover,
@@ -446,7 +449,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                         )}
 
                         {!unknownSize && (
-                          <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden">
+                          <div
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={Math.round(pct)}
+                            aria-label={task.fileName}
+                            className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden"
+                          >
                             <div
                               className={`h-full transition-transform duration-200 origin-left ${
                                 task.state === 'completed'
@@ -465,6 +475,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {!task.id.startsWith('q-') &&
+                        task.direction === 'upload' &&
+                        task.state === 'failed' && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onRetryTransfer(task.id)}
+                            aria-label={`${t.overview.retryBtn} ${task.fileName}`}
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                            <span>{t.overview.retryBtn}</span>
+                          </Button>
+                        )}
                       {!task.id.startsWith('q-') &&
                         task.direction === 'upload' &&
                         (task.state === 'transferring' ||

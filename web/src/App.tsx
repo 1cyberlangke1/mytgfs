@@ -34,8 +34,10 @@ import {
   computeOverviewSummary,
   formatBytes,
   inferFileCategory,
+  validateAndPlanUpload,
   volumeDisplayName,
 } from './utils/fsLogic';
+import { runViewTransition } from './utils/viewTransition';
 import { subscribePush } from './events';
 import {
   DICTIONARY,
@@ -104,6 +106,12 @@ const STORAGE_KEYS = {
   theme: 'mytgfs_theme_v1',
   activeVol: 'mytgfs_active_vol_v1',
 };
+
+// MAX_PARALLEL_UPLOADS 是客户端同时在传的文件数。
+//
+// 服务端每个分片会话都有空闲回收，一次性放太多文件会撞 404；
+// 3 路既能把带宽跑满，也留得住会话。
+const MAX_PARALLEL_UPLOADS = 3;
 
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
@@ -238,6 +246,7 @@ export default function App() {
 
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [filesLoading, setFilesLoading] = useState(true);
   const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
   const [serverQueue, setServerQueue] = useState<TransferTask[]>([]);
@@ -292,9 +301,21 @@ export default function App() {
   const uploadInputs = useRef(
     new Map<
       string,
-      { file: File; volumeId: string; parentId: string | null; rel: string; resume?: UploadResume }
+      {
+        file: File;
+        volumeId: string;
+        parentId: string | null;
+        rel: string;
+        task: TransferTask;
+        resume?: UploadResume;
+      }
     >()
   );
+  // 客户端并发闸门：服务端分片会话有上限，回收协程还会清掉超时会话，
+  // 一次性把整文件夹全发出去，后面的文件会撞 404「会话过期」
+  const uploadQueue = useRef<string[]>([]);
+  const activeUploads = useRef(0);
+
   // 速度采样：只展示真实测得的字节增量，不编造速率
   const uploadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
   const downloadSpeed = useRef(new Map<string, { bytes: number; at: number }>());
@@ -462,7 +483,11 @@ export default function App() {
 
   const reloadFiles = useCallback(async (names?: string[]) => {
     const targets = names ?? volumesRef.current.map((v) => v.id);
-    if (targets.length === 0) return;
+    if (targets.length === 0) {
+      setFilesLoading(false);
+      return;
+    }
+    setFilesLoading(true);
     const lists = await Promise.all(
       targets.map(async (name) => {
         try {
@@ -484,6 +509,7 @@ export default function App() {
       })
     );
     setFiles(lists.flat().map(toFileItem));
+    setFilesLoading(false);
   }, [setProblem, clearProblem]);
 
   const reloadSettings = useCallback(async () => {
@@ -669,6 +695,32 @@ export default function App() {
     if (activeVolumeId) window.localStorage.setItem(STORAGE_KEYS.activeVol, JSON.stringify(activeVolumeId));
   }, [activeVolumeId]);
 
+  // 记住每个卷上次停留的目录：刷新后回到原处；目录已被删则回根。
+  // restoredFolder 保证只在首次拿到文件列表时恢复一次，之后用户操作优先。
+  const restoredFolder = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeVolumeId || files.length === 0) return;
+    if (restoredFolder.current === activeVolumeId) return;
+    restoredFolder.current = activeVolumeId;
+    const saved = loadFromStorage<string | null>(`mytgfs_folder_${activeVolumeId}_v1`, null);
+    if (saved && files.some((f) => f.id === saved && f.isDir && f.volumeId === activeVolumeId)) {
+      setCurrentFolderId(saved);
+    }
+  }, [activeVolumeId, files]);
+
+  useEffect(() => {
+    // 恢复完成前不要用初始的 null 覆盖已保存的目录
+    if (!activeVolumeId || restoredFolder.current !== activeVolumeId) return;
+    try {
+      window.localStorage.setItem(
+        `mytgfs_folder_${activeVolumeId}_v1`,
+        JSON.stringify(currentFolderId)
+      );
+    } catch {
+      // 隐私模式禁用存储时忽略
+    }
+  }, [activeVolumeId, currentFolderId]);
+
   // 单文件上传：更新任务进度，成功后刷新索引
   // 断点保存在 uploadInputs 里：暂停后继续从已传字节接着发
   const runUpload = async (
@@ -760,12 +812,44 @@ export default function App() {
       );
       uploadAbort.current.delete(task.id);
       if (!stopped) pushToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      // 无论成功、失败还是暂停，都要让出并发名额，后面的任务才能开始
+      activeUploads.current = Math.max(0, activeUploads.current - 1);
+      pumpUploads();
+    }
+  };
+
+  // pumpUploads 按并发上限启动排队中的上传。
+  //
+  // 输入：无（读 uploadQueue / uploadInputs）
+  // 输出：无
+  // 预期：最多 MAX_PARALLEL_UPLOADS 路同时在跑；名额释放后自动续跑下一个
+  const pumpUploads = () => {
+    while (activeUploads.current < MAX_PARALLEL_UPLOADS) {
+      const id = uploadQueue.current.shift();
+      if (!id) return;
+      const input = uploadInputs.current.get(id);
+      if (!input) continue;
+      activeUploads.current += 1;
+      void runUpload(input.task, input.file, input.volumeId, input.parentId, input.rel);
     }
   };
 
   const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
     const incoming = Array.from(fileList);
     if (incoming.length === 0) return;
+    // 上传前预检：超过 2GB 或名称为空直接挡下，不浪费带宽传到一半再失败
+    for (const file of incoming) {
+      const verdict = validateAndPlanUpload(file.name, file.size);
+      if (verdict.valid) continue;
+      pushToast(
+        verdict.errorCode === 'FILE_TOO_LARGE'
+          ? interpolate(tRef.current.files.uploadTooLarge, { name: file.name }, localeRef.current)
+          : tRef.current.files.uploadEmptyName,
+        'error'
+      );
+      return;
+    }
     // 文件夹上传由 input[webkitdirectory] 提供相对路径；普通选择时为空
     const rels = incoming.map(
       (file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
@@ -790,7 +874,13 @@ export default function App() {
         category: inferFileCategory(file.name, false),
         opKind: 'upload',
       };
-      uploadInputs.current.set(id, { file, volumeId, parentId, rel: rels[index] ?? '' });
+      uploadInputs.current.set(id, {
+        file,
+        volumeId,
+        parentId,
+        rel: rels[index] ?? '',
+        task,
+      });
       return task;
     });
     // 最新的任务排在最上面，与操作队列显示顺序一致
@@ -799,31 +889,54 @@ export default function App() {
       interpolate(t.files.uploadStartedToast, { name: plan[0]?.fileName ?? '' }, locale),
       'success'
     );
-    for (const [i, task] of plan.entries()) {
-      const source = incoming[i];
-      if (!source) continue;
-      void runUpload(task, source, volumeId, parentId, rels[i] ?? '');
-    }
+    uploadQueue.current.push(...plan.map((task) => task.id));
+    pumpUploads();
   };
 
   const handleToggleTransferPause = (taskId: string) => {
     const task = uploadTasks.find((tr) => tr.id === taskId);
     if (!task) return;
-    if (task.state === 'transferring' || task.state === 'queued') {
+    if (task.state === 'transferring') {
       uploadAbort.current.get(taskId)?.abort();
       return;
     }
-    if (task.state === 'paused') {
-      const input = uploadInputs.current.get(taskId);
-      if (!input) return;
-      void runUpload(task, input.file, input.volumeId, input.parentId, input.rel);
+    if (task.state === 'queued') {
+      // 还没开始的任务直接出队，不占并发名额
+      uploadQueue.current = uploadQueue.current.filter((id) => id !== taskId);
+      setUploadTasks((prev) =>
+        prev.map((tr) => (tr.id === taskId ? { ...tr, state: 'paused' } : tr))
+      );
+      return;
     }
+    if (task.state === 'paused') {
+      if (!uploadInputs.current.get(taskId)) return;
+      setUploadTasks((prev) =>
+        prev.map((tr) => (tr.id === taskId ? { ...tr, state: 'queued' } : tr))
+      );
+      uploadQueue.current.push(taskId);
+      pumpUploads();
+    }
+  };
+
+  // handleRetryTransfer 重试失败的上传：重新排队，不沿用可能已失效的会话
+  const handleRetryTransfer = (taskId: string) => {
+    const input = uploadInputs.current.get(taskId);
+    if (!input) return;
+    uploadInputs.current.set(taskId, { ...input, resume: undefined });
+    setUploadTasks((prev) =>
+      prev.map((tr) =>
+        tr.id === taskId ? { ...tr, state: 'queued', errorMessage: undefined, speedBps: 0 } : tr
+      )
+    );
+    uploadQueue.current.push(taskId);
+    pumpUploads();
   };
 
   const handleCancelTransfer = (taskId: string) => {
     uploadAbort.current.get(taskId)?.abort();
     uploadAbort.current.delete(taskId);
     uploadInputs.current.delete(taskId);
+    uploadQueue.current = uploadQueue.current.filter((id) => id !== taskId);
     setUploadTasks((prev) => prev.filter((tr) => tr.id !== taskId));
   };
 
@@ -1204,7 +1317,7 @@ export default function App() {
                       transition={IOS_BOUNCE_SPRING}
                       onClick={(e) => {
                         e.preventDefault();
-                        setActiveTab(item.id);
+                        runViewTransition(() => setActiveTab(item.id));
                       }}
                       title={sidebarCollapsed ? item.label : undefined}
                       aria-current={isActive ? 'page' : undefined}
@@ -1493,6 +1606,7 @@ export default function App() {
                 }}
                 onUploadFiles={handleUploadFiles}
                 onToggleTransferPause={handleToggleTransferPause}
+                onRetryTransfer={handleRetryTransfer}
                 onCancelTransfer={handleCancelTransfer}
                 onClearCompletedTransfers={handleClearCompletedTransfers}
                 onSetCover={caps.cover ? handleSetCover : undefined}
@@ -1512,11 +1626,13 @@ export default function App() {
                 currentFolderId={currentFolderId}
                 onNavigateFolder={setCurrentFolderId}
                 files={files}
+                loading={filesLoading}
                 connectionStatus={connectionStatus}
                 onUploadFiles={handleUploadFiles}
                 onCreateFolder={handleCreateFolder}
                 onRenameMoveItem={handleRenameMoveItem}
                 onBatchMoveItems={handleBatchMoveItems}
+                onMoveItems={handleBatchMoveItems}
                 onDeleteItems={handleDeleteItems}
                 onDownloadFile={handleDownloadFile}
                 onPreviewFile={setPreviewFile}
@@ -1587,7 +1703,7 @@ export default function App() {
                   transition={IOS_BOUNCE_SPRING}
                   onClick={(e) => {
                     e.preventDefault();
-                    setActiveTab(item.id);
+                    runViewTransition(() => setActiveTab(item.id));
                   }}
                   aria-current={isActive ? 'page' : undefined}
                   className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${

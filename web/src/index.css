@@ -85,3 +85,98 @@ select:user-invalid,
 textarea:user-invalid {
   border-color: rgb(239 68 68);
 }
+
+/* 原生 <dialog> 弹窗壳：铺满视口、背景透明，面板由内层元素负责 */
+.modal-shell {
+  margin: 0;
+  padding: 1rem;
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  background: transparent;
+  overflow-y: auto;
+  color: inherit;
+}
+
+.modal-shell[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-shell::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+/* 滚动手势在内层消化，不要串到背景页 */
+.modal-shell:modal {
+  overscroll-behavior: contain;
+}
+
+.modal-shell::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* 列表骨架屏 */
+.skeleton {
+  background: linear-gradient(90deg, rgba(24, 24, 27, 0.06) 25%, rgba(24, 24, 27, 0.12) 37%, rgba(24, 24, 27, 0.06) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+.dark .skeleton {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.1) 37%, rgba(255, 255, 255, 0.05) 63%);
+  background-size: 400% 100%;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* 搜索命中高亮 */
+mark.hit {
+  background: rgba(0, 122, 255, 0.18);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* 拖拽悬停的目录行 */
+.drop-target {
+  outline: 2px solid #007aff;
+  outline-offset: -2px;
+  background-color: rgba(0, 122, 255, 0.08);
+}
+
+/* 页签 / 目录切换的连续过渡；减少动态偏好时直接切 */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) {
+    animation: vt-fade-out 120ms ease-out;
+  }
+  ::view-transition-new(root) {
+    animation: vt-fade-in 180ms ease-out;
+  }
+}
+
+@keyframes vt-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes vt-fade-in {
+  from { opacity: 0; }
+}
+
+/* 长列表：屏幕外的行跳过布局与绘制，滚动时再补渲染 */
+.row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}

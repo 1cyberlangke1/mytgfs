@@ -9,12 +9,13 @@ import {
   Music,
   X,
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
 import { FileItem, Locale } from '../types';
 import { fileURL } from '../api';
 import { formatBytes, getItemFullPath } from '../utils/fsLogic';
 import { Translations, formatDateTime, formatNumber } from '../utils/i18n';
 import { Button, IOS_SPRING } from './ui';
+import { Modal } from './Modal';
 
 interface FilePreviewModalProps {
   file: FileItem | null;
@@ -47,35 +48,20 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
     setImgFailed(false);
   }, [file?.id]);
 
-  // Keyboard Escape to close
-  useEffect(() => {
-    if (!file) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [file, onClose]);
+  if (!file) return null;
 
   return (
-    <AnimatePresence>
-      {file && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.14 } }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="file-detail-modal-title"
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.94, y: 12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 8, transition: { duration: 0.14 } }}
-            transition={IOS_SPRING}
-            className="w-full max-w-4xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden my-auto"
-          >
+    <Modal
+      onClose={onClose}
+      labelledBy="file-detail-modal-title"
+      panelClassName="w-full max-w-4xl"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={IOS_SPRING}
+        className="w-full max-w-4xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden my-auto"
+      >
             {(() => {
               const fullPath = getItemFullPath(allFiles, file);
               // 真实媒体流地址：服务端 /api/file 支持 Range，可直接喂给 video/audio/iframe
@@ -317,8 +303,6 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
               );
             })()}
           </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </Modal>
   );
 };

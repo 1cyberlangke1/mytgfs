@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -46,6 +46,7 @@ import {
 import {
   Translations,
   formatDateTime,
+  formatNumber,
   formatPlural,
   interpolate,
 } from '../utils/i18n';
@@ -53,7 +54,37 @@ import { motion } from 'motion/react';
 import { listChannels as apiListChannels } from '../api';
 import { FileThumb, RichFileTypeEmblem } from './VisualAssets';
 import { FolderTree } from './FolderTree';
+import { Modal } from './Modal';
+import { runViewTransition } from '../utils/viewTransition';
 import { Button, IOS_BOUNCE_SPRING, Input, Select, useInterruptibleViewSpring } from './ui';
+
+// Highlight 把搜索命中的片段包进 <mark>。
+//
+// 输入：text 原始文本；query 搜索词（大小写不敏感）
+// 输出：React 片段
+// 预期：空查询原样返回；多处命中全部高亮
+function Highlight({ text, query }: { text: string; query: string }) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let from = 0;
+  for (;;) {
+    const at = lower.indexOf(needle, from);
+    if (at < 0) {
+      if (from < text.length) out.push(text.slice(from));
+      break;
+    }
+    if (at > from) out.push(text.slice(from, at));
+    out.push(
+      <mark className="hit" key={at}>
+        {text.slice(at, at + needle.length)}
+      </mark>
+    );
+    from = at + needle.length;
+  }
+  return <>{out}</>;
+}
 
 interface FilesViewProps {
   t: Translations;
@@ -64,11 +95,15 @@ interface FilesViewProps {
   currentFolderId: string | null;
   onNavigateFolder: (folderId: string | null) => void;
   files: FileItem[];
+  /** 首次加载中：目录为空时显示骨架而不是「空目录」 */
+  loading?: boolean;
   connectionStatus: ConnectionStatus;
   onUploadFiles: (fileList: FileList, volumeId: string, parentId: string | null) => void;
   onCreateFolder: (volumeId: string, parentId: string | null, name: string) => void;
   onRenameMoveItem: (itemId: string, newName: string, targetParentId: string | null) => void;
   onBatchMoveItems: (itemIds: string[], targetParentId: string | null) => void;
+  /** 站内拖拽移动：拖到目录行或面包屑上时调用 */
+  onMoveItems: (itemIds: string[], targetParentId: string | null) => void;
   onDeleteItems: (itemIds: string[]) => void;
   onDownloadFile: (file: FileItem) => void;
   onPreviewFile: (file: FileItem) => void;
@@ -141,6 +176,36 @@ function targetPathText(all: FileItem[], volumeId: string, targetId: string | nu
 
 const PAGE_SIZE = 50;
 
+// 视图偏好在刷新后保留：排序、视图模式、每页条数都进 localStorage。
+const VIEW_STORAGE = {
+  mode: 'mytgfs_view_mode_v1',
+  sortField: 'mytgfs_sort_field_v1',
+  sortOrder: 'mytgfs_sort_order_v1',
+  pageSize: 'mytgfs_page_size_v1',
+};
+
+// readStored 读取枚举型偏好；值不在白名单里就回落默认值。
+function readStored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// readStoredNumber 读取数字型偏好，同样做白名单校验。
+function readStoredNumber(key: string, allowed: readonly number[], fallback: number): number {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const n = Number(window.localStorage.getItem(key));
+    return allowed.includes(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export const FilesView: React.FC<FilesViewProps> = ({
   t,
   locale,
@@ -150,11 +215,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
   currentFolderId,
   onNavigateFolder,
   files,
+  loading,
   connectionStatus,
   onUploadFiles,
   onCreateFolder,
   onRenameMoveItem,
   onBatchMoveItems,
+  onMoveItems,
   onDeleteItems,
   onDownloadFile,
   onPreviewFile,
@@ -214,10 +281,22 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const [showDeleteVolume, setShowDeleteVolume] = useState(false);
   const [deleteVolumeInput, setDeleteVolumeInput] = useState('');
 
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() =>
+    readStored(VIEW_STORAGE.mode, ['list', 'grid'] as const, 'list')
+  );
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  // searchTerm 是防抖后的搜索词：输入框即时响应，过滤每 200ms 才跑一次
+  const [searchTerm, setSearchTerm] = useState('');
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [sortField, setSortField] = useState<SortField>(() =>
+    readStored(VIEW_STORAGE.sortField, ['name', 'size', 'updatedAt'] as const, 'name')
+  );
+  const [sortOrder, setSortOrder] = useState<SortOrder>(() =>
+    readStored(VIEW_STORAGE.sortOrder, ['asc', 'desc'] as const, 'asc')
+  );
+  const [pageSize, setPageSize] = useState(() =>
+    readStoredNumber(VIEW_STORAGE.pageSize, [50, 100, 200], PAGE_SIZE)
+  );
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -246,17 +325,35 @@ export const FilesView: React.FC<FilesViewProps> = ({
     [files, activeVolumeId, currentFolderId]
   );
 
+  // 搜索防抖：每次敲键都重排整个卷太浪费，200ms 静默后再过滤
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchTerm(searchQuery), 200);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  // 视图偏好落盘：下次打开保持同样的排序与视图
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VIEW_STORAGE.mode, viewMode);
+      window.localStorage.setItem(VIEW_STORAGE.sortField, sortField);
+      window.localStorage.setItem(VIEW_STORAGE.sortOrder, sortOrder);
+      window.localStorage.setItem(VIEW_STORAGE.pageSize, String(pageSize));
+    } catch {
+      // 隐私模式禁用存储时忽略：偏好只在本次会话生效
+    }
+  }, [viewMode, sortField, sortOrder, pageSize]);
+
   // Filtered and sorted items (directories always first, locale-aware Intl.Collator)
   const visibleItems = useMemo(() => {
-    const raw = searchFilesRecursively(files, activeVolumeId, searchQuery, currentFolderId);
+    const raw = searchFilesRecursively(files, activeVolumeId, searchTerm, currentFolderId);
     return sortFileItems(raw, sortField, sortOrder, files, locale);
-  }, [files, activeVolumeId, searchQuery, currentFolderId, sortField, sortOrder, locale]);
+  }, [files, activeVolumeId, searchTerm, currentFolderId, sortField, sortOrder, locale]);
 
-  const totalPages = Math.max(1, Math.ceil(visibleItems.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
   const paginatedItems = useMemo(() => {
-    const start = (safePage - 1) * PAGE_SIZE;
-    return visibleItems.slice(start, start + PAGE_SIZE);
+    const start = (safePage - 1) * pageSize;
+    return visibleItems.slice(start, start + pageSize);
   }, [visibleItems, safePage]);
 
   const fileListSpringStyle = useInterruptibleViewSpring(
@@ -276,10 +373,14 @@ export const FilesView: React.FC<FilesViewProps> = ({
   };
 
   const handleFolderClick = (folderId: string | null) => {
-    onNavigateFolder(folderId);
-    setSelectedIds(new Set());
-    setCurrentPage(1);
-    setSearchQuery('');
+    // 目录切换走 View Transition：列表整体过渡，不是硬闪
+    runViewTransition(() => {
+      onNavigateFolder(folderId);
+      setSelectedIds(new Set());
+      setCurrentPage(1);
+      setSearchQuery('');
+      setCursorId(null);
+    });
   };
 
   const handleUpOneLevel = () => {
@@ -322,6 +423,97 @@ export const FilesView: React.FC<FilesViewProps> = ({
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       onUploadFiles(e.dataTransfer.files, activeVolumeId, currentFolderId);
+    }
+  };
+
+  // ---- 站内拖拽移动 ----
+  // 拖拽载荷用私有 MIME，避免和「从系统拖文件进来上传」混在一起。
+  const DRAG_MIME = 'application/x-mytgfs-ids';
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  // handleItemDragStart 记录要移动的条目：拖已选中的行就整批移动
+  const handleItemDragStart = (e: React.DragEvent, item: FileItem) => {
+    const ids = selectedIds.has(item.id) ? Array.from(selectedIds) : [item.id];
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  // handleFolderDragOver 只在站内拖拽时放行，外部文件仍走上传
+  const handleFolderDragOver = (e: React.DragEvent, folderId: string) => {
+    if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setDropTargetId(folderId);
+  };
+
+  // handleFolderDrop 把拖来的条目移到目标目录；拖进自身子树直接忽略
+  const handleFolderDrop = (e: React.DragEvent, folderId: string | null) => {
+    if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTargetId(null);
+    let ids: string[] = [];
+    try {
+      ids = JSON.parse(e.dataTransfer.getData(DRAG_MIME)) as string[];
+    } catch {
+      return;
+    }
+    if (ids.length === 0) return;
+    if (folderId && !canMoveItemsToFolder(files, ids, folderId)) return;
+    onMoveItems(ids, folderId);
+  };
+
+  // handleListKeyDown 提供列表键盘操作：↑↓ 移动、空格勾选、Enter 打开、F2 改名、Delete 删除。
+  //
+  // 输入：键盘事件；焦点在列表容器上
+  // 输出：无（改选中集/游标/打开弹窗）
+  // 预期：滚轮与鼠标操作不受影响；Shift+↑↓ 追加选择
+  const handleListKeyDown = (e: React.KeyboardEvent) => {
+    const items = paginatedItems;
+    if (items.length === 0) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      setSelectedIds(new Set(items.map((i) => i.id)));
+      return;
+    }
+    if (e.key === 'Escape') {
+      setSelectedIds(new Set());
+      setCursorId(null);
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      const at = items.findIndex((i) => i.id === cursorId);
+      const next = at < 0 ? (step > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, at + step));
+      const target = items[next];
+      if (!target) return;
+      setCursorId(target.id);
+      if (e.shiftKey) setSelectedIds((prev) => new Set(prev).add(target.id));
+      return;
+    }
+    const current = items.find((i) => i.id === cursorId);
+    if (!current) return;
+    if (e.key === ' ') {
+      e.preventDefault();
+      toggleSelectOne(current.id);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (current.isDir) handleFolderClick(current.id);
+      else onPreviewFile(current);
+      return;
+    }
+    if (e.key === 'F2') {
+      e.preventDefault();
+      openEditModal(current);
+      return;
+    }
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      setDeleteConfirmIds([current.id]);
     }
   };
 
@@ -536,7 +728,12 @@ export const FilesView: React.FC<FilesViewProps> = ({
               whileTap={{ scale: 0.91 }}
               transition={IOS_BOUNCE_SPRING}
               onClick={() => handleFolderClick(null)}
+              onDragOver={(e) => handleFolderDragOver(e, '__root__')}
+              onDragLeave={() => setDropTargetId(null)}
+              onDrop={(e) => handleFolderDrop(e, null)}
               className={`h-8 px-2.5 rounded-md text-xs font-mono transition-colors cursor-pointer ${
+                dropTargetId === '__root__' ? 'drop-target ' : ''
+              }${
                 currentFolderId === null
                   ? 'font-semibold text-blue-600 dark:text-blue-400 bg-blue-500/10'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white'
@@ -558,7 +755,12 @@ export const FilesView: React.FC<FilesViewProps> = ({
                     whileTap={{ scale: 0.91 }}
                     transition={IOS_BOUNCE_SPRING}
                     onClick={() => handleFolderClick(crumb.id)}
+                    onDragOver={(e) => handleFolderDragOver(e, crumb.id)}
+                    onDragLeave={() => setDropTargetId(null)}
+                    onDrop={(e) => handleFolderDrop(e, crumb.id)}
                     className={`h-8 px-2.5 rounded-md text-xs font-mono truncate max-w-[160px] transition-colors cursor-pointer ${
+                      dropTargetId === crumb.id ? 'drop-target ' : ''
+                    }${
                       isCurrent
                         ? 'font-semibold text-blue-600 dark:text-blue-400 bg-blue-500/10'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white'
@@ -674,6 +876,26 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </div>
 
 
+              <label htmlFor="page-size-select" className="sr-only">
+                {t.files.pageSize}
+              </label>
+              <Select
+                id="page-size-select"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="h-8 text-xs"
+                title={t.files.pageSize}
+              >
+                {[50, 100, 200].map((n) => (
+                  <option key={n} value={n} className="bg-white dark:bg-zinc-900">
+                    {formatNumber(n, locale)}
+                  </option>
+                ))}
+              </Select>
+
               {/* View Mode Toggle: List vs Grid */}
               <div className="inline-flex items-center p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80">
                 <motion.button
@@ -760,21 +982,38 @@ export const FilesView: React.FC<FilesViewProps> = ({
               {t.files.connErrorEmptyDesc}
             </p>
           </div>
+        ) : loading && files.length === 0 ? (
+          /* 骨架屏：首次加载还没拿到任何条目时占住版式，避免空白闪一下 */
+          <div className="p-4 space-y-3" aria-busy="true" aria-live="polite">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className="skeleton w-9 h-9 rounded-lg shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="skeleton h-3 rounded w-1/3" />
+                  <div className="skeleton h-2.5 rounded w-1/5" />
+                </div>
+                <div className="skeleton h-3 rounded w-16" />
+              </div>
+            ))}
+          </div>
         ) : visibleItems.length === 0 ? (
           <div className="p-12 text-center space-y-2">
             <HardDrive className="w-8 h-8 text-zinc-400 mx-auto" />
             <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {searchQuery.trim() ? t.files.emptySearchTitle : t.files.emptyDirTitle}
+              {searchTerm.trim() ? t.files.emptySearchTitle : t.files.emptyDirTitle}
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
-              {searchQuery.trim() ? t.files.emptySearchDesc : t.files.emptyDirDesc}
+              {searchTerm.trim() ? t.files.emptySearchDesc : t.files.emptyDirDesc}
             </p>
           </div>
         ) : viewMode === 'grid' ? (
           /* GALLERY GRID VIEW */
           <motion.div
             style={fileListSpringStyle}
-            className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 will-change-transform"
+            tabIndex={0}
+            onKeyDown={handleListKeyDown}
+            aria-label={t.files.colName}
+            className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
           >
             {paginatedItems.map((item) => {
               const isSelected = selectedIds.has(item.id);
@@ -785,8 +1024,16 @@ export const FilesView: React.FC<FilesViewProps> = ({
               return (
                 <div
                   key={item.id}
+                  draggable
+                  onDragStart={(e) => handleItemDragStart(e, item)}
+                  onDragOver={item.isDir ? (e) => handleFolderDragOver(e, item.id) : undefined}
+                  onDragLeave={item.isDir ? () => setDropTargetId(null) : undefined}
+                  onDrop={item.isDir ? (e) => handleFolderDrop(e, item.id) : undefined}
+                  onMouseDown={() => setCursorId(item.id)}
                   className={`rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/40 dark:bg-zinc-900/40 overflow-hidden flex flex-col justify-between transition-all ${
                     isSelected ? 'ring-2 ring-blue-500' : ''
+                  } ${item.isDir && dropTargetId === item.id ? 'drop-target' : ''} ${
+                    cursorId === item.id ? 'ring-1 ring-blue-400/50' : ''
                   }`}
                 >
                   <div>
@@ -821,7 +1068,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                         }
                         className="text-start text-sm font-medium text-zinc-950 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 truncate block w-full cursor-pointer"
                       >
-                        {item.name}
+                        <Highlight text={item.name} query={searchTerm} />
                       </button>
                       <div className="flex items-center gap-1.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400 mt-1">
                         <span>{getCategoryLabel(item.category, item.isDir)}</span>
@@ -880,7 +1127,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
           </motion.div>
         ) : (
           /* LIST VIEW */
-          <motion.div style={fileListSpringStyle} className="will-change-transform">
+          <motion.div
+            style={fileListSpringStyle}
+            tabIndex={0}
+            onKeyDown={handleListKeyDown}
+            aria-label={t.files.colName}
+            className="will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
+          >
             <div className="hidden md:grid md:grid-cols-12 items-center px-4 py-2.5 bg-zinc-50/80 dark:bg-zinc-900/50 border-b border-zinc-200/80 dark:border-zinc-800/80 text-xs font-medium text-zinc-500 dark:text-zinc-400">
               <div className="col-span-5 flex items-center gap-3">
                 <label className="w-6 h-6 inline-flex items-center justify-center cursor-pointer">
@@ -912,11 +1165,19 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 return (
                   <div
                     key={item.id}
+                    draggable
+                    onDragStart={(e) => handleItemDragStart(e, item)}
+                    onDragOver={item.isDir ? (e) => handleFolderDragOver(e, item.id) : undefined}
+                    onDragLeave={item.isDir ? () => setDropTargetId(null) : undefined}
+                    onDrop={item.isDir ? (e) => handleFolderDrop(e, item.id) : undefined}
+                    onMouseDown={() => setCursorId(item.id)}
                     className={`p-3 md:px-4 md:py-2.5 flex flex-col md:grid md:grid-cols-12 md:items-center gap-2.5 transition-colors ${
                       isSelected
                         ? 'bg-blue-500/[0.06] dark:bg-blue-500/[0.09]'
                         : 'hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]'
-                    }`}
+                    } ${item.isDir && dropTargetId === item.id ? 'drop-target' : ''} ${
+                      cursorId === item.id ? 'ring-1 ring-inset ring-blue-400/50' : ''
+                    } ${paginatedItems.length > 120 ? 'row-cv' : ''}`}
                   >
                     {/* Name & Checkbox */}
                     <div className="md:col-span-5 flex items-center gap-3 min-w-0">
@@ -941,12 +1202,12 @@ export const FilesView: React.FC<FilesViewProps> = ({
                           }
                           className="text-start text-sm font-medium text-zinc-900 dark:text-zinc-100 hover:text-blue-600 dark:hover:text-blue-400 truncate block w-full cursor-pointer"
                         >
-                          {item.name}
+                          <Highlight text={item.name} query={searchTerm} />
                         </button>
 
                         <div className="flex flex-wrap items-center gap-1.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400 mt-0.5">
                           <span>{getCategoryLabel(item.category, item.isDir)}</span>
-                          {searchQuery.trim() && (
+                          {searchTerm.trim() && (
                             <>
                               <span aria-hidden="true">·</span>
                               <span dir="ltr" className="truncate max-w-[180px] font-mono">
@@ -1076,11 +1337,10 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
       {/* Modal 1: Create New Folder */}
       {showNewFolderModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-new-folder-title"
+        <Modal
+          onClose={() => setShowNewFolderModal(false)}
+          labelledBy="modal-new-folder-title"
+          panelClassName="w-full max-w-md"
         >
           <form
             onSubmit={submitNewFolder}
@@ -1122,17 +1382,12 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 2: Rename / Move Single Item */}
       {editingItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-rename-move-title"
-        >
+        <Modal onClose={() => setEditingItem(null)} labelledBy="modal-rename-move-title" panelClassName="w-full max-w-md">
           <form
             onSubmit={submitRenameMove}
             className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
@@ -1207,16 +1462,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 3: Batch Move */}
       {showBatchMoveModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-batch-move-title"
+        <Modal
+          onClose={() => setShowBatchMoveModal(false)}
+          labelledBy="modal-batch-move-title"
+          panelClassName="w-full max-w-md"
         >
           <form
             onSubmit={submitBatchMove}
@@ -1267,16 +1521,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 4: Delete Confirmation */}
       {deleteConfirmIds && deleteConfirmIds.length > 0 && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-delete-confirm-title"
+        <Modal
+          onClose={() => setDeleteConfirmIds(null)}
+          labelledBy="modal-delete-confirm-title"
+          panelClassName="w-full max-w-md"
         >
           <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
             <h3
@@ -1309,16 +1562,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 5: Create Volume */}
       {showCreateVolume && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-create-volume-title"
+        <Modal
+          onClose={() => setShowCreateVolume(false)}
+          labelledBy="modal-create-volume-title"
+          panelClassName="w-full max-w-md"
         >
           <form
             onSubmit={(e) => {
@@ -1378,16 +1630,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 8: Attach Existing Channel */}
       {showAttachVolume && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-attach-volume-title"
+        <Modal
+          onClose={() => setShowAttachVolume(false)}
+          labelledBy="modal-attach-volume-title"
+          panelClassName="w-full max-w-md"
         >
           <form
             onSubmit={(e) => {
@@ -1519,16 +1770,18 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 6: Delete Volume */}
       {showDeleteVolume && currentVolume && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-delete-volume-title"
+        <Modal
+          onClose={() => {
+            setShowDeleteVolume(false);
+            setDeleteVolumeInput('');
+          }}
+          labelledBy="modal-delete-volume-title"
+          panelClassName="w-full max-w-md"
         >
           <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
             <div className="flex items-start gap-3">
@@ -1585,16 +1838,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal 9: Rebuild Index Confirmation */}
       {showRebuildConfirm && onRebuildVolume && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="modal-rebuild-title"
+        <Modal
+          onClose={() => setShowRebuildConfirm(false)}
+          labelledBy="modal-rebuild-title"
+          panelClassName="w-full max-w-md"
         >
           <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
             <h3
@@ -1633,7 +1885,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

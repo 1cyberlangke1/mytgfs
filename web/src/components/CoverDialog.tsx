@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, X } from 'lucide-react';
 import { Translations } from '../utils/i18n';
 import { Button } from './ui';
+import { Modal } from './Modal';
 
 interface CoverDialogProps {
   open: boolean;
@@ -41,25 +42,15 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
     return () => URL.revokeObjectURL(url);
   }, [picked]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, busy, onClose]);
-
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cover-dialog-title"
+    <Modal
+      onClose={onClose}
+      labelledBy="cover-dialog-title"
+      closeDisabled={busy}
+      panelClassName="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
     >
-      <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 id="cover-dialog-title" className="text-base font-semibold text-zinc-950 dark:text-white">
@@ -121,7 +112,6 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
             {busy ? t.volume.coverDialogSaving : t.volume.coverDialogSave}
           </Button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
