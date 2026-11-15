@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/auth"
@@ -467,9 +468,8 @@ func runWeb(args []string) {
 		}, datadir.Path("thumbs"))
 
 		// mountRuntime 打开一个卷并挂进运行时注册表，起该卷的自动同步协程。
-		// 启动与面板建卷/attach 共用这一条路径，两端永远走同一份逻辑
-		syncInterval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
-		syncOn := trayapp.SyncEnabled(cfgPath, cfg.Mount.SyncOn())
+		// 启动与面板建卷/attach 共用这一条路径，两端永远走同一份逻辑；
+		// 同步参数挂载时现读：设置里改过的新卷立即用新值
 		mountRuntime := func(name string, chatID int64) {
 			vf, err := appRoot.OpenVolume(ctx, name, api)
 			if err != nil {
@@ -477,8 +477,11 @@ func runWeb(args []string) {
 				return
 			}
 			wv := &webVolume{vf: vf, mgr: vf.Files, idx: vf.Index, store: vf.Store}
+			cur := appRoot.Config()
 			// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
-			if cfg.Mount.SyncOn() {
+			if cur.Mount.SyncOn() {
+				syncInterval := trayapp.SyncInterval(cur.Mount.SyncSeconds)
+				syncOn := trayapp.SyncEnabled(cfgPath, cur.Mount.SyncOn())
 				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: chatID}
 				vctx, vcancel := context.WithCancel(vsync)
 				done := make(chan struct{})
@@ -494,11 +497,17 @@ func runWeb(args []string) {
 			reg.Put(name, wv)
 		}
 
-		// reconcile 让运行时卷表与配置强制一致：
-		// 配置里启用而未挂载的 → 挂载；挂载了而配置里没有/停用的 → 停掉并关闭。
+		// reconcile 让运行时卷表与配置文件强制一致：
+		// 每次都从磁盘现读（外部编辑/CLI 建卷也会被收编），再对齐注册表。
 		// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
 		reconcile := func() {
-			mount, unmount := app.VolumeSync(appRoot.Config().Volumes, reg.Names())
+			cur, err := config.Load(cfgPath)
+			if err != nil {
+				logging.Warn("log.volume_warn", err)
+				return
+			}
+			appRoot.SetConfig(cur)
+			mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
 			for _, v := range mount {
 				mountRuntime(v.Name, v.ChatID)
 			}
@@ -518,6 +527,21 @@ func runWeb(args []string) {
 		}
 		// 启动即对齐：配置里启用的卷全部挂上
 		reconcile()
+		// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编
+		go func() {
+			interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
+			if interval <= 0 {
+				interval = trayapp.SyncInterval(0)
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.Tick(interval):
+					reconcile()
+				}
+			}
+		}()
 		// 先停自动同步再关索引：顺序反了会写已关闭的库
 		defer func() {
 			vstop()
@@ -722,7 +746,7 @@ func runWeb(args []string) {
 			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
-				return webStatus(ctx, cfg, reg.SnapshotMap()), nil
+				return webStatus(ctx, reg.Snapshot()), nil
 			},
 		})
 	})

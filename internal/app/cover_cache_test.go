@@ -7,20 +7,28 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/telegramstore"
 )
 
 // countingStore 在 fakeCoverStore 基础上统计回源次数。
 type countingStore struct {
 	fakeCoverStore
-	imageCalls int
+	imageCalls   int
+	versionCalls int
 }
 
 func (c *countingStore) CoverImage(context.Context) ([]byte, string, error) {
 	c.imageCalls++
 	return c.data, c.version, c.err
+}
+
+func (c *countingStore) CoverVersion(context.Context) (string, error) {
+	c.versionCalls++
+	return c.version, c.err
 }
 
 // 回归背景：头像字节此前每次都从 Telegram 现下载，面板一直「加载中」。
@@ -124,6 +132,69 @@ func TestCoverImageServesDiskOnColdStart(t *testing.T) {
 	}
 	if st.imageCalls != 0 {
 		t.Fatalf("磁盘命中不应回源，回源 %d 次", st.imageCalls)
+	}
+}
+
+// TestSetConfigAdoptsExternalFileEdit SetConfig 采纳外部文件编辑：文件是唯一权威。
+// 场景：CLI 建卷/手编 config.toml 后，运行中的进程靠 SetConfig 收编。
+func TestSetConfigAdoptsExternalFileEdit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	base := "[telegram]\napi_id = 1\napi_hash_file = \"h\"\nbot_token_file = \"t\"\n\n[[volumes]]\nname = \"demo\"\nchat_id = 123\nenabled = true\n"
+	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(cfg, Options{ConfigPath: path})
+	if _, _, ok := a.Volume("ext"); ok {
+		t.Fatal("外部编辑前 ext 不应存在")
+	}
+
+	// 模拟外部编辑：直接改文件（不经过 MutateConfig），再 SetConfig 收编
+	ext := strings.Replace(base, "[[volumes]]",
+		"[[volumes]]\nname = \"ext\"\nchat_id = 789\nenabled = true\n\n[[volumes]]", 1)
+	if err := os.WriteFile(path, []byte(ext), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetConfig(fresh)
+
+	got, _, ok := a.Volume("ext")
+	if !ok || got.ChatID != 789 {
+		t.Fatalf("SetConfig 后应看到外部编辑的卷: %+v ok=%v", got, ok)
+	}
+}
+
+// CoverVersion 缓存命中时零 Telegram 往返：面板反复刷新不打元数据接口
+func TestCoverVersionFromMemoryCache(t *testing.T) {
+	st := &countingStore{fakeCoverStore: fakeCoverStore{version: "30", data: []byte("img")}}
+	provider := &CoverProvider{
+		lookup: func(name string) (coverVolume, bool) {
+			if name == "demo" {
+				return coverVolume{store: st, chatID: 42}, true
+			}
+			return coverVolume{}, false
+		},
+		cache: make(map[int64]coverEntry),
+	}
+	// 预热内存缓存
+	if _, _, err := provider.CoverImage(t.Context(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		version, err := provider.CoverVersion(t.Context(), "demo")
+		if err != nil || version != "30" {
+			t.Fatalf("CoverVersion = %q, %v", version, err)
+		}
+	}
+	if st.versionCalls != 0 {
+		t.Fatalf("缓存命中不应回源元数据，回源 %d 次", st.versionCalls)
 	}
 }
 

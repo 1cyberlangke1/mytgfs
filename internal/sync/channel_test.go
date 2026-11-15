@@ -134,6 +134,35 @@ func TestSyncIgnoresChatMessages(t *testing.T) {
 	}
 }
 
+// TestSyncPtsMovedFlag pts 推进时置 PtsMoved：头像等非文件更新的失效信号。
+// 没有任何差异（pts 不动）时保持 false，上层不应做无谓的缓存失效。
+func TestSyncPtsMovedFlag(t *testing.T) {
+	ctx := t.Context()
+
+	// pts 推进但没有节点变更（如换头像）
+	idx := newTestIndex(t)
+	d := &fakeDiffer{diffs: []Difference{{Pts: 5, Final: true}}}
+	res, err := SyncChannel(ctx, idx, d, newFakeNodes(), 100)
+	if err != nil {
+		t.Fatalf("SyncChannel: %v", err)
+	}
+	if !res.PtsMoved {
+		t.Fatalf("pts 从 1 推到 5，PtsMoved 应为 true: %+v", res)
+	}
+
+	// pts 不动
+	idx2 := newTestIndex(t)
+	_ = idx2.PutMeta(ctx, MetaChannelPts, 10)
+	d2 := &fakeDiffer{diffs: []Difference{{Pts: 10, Final: true}}}
+	res2, err := SyncChannel(ctx, idx2, d2, newFakeNodes(), 100)
+	if err != nil {
+		t.Fatalf("SyncChannel: %v", err)
+	}
+	if res2.PtsMoved {
+		t.Fatalf("pts 未动，PtsMoved 应为 false: %+v", res2)
+	}
+}
+
 // TestSyncRenameAppliesRemoteName 远端把节点改名，本地跟着改。
 func TestSyncRenameAppliesRemoteName(t *testing.T) {
 	ctx := t.Context()

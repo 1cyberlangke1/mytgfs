@@ -697,7 +697,8 @@ func Run(opts Options) error {
 
 		var vwg sync.WaitGroup
 		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
-		interval := SyncInterval(cfg.Mount.SyncSeconds)
+		// 挂载时现读配置：设置里改过间隔的新卷立即用新值
+		interval := SyncInterval(appRoot.Config().Mount.SyncSeconds)
 		if interval <= 0 {
 			interval = SyncInterval(0)
 		}
@@ -724,11 +725,24 @@ func Run(opts Options) error {
 		})
 	}
 
-	// reconcileVolumes 把运行时卷表对齐到配置：
+	// isMounted 判断卷是否已经在托盘里。
+	isMounted := func(name string) bool {
+		_, ok := reg.Get(name)
+		return ok
+	}
+
+	// reconcileVolumes 让运行时卷表对齐到**配置文件**（不是内存快照）：
 	// 配置里启用而未挂载的 → mountOne 挂载；挂载了而配置里没有/停用的 → 停掉。
-	// 建卷/attach/删卷等一切配置变更都以调用它收尾，两端耦合，用户不需要重启
+	// 建卷/attach/删卷等一切配置变更都以调用它收尾；周期对账也让
+	// CLI 建卷、手编 config.toml 等外部改动自动被收编，不需要重启
 	reconcileVolumes = func() {
-		mount, unmount := app.VolumeSync(appRoot.Config().Volumes, reg.Names())
+		cur, err := config.Load(cfgPath)
+		if err != nil {
+			logging.Warn("log.volume_warn", err)
+			return
+		}
+		appRoot.SetConfig(cur)
+		mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
 		for _, v := range mount {
 			mountOne(v.Name, v.ChatID)
 		}
@@ -740,35 +754,24 @@ func Run(opts Options) error {
 			tv.cancel() // 生命周期协程负责关索引、摘注册表、close(done)
 			<-tv.done
 		}
+		// 旧单卷形态：配置里没有 [[volumes]] 时用 telegram.channel_id 兜底
+		if len(cur.Volumes) == 0 && cur.Telegram.ChannelID != 0 && !isMounted(app.DefaultVolumeName) {
+			mountOne(app.DefaultVolumeName, cur.Telegram.ChannelID)
+		}
 		pushHub.Publish(push.TopicStatus)
 	}
 
-	// isMounted 判断卷是否已经在托盘里。
-	isMounted := func(name string) bool {
-		_, ok := reg.Get(name)
-		return ok
-	}
-	// mountAll 尝试挂载所有尚未就绪的卷。
+	// mountAll 对齐到最新配置（面板建卷/删卷、外部编辑都会被收编）。
 	mountAll := func() {
-		if len(cfg.Volumes) == 0 {
-			if !isMounted("mytgfs") {
-				mountOne("mytgfs", cfg.Telegram.ChannelID)
-			}
-			return
-		}
-		for _, v := range cfg.Volumes {
-			if !v.Enabled || isMounted(v.Name) {
-				continue
-			}
-			mountOne(v.Name, v.ChatID)
-		}
+		reconcileVolumes()
 	}
 	// allMounted 判断配置里所有启用的卷是否都已挂载。
 	allMounted := func() bool {
-		if len(cfg.Volumes) == 0 {
-			return isMounted("mytgfs")
+		cur := appRoot.Config()
+		if len(cur.Volumes) == 0 {
+			return isMounted(app.DefaultVolumeName)
 		}
-		for _, v := range cfg.Volumes {
+		for _, v := range cur.Volumes {
 			if v.Enabled && !isMounted(v.Name) {
 				return false
 			}
@@ -867,6 +870,22 @@ func Run(opts Options) error {
 	sysTray.OnClick(func() {
 		win.Show()
 		win.Focus()
+	})
+
+	// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编
+	wg.Go(func() {
+		interval := SyncInterval(appRoot.Config().Mount.SyncSeconds)
+		if interval <= 0 {
+			interval = SyncInterval(0)
+		}
+		for {
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-time.Tick(interval):
+				reconcileVolumes()
+			}
+		}
 	})
 
 	// 托盘悬浮提示：状态 + 每卷占用 + 正在跑的任务，每 5 秒刷新

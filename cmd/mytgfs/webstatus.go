@@ -9,7 +9,6 @@ package main
 import (
 	"context"
 
-	"mytgfs/internal/config"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/vfs"
@@ -17,21 +16,20 @@ import (
 
 // webStatus 汇总各卷的条目数、占用量、下载进度与任务队列。
 //
-// 输入：ctx；cfg 配置（决定卷顺序）；vols 已打开的卷
+// 输入：ctx；vols 已打开的卷（按注册表顺序，面板建的新卷也在内）
 // 输出：可直接 JSON 序列化的状态负载
 // 预期：单个卷读取失败只在该卷上带 error，不影响其它卷
-func webStatus(ctx context.Context, cfg config.Config, vols map[string]*webVolume) any {
+func webStatus(ctx context.Context, vols []*webVolume) any {
 	list := make([]map[string]any, 0, len(vols))
 	var queued []queue.Item
 	var xfers []vfs.Transfer
-	for _, v := range cfg.Volumes {
-		wv, ok := vols[v.Name]
-		if !ok || wv.vf == nil {
+	for _, wv := range vols {
+		if wv == nil || wv.vf == nil {
 			continue
 		}
 		snap, err := wv.vf.Snapshot(ctx)
 		if err != nil {
-			list = append(list, map[string]any{"name": v.Name, "error": err.Error()})
+			list = append(list, map[string]any{"name": wv.vf.Name, "error": err.Error()})
 			continue
 		}
 		list = append(list, map[string]any{
