@@ -35,6 +35,7 @@ import {
   computeOverviewSummary,
   formatBytes,
   inferFileCategory,
+  pickActiveVolume,
   validateAndPlanUpload,
   volumeDisplayName,
 } from './utils/fsLogic';
@@ -347,6 +348,13 @@ export default function App() {
   const [activeVolumeId, setActiveVolumeId] = useState<string>(() =>
     urlParam('vol') || loadFromStorage<string>(STORAGE_KEYS.activeVol, '')
   );
+  // 用户显式选过的卷（URL 参数 / 上次会话 / 点击）：卷是异步挂载的，
+  // 首屏可能只回来一部分，偏好卷要等它出现而不是被首屏第一项顶掉
+  const preferredVolume = useRef<string>(urlParam('vol') || loadFromStorage<string>(STORAGE_KEYS.activeVol, ''));
+  const selectVolume = useCallback((id: string) => {
+    preferredVolume.current = id;
+    setActiveVolumeId(id);
+  }, []);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
 
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
@@ -537,7 +545,7 @@ export default function App() {
           cover: v.cover ?? '',
         }))
       );
-      setActiveVolumeId((cur) => (cur && names.includes(cur) ? cur : names[0] ?? ''));
+      setActiveVolumeId((cur) => pickActiveVolume(preferredVolume.current, cur, names));
       // 非已连接 → 已连接的跃迁：断线/启动期间错过的变化立刻补拉，
       // 不等下一个推送事件（SSE 重连自带 ready，也会走这条路）
       const next = connOf(st.status);
@@ -1582,7 +1590,7 @@ export default function App() {
                       whileHover={{ scale: 1.015 }}
                       transition={IOS_BOUNCE_SPRING}
                       onClick={() => {
-                        setActiveVolumeId(volume.id);
+                        selectVolume(volume.id);
                         setCurrentFolderId(null);
                         setActiveTab('files');
                       }}
@@ -1786,7 +1794,7 @@ export default function App() {
                 transfers={transfers}
                 activeVolumeId={activeVolumeId}
                 onSelectVolumeAndBrowse={(volId) => {
-                  setActiveVolumeId(volId);
+                  selectVolume(volId);
                   setCurrentFolderId(null);
                   setActiveTab('files');
                 }}
@@ -1806,7 +1814,7 @@ export default function App() {
                 volumes={volumes}
                 activeVolumeId={activeVolumeId}
                 onChangeVolume={(volId) => {
-                  setActiveVolumeId(volId);
+                  selectVolume(volId);
                   setCurrentFolderId(null);
                 }}
                 currentFolderId={currentFolderId}

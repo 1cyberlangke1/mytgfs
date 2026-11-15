@@ -16,6 +16,7 @@ import {
   sortFileItems,
   summarizeUploadBatch,
   validateAndPlanUpload,
+  pickActiveVolume,
   volumeDisplayName,
 } from './fsLogic';
 
@@ -285,6 +286,26 @@ describe('volumeDisplayName', () => {
 
   it('标题与卷名相同时不重复显示', () => {
     expect(volumeDisplayName('demo', 'demo')).toBe('demo');
+  });
+});
+
+describe('pickActiveVolume', () => {
+  it('偏好卷还在时优先于当前卷（异步挂载时不抢选择）', () => {
+    expect(pickActiveVolume('sezhijian', 'demo', ['demo', 'sezhijian'])).toBe('sezhijian');
+  });
+
+  it('首屏只回来部分卷时不把偏好卷顶掉，等它出现再切过去', () => {
+    expect(pickActiveVolume('sezhijian', 'demo', ['demo'])).toBe('demo');
+    expect(pickActiveVolume('sezhijian', '', ['demo'])).toBe('demo');
+  });
+
+  it('偏好卷已消失时回退到仍然存在的当前卷', () => {
+    expect(pickActiveVolume('gone', 'demo', ['demo', 'other'])).toBe('demo');
+  });
+
+  it('没有偏好也没有当前时取首卷，空列表返回空串', () => {
+    expect(pickActiveVolume('', '', ['demo', 'other'])).toBe('demo');
+    expect(pickActiveVolume('', '', [])).toBe('');
   });
 });
 

@@ -353,6 +353,21 @@ export function volumeDisplayName(name: string, title?: string): string {
 }
 
 /**
+ * Picks which volume the panel should show after a state refresh.
+ *
+ * 输入：preferred 用户显式选过的卷（URL 参数 / localStorage / 点击），
+ *       current 当前 state 里的卷，names 本次服务端返回的卷名列表。
+ * 输出：仍然存在的卷名；列表为空时返回空串。
+ * 预期：preferred 优先于 current —— 卷是异步挂载的，首屏可能只回来一部分，
+ * 不能因为偏好卷暂时缺席就把它顶掉；只有偏好卷消失才回退到 current，再回退首卷。
+ */
+export function pickActiveVolume(preferred: string, current: string, names: string[]): string {
+  if (preferred && names.includes(preferred)) return preferred;
+  if (current && names.includes(current)) return current;
+  return names[0] ?? '';
+}
+
+/**
  * Aggregates per-volume totals for the overview cards.
  */
 export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[]) {
