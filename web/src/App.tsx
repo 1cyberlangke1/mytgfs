@@ -510,22 +510,56 @@ export default function App() {
 
   // 事件驱动：服务端有变化时才推送，前端收到后拉最新快照（取代定时轮询）
   useEffect(() => {
-    // 状态与文件分别防抖：进度类事件密集，避免每次事件都全量拉取
+    // 状态与文件走「首事件立即拉 + 窗口内合并」节流：
+    // 单次操作（删/改名/建目录）推送后立刻生效，进度类突发仍合并不刷屏
     let stateTimer = 0;
-    let filesTimer = 0;
+    let stateTrailing = false;
     const scheduleState = () => {
-      window.clearTimeout(stateTimer);
-      stateTimer = window.setTimeout(() => void reloadState(), 200);
+      if (stateTimer !== 0) {
+        stateTrailing = true;
+        return;
+      }
+      void reloadState();
+      stateTimer = window.setTimeout(() => {
+        stateTimer = 0;
+        if (stateTrailing) {
+          stateTrailing = false;
+          scheduleState();
+        }
+      }, 400);
     };
+    let filesTimer = 0;
+    let filesTrailing = false;
     const scheduleFiles = () => {
-      window.clearTimeout(filesTimer);
-      filesTimer = window.setTimeout(() => void reloadFiles(), 1500);
+      if (filesTimer !== 0) {
+        filesTrailing = true;
+        return;
+      }
+      void reloadFiles();
+      filesTimer = window.setTimeout(() => {
+        filesTimer = 0;
+        if (filesTrailing) {
+          filesTrailing = false;
+          scheduleFiles();
+        }
+      }, 1000);
     };
     // 下载进度也要跟着推送走：只读本地目录，代价很低
     let dlTimer = 0;
+    let dlTrailing = false;
     const scheduleDownloads = () => {
-      window.clearTimeout(dlTimer);
-      dlTimer = window.setTimeout(() => void reloadDownloads(), 300);
+      if (dlTimer !== 0) {
+        dlTrailing = true;
+        return;
+      }
+      void reloadDownloads();
+      dlTimer = window.setTimeout(() => {
+        dlTimer = 0;
+        if (dlTrailing) {
+          dlTrailing = false;
+          scheduleDownloads();
+        }
+      }, 400);
     };
 
     const onStatus = () => {
