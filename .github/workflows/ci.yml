@@ -9,7 +9,9 @@ jobs:
   # 纯 Go 构建：不需要任何系统 SDK 或 CGO flags。
   # 三个平台都跑完整的 build / vet / test，平台差异（路径分隔符、注册表、
   # 托盘构建标签）由各自的 runner 验证。
+  # 前端产物由 frontend job 构建并上传，这里下载后嵌入二进制（dist 不入库）。
   build:
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +19,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - name: 下载前端产物
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/web/dist
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -59,7 +66,7 @@ jobs:
           path: coverage.out
           if-no-files-found: error
 
-  # 前端：类型检查 + 产物一致性（internal/web/dist 是提交进仓库的构建产物）。
+  # 前端：类型检查 + 构建，产物上传给 Go 构建嵌入（dist 不入库，每次构建现做）。
   frontend:
     runs-on: ubuntu-24.04
     steps:
@@ -73,11 +80,12 @@ jobs:
       - name: 类型检查与推送约束
         working-directory: web
         run: npm run lint
-      - name: 构建产物与源码一致
+      - name: 构建前端
         working-directory: web
-        run: |
-          npm run build
-          rm -rf ../internal/web/dist
-          cp -R dist ../internal/web/dist
-          git diff --exit-code -- ../internal/web/dist
-          test -z "$(git status --porcelain -- ../internal/web/dist)"
+        run: npm run build
+      - name: 上传前端产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error

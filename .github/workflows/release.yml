@@ -42,6 +42,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+      # dist 不入库：发布二进制前先现做前端产物
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: 构建前端
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: 前端产物就位
+        shell: bash
+        run: |
+          rm -rf internal/web/dist
+          cp -R web/dist internal/web/dist
       - name: 构建
         shell: bash
         run: |
