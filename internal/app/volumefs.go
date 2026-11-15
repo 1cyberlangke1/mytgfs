@@ -59,6 +59,10 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		return nil, err
 	}
 	store := a.newStore(api, vol.ChatID)
+	// 索引按卷名命名：换过频道的卷必须先丢掉旧频道的数据，再决定是否重建
+	if aerr := a.adoptChannel(ctx, idx, vol.ChatID); aerr != nil {
+		logging.Warn("log.volume_warn", aerr, volName)
+	}
 	// 索引是缓存：空了就重建，否则面板与命令行都会看到空白目录
 	if rerr := a.RebuildIndexIfEmpty(ctx, idx, vol.ChatID); rerr != nil {
 		logging.Warn("log.volume_warn", rerr, volName)

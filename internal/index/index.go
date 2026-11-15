@@ -27,6 +27,12 @@ type SearchHit struct {
 // MetaKeyChannelPts 是频道 pts 游标在 meta 表里的键名。
 const MetaKeyChannelPts = "channel_pts"
 
+// MetaKeyChannelID 是索引当前对应频道 id 的键名。
+//
+// 索引文件按卷名命名，卷换了频道（改 chat_id / 同名重建）时
+// 旧节点与 pts 游标都不再有效，必须清空后按新频道重建。
+const MetaKeyChannelID = "channel_id"
+
 // Index 是本地 SQLite 物化索引。
 type Index struct {
 	db *sql.DB
@@ -189,6 +195,17 @@ FROM pending_done WHERE path = ?`, path)
 // DeletePendingDone 删除一条已上传待索引记录。
 func (i *Index) DeletePendingDone(ctx context.Context, path string) error {
 	_, err := i.db.ExecContext(ctx, `DELETE FROM pending_done WHERE path = ?`, path)
+	return err
+}
+
+// ClearPendingDone 清空已上传待索引账本。
+//
+// 输入：ctx
+// 输出：error
+// 预期：账本记的是上一个频道的消息号，换频道后继续用会把别的频道的消息
+// 登记成本地节点，必须一并清掉
+func (i *Index) ClearPendingDone(ctx context.Context) error {
+	_, err := i.db.ExecContext(ctx, `DELETE FROM pending_done`)
 	return err
 }
 

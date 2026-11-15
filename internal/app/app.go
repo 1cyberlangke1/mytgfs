@@ -259,6 +259,11 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 	}
 	defer idx.Close()
 
+	// 命令行也会读写索引：换过频道时同样先丢掉旧数据
+	if aerr := a.adoptChannel(ctx, idx, vol.ChatID); aerr != nil {
+		return aerr
+	}
+
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: cmp.Or(a.opts.SessionPath, DefaultSessionPath), Key: key},
 		tgclient.Options{})

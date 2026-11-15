@@ -17,6 +17,7 @@ import (
 	"os"
 
 	"mytgfs/internal/dirent"
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
@@ -60,6 +61,15 @@ type uploadJob struct {
 	Body   string `json:"body"`
 	Parent int    `json:"parent"`
 }
+
+// errTargetGone 表示上传期间目标目录被删掉。
+//
+// 输入：Path 提交时的目标路径
+// 输出：可直接展示的错误文案
+// 预期：消息已发出但没有归属，打删除标记后明确失败，不重试也不静默丢弃
+type errTargetGone struct{ Path string }
+
+func (e errTargetGone) Error() string { return i18n.T("err.upload_target_gone", e.Path) }
 
 // AttachQueue 为卷创建持久化队列并启动工作协程。
 //
@@ -253,16 +263,17 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob) error {
 		return err
 	}
 	if st.Size() != p.Size || p.Size <= 0 || st.Size() <= 0 {
-		// 临时文件被覆盖、截断或本来就是空文件：这条记账已经没有意义
+		// 临时文件被截断/清空：重放也不会变好。清账后明确失败，
+		// 不能静默把用户刚传的文件吞掉
 		_ = tmp.Close()
 		_ = d.idx.DeletePending(ctx, p.Path)
 		_ = os.Remove(p.Temp)
-		return nil
+		return queue.Permanent(errors.New(i18n.T("err.upload_incomplete")))
 	}
 	// 上次已经上传成功但没写成节点：只补登记，不重传
 	helper := &file{d: d, name: p.Path}
 	if done, ok, derr := d.idx.GetPendingDone(ctx, p.Path); derr == nil && ok && done.Sha256 == p.Sha {
-		err = helper.record(ctx, p.Path, p.Sha, &telegramstore.Part{
+		err = helper.record(ctx, p.Path, p.Parent, p.Base, p.Sha, &telegramstore.Part{
 			MessageID:     done.MessageID,
 			DocumentID:    done.DocumentID,
 			AccessHash:    done.AccessHash,

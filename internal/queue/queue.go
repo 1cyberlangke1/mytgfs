@@ -633,13 +633,35 @@ DELETE FROM jobs WHERE state IN (?, ?) AND id NOT IN (
 	q.notifyDoneClose(id)
 }
 
+// permanentError 标记确定性失败：重放同样的参数也不会成功。
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+// Permanent 把确定性错误标记成不重试。
+//
+// 输入：err 具体原因
+// 输出：带标记的错误，Error/Unwrap 原样保留原因
+// 预期：用于「目标已不存在」这类重放无意义的失败，
+// 队列直接落 failed 并把原因显示给用户，不再无限重试
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err: err}
+}
+
 // Retryable 判断错误是否值得重试。
 //
 // 输入：任意 error
 // 输出：true 表示可能是瞬时问题（断网、429、5xx）
-// 预期：权限/频道/超限/断点失效这类确定性错误重试只会浪费时间
+// 预期：权限/频道/超限/断点失效/确定性失败重试只会浪费时间
 func Retryable(err error) bool {
 	if err == nil {
+		return false
+	}
+	if _, ok := errors.AsType[permanentError](err); ok {
 		return false
 	}
 	switch {

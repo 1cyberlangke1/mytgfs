@@ -21,6 +21,7 @@ import (
 	"mytgfs/internal/dirent"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
+	"mytgfs/internal/queue"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/upload"
 )
@@ -81,25 +82,42 @@ func (f *file) commitAt(ctx context.Context, tmp *os.File, p uploadJob) error {
 	if part == nil {
 		return errors.New(i18n.T("err.upload_no_result"))
 	}
-	return f.record(ctx, p.Path, p.Sha, part)
+	return f.record(ctx, p.Path, p.Parent, p.Base, p.Sha, part)
 }
 
 // record 把上传结果登记到本地节点表，并清理被覆盖的旧消息。
 //
-// 输入：ctx；name 卷内路径；sha 内容摘要；part 已上传成功的消息
+// 输入：ctx；submitted 提交时的路径（只用于清 pending 账本）；
+//
+//	parent/base 发送消息时定稿的父消息号与名字；sha 内容摘要；part 已上传成功的消息
+//
 // 输出：error
 // 预期：
-//   - 先记账再写本地节点；中途失败由 pending 账本补
-//   - 覆盖写时删掉旧节点的消息，避免频道里堆同一路径的旧内容
-func (f *file) record(ctx context.Context, name, sha string, part *telegramstore.Part) error {
-	name = clean(name)
-	parent, base, ok, err := f.d.parentOf(ctx, name)
-	if err != nil {
-		return err
+//   - 用任务里定稿的父号与名字登记，不按路径现查：上传排队期间父目录改名/移动
+//     不会让远端消息与本地记录挂到不同目录
+//   - 目标目录已经不存在：给刚发的消息打删除标记并明确失败，
+//     绝不静默留下不可见的孤儿节点
+//   - 覆盖写时先删旧本地节点，再给旧消息打删除标记
+func (f *file) record(ctx context.Context, submitted string, parent int, base, sha string, part *telegramstore.Part) error {
+	if base == "" {
+		base = path.Base(submitted)
 	}
-	if !ok {
-		return os.ErrNotExist
+	dir := "/"
+	if parent != 0 {
+		pn, ok, err := f.d.idx.NodeByID(ctx, parent)
+		if err != nil {
+			return err
+		}
+		if !ok || !pn.IsDir {
+			// 目标目录在排队期间被删：这条消息已经无家可归，打标记后报错
+			f.markGone(ctx, part.MessageID)
+			_ = f.d.idx.DeletePending(ctx, submitted)
+			_ = f.d.idx.DeletePendingDone(ctx, submitted)
+			return queue.Permanent(errTargetGone{Path: submitted})
+		}
+		dir = pn.Path
 	}
+	name := joinPath(dir, base)
 	if err := f.d.idx.PutPendingDone(ctx, index.PendingDone{
 		Path:          name,
 		MessageID:     part.MessageID,
@@ -125,7 +143,7 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	}
 	if err := f.d.idx.PutNode(ctx, index.Node{
 		ID:            part.MessageID,
-		ParentID:      parent.ID,
+		ParentID:      parent,
 		Name:          base,
 		Path:          name,
 		DocumentID:    part.DocumentID,
@@ -141,17 +159,31 @@ func (f *file) record(ctx context.Context, name, sha string, part *telegramstore
 	// 远端旧消息最后打删除标记：标记失败只留下未标记的旧节点，
 	// 重建时同路径按消息号新者胜，本地视图不受影响
 	if hadOld && old.ID > 0 && old.ID != part.MessageID {
-		if tb, terr := dirent.EncodeTombstone(); terr == nil {
-			if derr := f.d.store.EditNode(ctx, old.ID, tb); derr != nil {
-				slog.Debug(i18n.T("log.delete_old_msg"), "path", name, "msg", old.ID, "err", derr)
-			}
-		}
+		f.markGone(ctx, old.ID)
 	}
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
 		slog.Debug(i18n.T("log.cleanup_acked"), "path", name, "err", err)
 	}
 	f.d.notify()
 	return nil
+}
+
+// markGone 给一条远端消息打删除标记；失败只记调试日志。
+//
+// 输入：ctx；id 消息号
+// 输出：无
+// 预期：用于覆盖写清旧消息、以及上传目标目录已删时回收无主消息
+func (f *file) markGone(ctx context.Context, id int) {
+	if id <= 0 {
+		return
+	}
+	tb, err := dirent.EncodeTombstone()
+	if err != nil {
+		return
+	}
+	if derr := f.d.store.EditNode(ctx, id, tb); derr != nil {
+		slog.Debug(i18n.T("log.delete_old_msg"), "msg", id, "err", derr)
+	}
 }
 
 // Close 关闭：写模式先把内容落账并入队，执行完才返回。
@@ -177,6 +209,14 @@ func (f *file) Close() error {
 	if err != nil {
 		_ = tmp.Close()
 		return err
+	}
+	// 空文件传不上去（Telegram 会回 FILE_PARTS_INVALID）：
+	// 当场报错并丢弃临时文件，绝不假装成功
+	if st.Size() <= 0 {
+		name := tmp.Name()
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return errors.New(i18n.T("err.upload_empty"))
 	}
 	// 断电前内容必须真的落到磁盘，否则重启拿到的是短文件
 	if err := tmp.Sync(); err != nil {
@@ -250,9 +290,8 @@ func (f *file) Read(p []byte) (int, error) {
 //
 // 输入：ofst 卷内偏移；length 字节数
 // 输出：数据、error
-// 预期：刷新成功时把新引用写回本地节点，
-//
-//	刷新失败或二次读取仍失败则原样返回错误；不改动其它消息。
+// 预期：刷新成功时只把新引用字段写回本地节点，名字/父号/路径保持库里现有值，
+// 避免用打开句柄时的旧快照覆盖同步循环刚应用的改名；不改动其它消息。
 func (f *file) readRange(ofst int64, length int) ([]byte, error) {
 	prog := func(done int64) { f.d.track(f.name, done, f.node.Size) }
 	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.node), ofst, length, prog)
@@ -266,16 +305,37 @@ func (f *file) readRange(ofst int64, length int) ([]byte, error) {
 	if rerr != nil {
 		return nil, rerr
 	}
-	updated := *f.node
-	updated.DocumentID = part.DocumentID
-	updated.AccessHash = part.AccessHash
-	updated.FileReference = part.FileReference
-	updated.Size = part.Size
-	if perr := f.d.idx.PutNode(f.d.ctx, updated); perr != nil {
+	updated, perr := f.d.applyRefreshed(f.node.ID, part)
+	if perr != nil {
 		return nil, perr
 	}
-	f.node = &updated
-	return f.d.store.ReadRange(f.d.ctx, partOf(updated), ofst, length, prog)
+	f.node = updated
+	return f.d.store.ReadRange(f.d.ctx, partOf(*updated), ofst, length, prog)
+}
+
+// applyRefreshed 把刷新到的文档引用写回本地节点，返回最新节点。
+//
+// 输入：id 节点消息号；part 远端最新元数据
+// 输出：写回后的节点；error
+// 预期：只更新 document/access_hash/file_reference/size；
+// 名字、父号、路径、时间、摘要以库里现有值为准（可能已被同步循环改过），
+// 否则打开句柄时的旧快照会把刚应用的改名覆盖回去
+func (d *FileSystem) applyRefreshed(id int, part *telegramstore.Part) (*index.Node, error) {
+	cur, ok, err := d.idx.NodeByID(d.ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	cur.DocumentID = part.DocumentID
+	cur.AccessHash = part.AccessHash
+	cur.FileReference = part.FileReference
+	cur.Size = part.Size
+	if err := d.idx.PutNode(d.ctx, cur); err != nil {
+		return nil, err
+	}
+	return &cur, nil
 }
 
 // Seek 只支持顺序定位，跳转后重新拉块。

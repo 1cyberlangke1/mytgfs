@@ -68,6 +68,36 @@ func (a *App) AllNodes(ctx context.Context, channelID int64) ([]telegramstore.No
 	return nodes, nil
 }
 
+// adoptChannel 确认本地索引属于这个频道。
+//
+// 输入：ctx；idx 本地索引；channelID 配置里的频道 id（-100... 形式）
+// 输出：error
+// 预期：
+//   - 首次使用：只记下频道 id，不动任何节点
+//   - 频道换了（手改 chat_id、同名挂到别的频道）：清空节点、已上传待索引账本与
+//     pts 游标，让上层按新频道重建；否则面板会显示上一个频道的文件，
+//     读取还会拿着别的频道的消息号
+func (a *App) adoptChannel(ctx context.Context, idx *index.Index, channelID int64) error {
+	prev, ok, err := idx.GetMeta(ctx, index.MetaKeyChannelID)
+	if err != nil {
+		return err
+	}
+	if ok && prev != channelID {
+		slog.Warn(i18n.T("log.channel_changed"), "old", prev, "new", channelID)
+		if err := idx.ClearNodes(ctx); err != nil {
+			return err
+		}
+		if err := idx.ClearPendingDone(ctx); err != nil {
+			return err
+		}
+		// pts 是频道专属游标：换频道必须归零，下次同步从 bootstrap 重新拉
+		if err := idx.PutMeta(ctx, index.MetaKeyChannelPts, 0); err != nil {
+			return err
+		}
+	}
+	return idx.PutMeta(ctx, index.MetaKeyChannelID, channelID)
+}
+
 // RebuildIndexIfEmpty 在索引为空时按远端全量节点重建。
 //
 // 输入：ctx；idx 索引；channelID 该卷频道 ID
