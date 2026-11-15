@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mytgfs/internal/fm"
@@ -50,9 +51,10 @@ type uploadSession struct {
 	target string
 	size   int64
 	// done 是已经落盘的字节数，也是下一段允许的 offset
-	done     int64
-	file     *os.File
-	lastUsed time.Time
+	done int64
+	file *os.File
+	// lastUsed 是纳秒时间戳：回收扫描与取会话并发读，用原子量避免数据竞争
+	lastUsed atomic.Int64
 	// busy 表示正在提交：回收协程不得关闭这个句柄
 	busy bool
 }
@@ -126,8 +128,9 @@ func (u *uploadAPI) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s := &uploadSession{
 		id: newToken(12), vol: req.Vol, dir: req.Dir, target: target,
-		size: req.Size, file: f, lastUsed: time.Now(),
+		size: req.Size, file: f,
 	}
+	s.lastUsed.Store(time.Now().UnixNano())
 	u.mu.Lock()
 	u.evictLocked()
 	u.sess[s.id] = s
@@ -157,6 +160,11 @@ func (u *uploadAPI) handleChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.busy {
+		// 提交正在读这个临时文件：再写会让读到的字节和声明大小对不上
+		replyJSONError(w, http.StatusConflict, i18n.T("err.upload_busy"))
+		return
+	}
 	if offset != s.done {
 		replyJSON(w, http.StatusConflict, map[string]any{
 			"offset": s.done, "error": i18n.T("err.upload_offset"),
@@ -169,7 +177,7 @@ func (u *uploadAPI) handleChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done += n
-	s.lastUsed = time.Now()
+	s.lastUsed.Store(time.Now().UnixNano())
 	replyJSON(w, http.StatusOK, map[string]any{"offset": s.done})
 }
 
@@ -294,7 +302,7 @@ func (u *uploadAPI) get(id string) (*uploadSession, bool) {
 	if !ok {
 		return nil, false
 	}
-	s.lastUsed = time.Now()
+	s.lastUsed.Store(time.Now().UnixNano())
 	return s, true
 }
 
@@ -323,9 +331,9 @@ func (u *uploadAPI) drop(id string) {
 // 正在提交（busy）或正在写分片（TryLock 失败）的会话跳过：
 // 关掉正在使用的句柄会把临时文件写坏，留到下一轮回收。
 func (u *uploadAPI) evictLocked() {
-	cutoff := time.Now().Add(-uploadIdleTimeout)
+	cutoff := time.Now().Add(-uploadIdleTimeout).UnixNano()
 	for id, s := range u.sess {
-		if s.lastUsed.Before(cutoff) && u.discard(s) {
+		if s.lastUsed.Load() < cutoff && u.discard(s) {
 			delete(u.sess, id)
 		}
 	}
@@ -340,7 +348,7 @@ func (u *uploadAPI) evictLocked() {
 			if inUse {
 				continue
 			}
-			if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {
+			if oldest == nil || s.lastUsed.Load() < oldest.lastUsed.Load() {
 				oldest = s
 			}
 		}

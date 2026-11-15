@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"mytgfs/internal/fm"
@@ -258,4 +259,52 @@ func TestUploadAPICommitRejectsBusy(t *testing.T) {
 	if len(f.uploads) != 0 {
 		t.Fatalf("并发提交不该入库: %v", f.uploads)
 	}
+}
+
+// TestUploadAPIChunkRejectsWhileCommitting 提交中再发分片必须被拒。
+//
+// 输入：会话被标记 busy
+// 输出：409，且已收字节数不变
+// 预期：提交正在读同一个临时文件，追加写会让内容与声明大小错位
+func TestUploadAPIChunkRejectsWhileCommitting(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	id := initSession(t, api, `{"vol":"demo","dir":"/","name":"a.bin","size":4}`)
+	putChunk(t, api, id, 0, "ab")
+
+	api.mu.Lock()
+	api.sess[id].busy = true
+	api.mu.Unlock()
+
+	rec := putChunk(t, api, id, 2, "cd")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d，期望 409", rec.Code)
+	}
+	api.mu.Lock()
+	done := api.sess[id].done
+	api.mu.Unlock()
+	if done != 2 {
+		t.Fatalf("提交中不该追加字节: done = %d", done)
+	}
+}
+
+// TestUploadAPISessionTouchConcurrent 取会话与写分片并发刷新活跃时间。
+//
+// 输入：一条持续写分片的请求 + 反复取会话
+// 输出：无（配合 -race 验证活跃时间字段无数据竞争）
+// 预期：两条路径都只更新同一个原子时间戳
+func TestUploadAPISessionTouchConcurrent(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	id := initSession(t, api, `{"vol":"demo","dir":"/","name":"a.bin","size":1024}`)
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() { api.get(id) })
+	}
+	wg.Go(func() {
+		for offset := 0; offset < 1024; offset += 8 {
+			putChunk(t, api, id, offset, strings.Repeat("x", 8))
+		}
+	})
+	wg.Wait()
 }
