@@ -6,6 +6,18 @@ param([switch]$Package)
 
 New-Item -ItemType Directory -Force -Path 'build' | Out-Null
 
+# 前端产物不入库：每次构建现做，拷进 embed 目录
+Push-Location web
+npm run build
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    Write-Output 'FAIL web build'
+    exit 1
+}
+Pop-Location
+if (Test-Path 'internal\web\dist') { Remove-Item -Recurse -Force 'internal\web\dist' }
+Copy-Item -Recurse 'web\dist' 'internal\web\dist'
+
 # 版本信息注入二进制：排障时能直接看到构建来源
 $ver = (git describe --tags --always 2>$null)
 if (-not $ver) { $ver = 'dev' }
