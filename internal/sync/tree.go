@@ -47,25 +47,44 @@ func Layout(nodes []telegramstore.NodeInfo) (map[int]index.Node, error) {
 
 	// tomb 是删除标记消息；祖先链（含自身）上有删除标记的节点整棵丢弃，
 	// 既不入索引也不挂根——父已删除时子树视为一并删除。
+	// isDead 沿父链判定并记忆化：链上任一节点带标记，链上所有后代同样丢弃，
+	// 每条链只完整走一次，深树不会退化成每节点重复上溯。
 	tomb := make(map[int]bool)
 	for _, n := range nodes {
 		if n.Tombstone {
 			tomb[n.MessageID] = true
 		}
 	}
-	dead := func(id int) bool {
+	deadCache := make(map[int]bool, len(ids))
+	isDead := func(id int) bool {
+		if v, ok := deadCache[id]; ok {
+			return v
+		}
+		chain := make([]int, 0, 4)
 		cur := id
+		result := false
 		for range maxParentHops {
+			if v, ok := deadCache[cur]; ok {
+				result = v
+				break
+			}
 			if tomb[cur] {
-				return true
+				result = true
+				break
 			}
 			info, ok := byID[cur]
 			if !ok || info.Parent <= 0 {
-				return false
+				result = false
+				break
 			}
+			chain = append(chain, cur)
 			cur = info.Parent
 		}
-		return false
+		for _, c := range chain {
+			deadCache[c] = result
+		}
+		deadCache[id] = result
+		return result
 	}
 
 	// parentOf 给出「有效父消息号」：父不存在、自指、或落在环里时归零。
@@ -134,7 +153,7 @@ func Layout(nodes []telegramstore.NodeInfo) (map[int]index.Node, error) {
 	used := map[string]bool{}
 	for _, id := range ids {
 		n := byID[id]
-		if dead(id) {
+		if isDead(id) {
 			continue
 		}
 		p := resolve(id, 0)

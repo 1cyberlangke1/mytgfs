@@ -227,3 +227,27 @@ func TestReconcileNodeDeletesMissingRemote(t *testing.T) {
 		t.Fatal("远端没有的消息不该留在本地")
 	}
 }
+
+// TestReconcileNodeTombstoneRemovesSubtree 远端是删除标记时本地连子树一起清，
+// 不能把标记解析成空名节点写进索引。
+func TestReconcileNodeTombstoneRemovesSubtree(t *testing.T) {
+	fsys, st, done := newTestFS(t)
+	defer done()
+	ctx := t.Context()
+	putRenameFixture(t, fsys)
+	id := nodeID(t, fsys, "/d")
+	tb, _ := dirent.EncodeTombstone()
+	st.msgs[id] = nodeMsg{body: tb}
+
+	if err := fsys.reconcileNode(ctx, id); err != nil {
+		t.Fatalf("reconcileNode: %v", err)
+	}
+	for _, p := range []string{"/d", "/d/f1.bin", "/d/sub", "/d/sub/f2.bin"} {
+		if _, ok, _ := fsys.idx.NodeByPath(ctx, p); ok {
+			t.Fatalf("%s 应随删除标记一起清掉", p)
+		}
+	}
+	if _, ok, _ := fsys.idx.NodeByID(ctx, id); ok {
+		t.Fatal("被标记节点本身也不该留在索引")
+	}
+}

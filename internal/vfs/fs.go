@@ -169,6 +169,11 @@ func (d *FileSystem) reconcileNode(ctx context.Context, id int) error {
 	if !ok {
 		return d.idx.DeleteNode(ctx, id)
 	}
+	if node.Tombstone {
+		// 远端已是删除标记：本地连同子树一起清掉，绝不能按空名节点入库
+		_, err := d.idx.DeleteSubtree(ctx, id)
+		return err
+	}
 	pid := node.Parent
 	if pid != 0 {
 		if _, exists, _ := d.idx.NodeByID(ctx, pid); !exists {
