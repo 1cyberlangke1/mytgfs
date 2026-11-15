@@ -1124,10 +1124,18 @@ export default function App() {
         dismissToast(pending);
         pushToast(interpolate(t.volume.createSuccess, { name }, locale), 'success');
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         dismissToast(pending);
         if (ctrl.signal.aborted) {
-          pushToast(interpolate(t.volume.createCancelled, { name }, locale), 'success');
+          // 断开请求后服务端可能已经把卷建完并写进配置了：
+          // 以卷列表为准，避免「提示已取消」但卷其实出现
+          const names = await reloadState();
+          if (names?.includes(name)) {
+            if (names.length > 0) await reloadFiles(names);
+            pushToast(interpolate(t.volume.createSuccess, { name }, locale), 'success');
+          } else {
+            pushToast(interpolate(t.volume.createCancelled, { name }, locale), 'success');
+          }
           return;
         }
         pushToast(errText(err), 'error');

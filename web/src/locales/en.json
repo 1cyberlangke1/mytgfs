@@ -131,7 +131,7 @@
     "shortcutOpen": "Open a folder or preview a file",
     "shortcutRename": "Rename",
     "shortcutDelete": "Delete selected items",
-    "shortcutClose": "Clear selection or close a dialog",
+    "shortcutClose": "Clear selection / go up one folder",
     "closeShortcuts": "Got it",
     "sortName": "Name",
     "sortSize": "Size",

@@ -131,7 +131,7 @@
     "shortcutOpen": "打开目录或预览文件",
     "shortcutRename": "重命名",
     "shortcutDelete": "删除所选",
-    "shortcutClose": "取消选择或关闭弹窗",
+    "shortcutClose": "取消选择 / 返回上级目录",
     "closeShortcuts": "知道了",
     "sortName": "名称",
     "sortSize": "大小",

@@ -395,6 +395,33 @@ export const FilesView: React.FC<FilesViewProps> = ({
     handleFolderClick(currentDir?.parentId ?? null);
   };
 
+  // Esc 统一在 document 上监听：空目录里列表容器不渲染，挂在容器上就按不到。
+  //
+  // 输入：键盘事件
+  // 输出：无
+  // 预期：先清选择，没有选择时返回上级目录；
+  //       输入框/下拉里的 Esc（清搜索）与已打开的 dialog 不抢
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (document.querySelector('dialog[open]')) return;
+      if (selectedIds.size > 0 || cursorId) {
+        setSelectedIds(new Set());
+        setCursorId(null);
+        return;
+      }
+      if (!currentFolderId) return;
+      e.preventDefault();
+      handleUpOneLevel();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // handleUpOneLevel 依赖 files/currentFolderId，直接把这些放进依赖里重新绑定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIds, cursorId, currentFolderId, files]);
+
   const toggleSelectOne = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -474,18 +501,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
   //
   // 输入：键盘事件；焦点在列表容器上
   // 输出：无（改选中集/游标/打开弹窗）
-  // 预期：滚轮与鼠标操作不受影响；Shift+↑↓ 追加选择
+  // 预期：Esc 由全局 keydown 统一处理；滚轮与鼠标操作不受影响
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     const items = paginatedItems;
     if (items.length === 0) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault();
       setSelectedIds(new Set(items.map((i) => i.id)));
-      return;
-    }
-    if (e.key === 'Escape') {
-      setSelectedIds(new Set());
-      setCursorId(null);
       return;
     }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
