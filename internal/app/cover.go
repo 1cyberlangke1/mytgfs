@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
+	"mytgfs/internal/push"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/volume"
 )
@@ -48,6 +50,7 @@ type CoverProvider struct {
 	lookup   func(name string) (coverVolume, bool)
 	set      func(ctx context.Context, channelID int64, jpeg []byte) error
 	cacheDir string
+	bus      *push.Hub
 
 	mu    sync.Mutex
 	cache map[int64]coverEntry
@@ -70,6 +73,7 @@ func NewCoverProvider(a *App, lookup func(name string) (*VolumeFS, bool), cacheD
 			return a.SetChannelPhoto(ctx, channelID, 0, jpeg)
 		},
 		cacheDir: cacheDir,
+		bus:      a.Bus(),
 		cache:    make(map[int64]coverEntry),
 	}
 }
@@ -113,10 +117,12 @@ func (p *CoverProvider) CoverImage(ctx context.Context, vol string) ([]byte, str
 		return entry.jpeg, entry.version, nil
 	}
 
-	// 冷启动：磁盘上有上一张就直接用，不阻塞面板
+	// 冷启动/缓存失效后：磁盘上有上一张就直接用，不阻塞面板；
+	// 版本异步核对，外部换头像后被纠正并推送
 	if p.cacheDir != "" {
 		if data, version, found := p.diskCover(cv.chatID); found {
 			p.remember(cv.chatID, version, data)
+			p.verifyLater(cv, version)
 			return data, version, nil
 		}
 	}
@@ -154,7 +160,7 @@ func (p *CoverProvider) InvalidateVolume(vol string) {
 	p.mu.Unlock()
 }
 
-// SetCover 写入频道头像并让本卷的缓存立即失效。
+// SetCover 写入频道头像并让本卷的缓存立即换成新字节。
 func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) error {
 	v, ok := p.lookup(vol)
 	if !ok {
@@ -166,8 +172,47 @@ func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) e
 	// 独立 user 会话写成功后清掉本卷 Store 的头像元数据缓存，
 	// 使下一次 CoverVersion 立即拿到新的 photo id
 	v.store.InvalidateCover()
-	p.drop(v.chatID)
+	// 新头像立刻进缓存：现读新 photo id，面板下一次刷新马上显示新图，
+	// 不给磁盘里的旧版本文件任何复辟机会
+	version, verr := v.store.CoverVersion(ctx)
+	if verr == nil && version != "" {
+		p.remember(v.chatID, version, data)
+	} else {
+		p.drop(v.chatID)
+	}
 	return nil
+}
+
+// verifyLater 异步核对磁盘缓存的版本：外部换头像后被纠正并推送面板。
+func (p *CoverProvider) verifyLater(cv coverVolume, cachedVersion string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if !p.verifyDisk(ctx, cv, cachedVersion) {
+			return
+		}
+		if p.bus != nil {
+			p.bus.Publish(push.TopicStatus)
+		}
+	}()
+}
+
+// verifyDisk 核对缓存版本，外部换了头像就回源新字节并更新缓存。
+//
+// 输入：cv 卷信息；cachedVersion 当前缓存的版本
+// 输出：true 表示缓存被更新（需要推送面板刷新）
+// 预期：版本一致时零额外下载；Telegram 不可达时保持旧缓存
+func (p *CoverProvider) verifyDisk(ctx context.Context, cv coverVolume, cachedVersion string) bool {
+	version, err := cv.store.CoverVersion(ctx)
+	if err != nil || version == cachedVersion || version == "" {
+		return false
+	}
+	data, newVersion, err := cv.store.CoverImage(ctx)
+	if err != nil || newVersion == "" {
+		return false
+	}
+	p.remember(cv.chatID, newVersion, data)
+	return true
 }
 
 // remember 更新内存缓存并把字节落盘（版本化文件名，旧版本顺手清掉）。

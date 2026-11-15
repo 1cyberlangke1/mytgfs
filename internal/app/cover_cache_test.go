@@ -127,16 +127,13 @@ func TestCoverImageServesDiskOnColdStart(t *testing.T) {
 	}
 }
 
-// Telegram 回源失败/无头像：磁盘旧图顶上，面板不白屏
-func TestCoverImageFallsBackToDiskOnError(t *testing.T) {
+// verifyDisk 核对版本：外部换了头像就回源新字节更新缓存，并报告需要推送
+func TestVerifyDiskCorrectsStaleCache(t *testing.T) {
 	cacheDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cacheDir, "cover-42-100.jpg"), []byte("disk"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st := &countingStore{fakeCoverStore: fakeCoverStore{
-		version: "100", data: []byte("fresh"),
-		err: telegramstore.ErrNoCover,
-	}}
+	st := &countingStore{fakeCoverStore: fakeCoverStore{version: "200", data: []byte("fresh")}}
 	provider := &CoverProvider{
 		lookup: func(name string) (coverVolume, bool) {
 			if name == "demo" {
@@ -148,13 +145,36 @@ func TestCoverImageFallsBackToDiskOnError(t *testing.T) {
 		cache:    make(map[int64]coverEntry),
 	}
 
-	// 内存未命中 + 磁盘命中：直接用磁盘，不回源（即使 Telegram 说没有头像）
-	data, version, err := provider.CoverImage(t.Context(), "demo")
-	if err != nil || version != "100" || !bytes.Equal(data, []byte("disk")) {
-		t.Fatalf("磁盘兜底应生效: version=%q data=%q err=%v", version, data, err)
+	cv := coverVolume{store: st, chatID: 42}
+	if !provider.verifyDisk(t.Context(), cv, "100") {
+		t.Fatal("版本变了应回源并更新缓存")
 	}
-	if st.imageCalls != 0 {
-		t.Fatalf("磁盘命中不应回源，回源 %d 次", st.imageCalls)
+	entry, ok := provider.cache[42]
+	if !ok || entry.version != "200" || !bytes.Equal(entry.jpeg, []byte("fresh")) {
+		t.Fatalf("缓存应换成新版本: %+v", entry)
+	}
+
+	// 版本一致：零下载、零更新
+	st.version = "200"
+	if provider.verifyDisk(t.Context(), cv, "200") {
+		t.Fatal("版本一致不应触发更新")
+	}
+}
+
+// Telegram 不可达：保持旧缓存，不误更新
+func TestVerifyDiskKeepsCacheWhenOffline(t *testing.T) {
+	st := &countingStore{fakeCoverStore: fakeCoverStore{version: "100", data: []byte("old"), err: context.DeadlineExceeded}}
+	provider := &CoverProvider{
+		lookup: func(name string) (coverVolume, bool) {
+			if name == "demo" {
+				return coverVolume{store: st, chatID: 42}, true
+			}
+			return coverVolume{}, false
+		},
+		cache: make(map[int64]coverEntry),
+	}
+	if provider.verifyDisk(t.Context(), coverVolume{store: st, chatID: 42}, "100") {
+		t.Fatal("回源失败不应更新缓存")
 	}
 }
 
