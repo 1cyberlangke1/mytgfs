@@ -123,7 +123,7 @@ function urlParam(name: string): string {
 
 interface ToastMessage {
   id: string;
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'pending';
   text: string;
 }
 
@@ -320,12 +320,21 @@ export default function App() {
     setLocale(next.id);
   };
 
-  const pushToast = (text: string, type: 'success' | 'error' = 'success') => {
+  // pushToast 弹一条提示并返回 id；pending 类型不自动消失，
+  // 由调用方在操作完成/失败后 dismissToast 撤掉再换结果 toast
+  const pushToast = (text: string, type: 'success' | 'error' | 'pending' = 'success'): string => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setToasts((prev) => [...prev.slice(-3), { id, type, text }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((item) => item.id !== id));
-    }, 4500);
+    if (type !== 'pending') {
+      window.setTimeout(() => {
+        setToasts((prev) => prev.filter((item) => item.id !== id));
+      }, 4500);
+    }
+    return id;
+  };
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((item) => item.id !== id));
   };
 
   // setProblem 记录一条常驻错误；同 key 同文案不重复渲染。
@@ -880,11 +889,14 @@ export default function App() {
   };
 
   // handleRemoveDownload 只删本地副本，云端文件不受影响
-  const handleRemoveDownload = (name: string) =>
+  const handleRemoveDownload = (name: string) => {
     removeDownload(name)
       .then(() => reloadDownloads())
-      .then(() => pushToast(t.downloads.removedToast, 'success'))
+      .then(() => {
+        pushToast(t.downloads.removedToast, 'success');
+      })
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+  };
 
   // handleOpenDownloads 用系统文件管理器打开下载目录
   const handleOpenDownloads = () => {
@@ -937,28 +949,50 @@ export default function App() {
   };
 
 
-  // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表
+  // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表。
+  // 建频道要十几秒：点击确认立刻弹「正在创建」，完成/失败再换结果 toast
   const handleCreateVolume = (name: string, title: string) => {
+    const pending = pushToast(interpolate(t.volume.creating, { name }, locale), 'pending');
     createVolume(name, title)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
-      .then(() => pushToast(t.volume.createSuccess.replace('{name}', name), 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+      .then(() => {
+        dismissToast(pending);
+        pushToast(t.volume.createSuccess.replace('{name}', name), 'success');
+      })
+      .catch((err) => {
+        dismissToast(pending);
+        pushToast(errText(err), 'error');
+      });
   };
 
   // handleAttachVolume 挂载已有频道：名称 + chat_id，后端只读校验后写配置
   const handleAttachVolume = (name: string, chatId: number) => {
+    const pending = pushToast(interpolate(t.volume.attaching, { name }, locale), 'pending');
     attachVolume(name, chatId)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
-      .then(() => pushToast(t.volume.attachSuccess.replace('{name}', name), 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+      .then(() => {
+        dismissToast(pending);
+        pushToast(t.volume.attachSuccess.replace('{name}', name), 'success');
+      })
+      .catch((err) => {
+        dismissToast(pending);
+        pushToast(errText(err), 'error');
+      });
   };
 
   // handleDeleteVolume 删卷不可撤销：删频道 → 移出配置 → 删索引
   const handleDeleteVolume = (name: string) => {
+    const pending = pushToast(interpolate(t.volume.deleting, { name }, locale), 'pending');
     deleteVolume(name)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
-      .then(() => pushToast(t.volume.deleteSuccess.replace('{name}', name), 'success'))
-      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+      .then(() => {
+        dismissToast(pending);
+        pushToast(t.volume.deleteSuccess.replace('{name}', name), 'success');
+      })
+      .catch((err) => {
+        dismissToast(pending);
+        pushToast(errText(err), 'error');
+      });
   };
 
   // handleSetCover 把原图写成频道头像；成功后重取状态拿到新版本号
@@ -984,13 +1018,17 @@ export default function App() {
   };
 
   // handleRebuildVolume 触发服务端按频道历史重建索引，完成后刷新当前卷。
+  // 全量翻历史要几十秒：先弹「正在重建」，完成再换结果
   const handleRebuildVolume = async (volume: string): Promise<void> => {
+    const pending = pushToast(interpolate(t.files.rebuilding, { name: volume }, locale), 'pending');
     try {
       const res = await rebuildVolume(volume);
       await reloadState();
       await reloadFiles([volume]);
+      dismissToast(pending);
       pushToast(interpolate(t.files.rebuildDone, { count: res.files }, locale), 'success');
     } catch (err) {
+      dismissToast(pending);
       pushToast(errText(err), 'error');
     }
   };
@@ -1620,6 +1658,8 @@ export default function App() {
               <div className="flex items-center gap-2.5">
                 {toast.type === 'error' ? (
                   <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                ) : toast.type === 'pending' ? (
+                  <Loader2 className="w-4 h-4 text-sky-400 shrink-0 animate-spin" />
                 ) : (
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 )}
