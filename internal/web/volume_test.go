@@ -17,15 +17,19 @@ import (
 
 // fakeCovers 是内存版频道头像源。
 type fakeCovers struct {
-	volumes map[string]bool
-	data    []byte
-	version string
-	getErr  error
-	setErr  error
-	setData []byte
+	volumes  map[string]bool
+	data     []byte
+	version  string
+	title    string
+	getErr   error
+	titleErr error
+	setErr   error
+	setData  []byte
 }
 
 func (f *fakeCovers) HasVolume(name string) bool { return f.volumes[name] }
+
+func (f *fakeCovers) Title(context.Context, string) (string, error) { return f.title, f.titleErr }
 
 func (f *fakeCovers) CoverVersion(context.Context, string) (string, error) {
 	return f.version, nil

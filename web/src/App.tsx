@@ -30,7 +30,12 @@ import {
   TransferTask,
   VolumeInfo,
 } from './types';
-import { computeOverviewSummary, formatBytes, inferFileCategory } from './utils/fsLogic';
+import {
+  computeOverviewSummary,
+  formatBytes,
+  inferFileCategory,
+  volumeDisplayName,
+} from './utils/fsLogic';
 import { subscribePush } from './events';
 import {
   DICTIONARY,
@@ -413,6 +418,7 @@ export default function App() {
         st.volumes.map((v) => ({
           id: v.name,
           name: v.name,
+          title: v.title ?? '',
           cover: v.cover ?? '',
         }))
       );
@@ -1282,7 +1288,7 @@ export default function App() {
                         <span className="flex items-center gap-2 min-w-0">
                           <HardDrive className="w-3.5 h-3.5 shrink-0 opacity-75" />
                           <span dir="ltr" className="text-xs font-mono font-semibold truncate">
-                            {volume.name}
+                            {volumeDisplayName(volume.name, volume.title)}
                           </span>
                         </span>
                         <span

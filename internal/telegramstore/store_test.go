@@ -38,9 +38,11 @@ type fakeAPI struct {
 	fileData []byte
 	// uploadSize 是假 sendMedia 回显的 document.size，由测试在调用前设置。
 	uploadSize int64
-	resolveErr error
-	sendErr    error
-	fileErr    error
+	// channelTitle 是 ChannelsGetChannels 回显的频道标题。
+	channelTitle string
+	resolveErr   error
+	sendErr      error
+	fileErr      error
 	// fileErrOnce 只让下一次 getFile 失败，用于测试 file_reference 刷新后重试。
 	fileErrOnce error
 
@@ -70,7 +72,7 @@ func (f *fakeAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClass) (
 		return nil, f.resolveErr
 	}
 	return &tg.MessagesChats{Chats: []tg.ChatClass{
-		&tg.Channel{ID: 42, AccessHash: 777},
+		&tg.Channel{ID: 42, AccessHash: 777, Title: f.channelTitle},
 	}}, nil
 }
 

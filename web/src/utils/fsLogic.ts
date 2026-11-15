@@ -340,6 +340,18 @@ export function apportionPercents(parts: number[]): number[] {
 }
 
 /**
+ * Builds the label shown for a volume: "title (name)" when the Telegram channel
+ * has a title, otherwise just the volume name.
+ */
+export function volumeDisplayName(name: string, title?: string): string {
+  const t = (title ?? '').trim();
+  if (!t || t === name) {
+    return name;
+  }
+  return `${t} (${name})`;
+}
+
+/**
  * Aggregates per-volume totals for the overview cards.
  */
 export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[]) {

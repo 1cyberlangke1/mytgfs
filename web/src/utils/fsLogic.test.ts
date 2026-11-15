@@ -15,6 +15,7 @@ import {
   searchFilesRecursively,
   sortFileItems,
   validateAndPlanUpload,
+  volumeDisplayName,
 } from './fsLogic';
 
 // 构造 FileItem 的最小工厂：只填必填字段，可选字段按需覆盖
@@ -267,5 +268,21 @@ describe('computeOverviewSummary', () => {
     expect(empty?.fileCount).toBe(0);
     expect(empty?.sharePct).toBe(0);
     expect(s.perVolume.reduce((acc, p) => acc + p.sharePct, 0)).toBe(100);
+  });
+});
+
+describe('volumeDisplayName', () => {
+  it('有频道标题时显示「标题 (卷名)」', () => {
+    expect(volumeDisplayName('demo', '我的盘')).toBe('我的盘 (demo)');
+  });
+
+  it('没有标题时只显示卷名', () => {
+    expect(volumeDisplayName('demo')).toBe('demo');
+    expect(volumeDisplayName('demo', '')).toBe('demo');
+    expect(volumeDisplayName('demo', '   ')).toBe('demo');
+  });
+
+  it('标题与卷名相同时不重复显示', () => {
+    expect(volumeDisplayName('demo', 'demo')).toBe('demo');
   });
 });

@@ -19,7 +19,7 @@ import {
   TransferTask,
   VolumeInfo,
 } from '../types';
-import { computeOverviewSummary, formatBytes } from '../utils/fsLogic';
+import { computeOverviewSummary, formatBytes, volumeDisplayName } from '../utils/fsLogic';
 import { coverURL } from '../api';
 import {
   Translations,
@@ -248,7 +248,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                       <div className="absolute bottom-3 inset-x-4 flex items-end justify-between gap-2">
                         <div className="min-w-0">
                           <h3 dir="ltr" className="text-base font-semibold text-white font-mono truncate">
-                            {volume.name}
+                            {volumeDisplayName(volume.name, volume.title)}
                           </h3>
                         </div>
                         <span dir="ltr" className="text-xs font-mono font-semibold tabular-nums text-white/90 shrink-0">

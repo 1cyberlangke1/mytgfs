@@ -20,6 +20,8 @@ export interface ApiFile {
 export interface ApiVolume {
   id: string;
   name: string;
+  /** 频道标题（Telegram 侧显示名）；空表示读不到，显示回落到 name */
+  title?: string;
   entries: number;
   used: number;
   /** 频道头像版本（photo id）；空串表示没有头像 */

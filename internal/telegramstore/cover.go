@@ -91,17 +91,36 @@ func (s *Store) coverImage(ctx context.Context, force bool) ([]byte, string, err
 	return buf, strconv.FormatInt(id, 10), nil
 }
 
-// InvalidateCover 让头像元数据缓存立即失效。
+// Title 返回频道标题。
+//
+// 输入：ctx
+// 输出：Telegram 侧显示名；频道不可见时返回错误
+// 预期：与头像共用 resolve 的频道缓存，频道更新（pts 变化）后由
+// InvalidateCover 一并失效，下次读取即回源
+func (s *Store) Title(ctx context.Context) (string, error) {
+	ch, err := s.resolve(ctx)
+	if err != nil {
+		return "", err
+	}
+	return ch.Title, nil
+}
+
+// InvalidateCover 让头像与频道元数据缓存立即失效。
 //
 // 输入：无
 // 输出：无
-// 预期：外部会话写头像后调用，下一次 CoverVersion/CoverImage 强制回源
+// 预期：外部会话写头像、或同步循环看到频道更新（标题/头像/权限）后调用；
+// 下一次 CoverVersion/CoverImage/Title 强制回源
 func (s *Store) InvalidateCover() {
 	s.photoMu.Lock()
 	s.photoOK = false
 	s.photo = nil
 	s.photoAt = time.Time{}
 	s.photoMu.Unlock()
+	// 频道标题也算元数据：外部改了频道名，面板要跟着变
+	s.mu.Lock()
+	s.channel = nil
+	s.mu.Unlock()
 }
 
 // coverPhoto 返回头像 id 与元数据，带 TTL 缓存。

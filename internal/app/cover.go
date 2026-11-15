@@ -25,6 +25,8 @@ type CoverStore interface {
 	CoverVersion(ctx context.Context) (string, error)
 	CoverImage(ctx context.Context) ([]byte, string, error)
 	InvalidateCover()
+	// Title 返回频道标题，作为面板上的显示名
+	Title(ctx context.Context) (string, error)
 }
 
 // coverVolume 是封面路由需要的最小卷信息。
@@ -97,6 +99,19 @@ func (p *CoverProvider) CoverVersion(ctx context.Context, vol string) (string, e
 		return entry.version, nil
 	}
 	return v.store.CoverVersion(ctx)
+}
+
+// Title 返回频道标题，面板用它作为卷的显示名。
+//
+// 输入：vol 卷名
+// 输出：标题；卷未挂载或为空时返回空串
+// 预期：只读元数据，缓存由 Store 负责；失败按空标题处理，面板回落到卷名
+func (p *CoverProvider) Title(ctx context.Context, vol string) (string, error) {
+	v, ok := p.lookup(vol)
+	if !ok {
+		return "", nil
+	}
+	return v.store.Title(ctx)
 }
 
 // CoverImage 返回频道头像字节；没有头像时返回空结果而不是错误。

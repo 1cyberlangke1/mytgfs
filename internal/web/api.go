@@ -166,11 +166,12 @@ func urlQueryEscape(s string) string {
 	return b.String()
 }
 
-// volumeState 是前端需要的卷摘要。
 // volumeState 是面板展示一卷所需的最小信息。
 type volumeState struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Title 是频道标题（Telegram 侧显示名）；空表示读不到，面板回落到 Name
+	Title   string `json:"title"`
 	Entries int64  `json:"entries"`
 	Used    int64  `json:"used"`
 	// Cover 是频道头像版本（photo id）；空串表示没有头像
@@ -192,14 +193,20 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 					files, used, _ = api.stats(name)
 				}
 				coverVer := ""
+				title := ""
 				if opts.Cover != nil {
 					if v, cerr := opts.Cover.CoverVersion(r.Context(), name); cerr == nil {
 						coverVer = v
+					}
+					// 标题读不到不算错误：面板回落到卷名，不能让整页状态失败
+					if v, terr := opts.Cover.Title(r.Context(), name); terr == nil {
+						title = v
 					}
 				}
 				vols = append(vols, volumeState{
 					ID:      name,
 					Name:    name,
+					Title:   title,
 					Entries: files,
 					Used:    used,
 					Cover:   coverVer,

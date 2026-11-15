@@ -40,6 +40,7 @@ import {
   formatBytes,
   getItemFullPath,
   searchFilesRecursively,
+  volumeDisplayName,
   sortFileItems,
 } from '../utils/fsLogic';
 import {
@@ -427,7 +428,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               value={v.id}
               className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
             >
-              {v.name}
+              {volumeDisplayName(v.name, v.title)}
             </option>
           ))}
         </Select>

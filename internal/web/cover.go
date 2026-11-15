@@ -19,18 +19,20 @@ import (
 	"mytgfs/internal/i18n"
 )
 
-// CoverSource 是频道头像的读写入口。
+// CoverSource 是频道头像与标题的读写入口。
 //
 // 输入/输出：
 //   - HasVolume 判断卷是否还挂着
 //   - CoverVersion 返回头像版本（photo id，无头像为空串）
 //   - CoverImage 返回头像字节与版本
 //   - SetCover 写入一张已归一的正方形 JPEG
+//   - Title 返回频道标题（面板显示名）
 type CoverSource interface {
 	HasVolume(name string) bool
 	CoverVersion(ctx context.Context, volume string) (string, error)
 	CoverImage(ctx context.Context, volume string) ([]byte, string, error)
 	SetCover(ctx context.Context, volume string, data []byte) error
+	Title(ctx context.Context, volume string) (string, error)
 }
 
 // maxCoverUpload 是面板上传头像的原始图片上限。

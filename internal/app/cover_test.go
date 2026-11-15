@@ -14,6 +14,7 @@ import (
 type fakeCoverStore struct {
 	version     string
 	data        []byte
+	title       string
 	err         error
 	invalidated bool
 }
@@ -23,6 +24,8 @@ func (f *fakeCoverStore) CoverVersion(context.Context) (string, error) { return 
 func (f *fakeCoverStore) CoverImage(context.Context) ([]byte, string, error) {
 	return f.data, f.version, f.err
 }
+
+func (f *fakeCoverStore) Title(context.Context) (string, error) { return f.title, f.err }
 
 func (f *fakeCoverStore) InvalidateCover() { f.invalidated = true }
 
@@ -106,5 +109,18 @@ func TestCoverProviderSetError(t *testing.T) {
 	p := newFakeProvider(&fakeCoverStore{}, func(context.Context, int64, []byte) error { return boom })
 	if err := p.SetCover(t.Context(), "demo", []byte("x")); !errors.Is(err, boom) {
 		t.Fatalf("SetCover err = %v", err)
+	}
+}
+
+// TestCoverProviderTitle 标题按卷名分发；未挂载的卷返回空标题而不是报错。
+func TestCoverProviderTitle(t *testing.T) {
+	p := newFakeProvider(&fakeCoverStore{title: "我的盘"}, nil)
+	got, err := p.Title(t.Context(), "demo")
+	if err != nil || got != "我的盘" {
+		t.Fatalf("Title = %q err=%v", got, err)
+	}
+	got, err = p.Title(t.Context(), "gone")
+	if err != nil || got != "" {
+		t.Fatalf("未挂载卷 Title = %q err=%v，期望空串无错", got, err)
 	}
 }

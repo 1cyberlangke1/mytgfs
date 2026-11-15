@@ -25,6 +25,8 @@ export interface FileItem {
 export interface VolumeInfo {
   id: string;
   name: string;
+  /** 频道标题（Telegram 侧显示名）；空表示读不到，显示回落到 name */
+  title?: string;
   /** 频道头像版本（photo id）；空串表示频道没有头像 */
   cover?: string;
 }
