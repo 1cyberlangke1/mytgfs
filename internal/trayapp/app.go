@@ -9,18 +9,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"net/http"
-	"net/url"
-	"os"
-	"runtime"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-
 	"mytgfs/internal/app"
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/autostart"
@@ -43,6 +33,13 @@ import (
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
+	"net/http"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Options 是托盘启动参数。
@@ -57,125 +54,7 @@ type Options struct {
 // 输入：name 卷名；used 已用字节
 // 输出：形如 "demo · 159.1 MB"
 // 预期：托盘一眼看清是哪个盘、占多少
-func volumeMenuLabel(name string, used int64) string {
-	return fmt.Sprintf("%s · %s", name, humanBytes(used))
-}
 
-// volumeURL 返回面板按卷快速打开的地址。
-//
-// 输入：name 卷名
-// 输出：带 tab/vol 查询参数的站内路径
-// 预期：前端首屏读参数直接切到该卷文件页；卷名做 URL 转义
-func volumeURL(name string) string {
-	return "/?tab=files&vol=" + url.QueryEscape(name)
-}
-
-// SyncInterval 把配置里的秒数换算成自动同步间隔。
-//
-// 输入：seconds 配置值
-// 输出：同步间隔；0 表示关闭
-// 预期：0 用默认 15 秒，负数关闭，正数按秒
-func SyncInterval(seconds int) time.Duration {
-	switch {
-	case seconds < 0:
-		return 0
-	case seconds == 0:
-		return config.DefaultSyncSeconds * time.Second
-	default:
-		return time.Duration(seconds) * time.Second
-	}
-}
-
-// StatusNotifier 把自动同步的变更转成 status 事件，面板据此刷新。
-//
-// 输入：events 推送通道；nil 时返回 nil
-// 输出：AutoSyncWhile 的 notify 回调
-// 预期：调用方只在真有变化时回调；回调到达就推送，包括只有封面变化（空列表）
-func StatusNotifier(events push.Events) func(changed, removed []string) {
-	if events == nil {
-		return nil
-	}
-	return func(changed, removed []string) {
-		events.Publish(push.TopicStatus)
-	}
-}
-
-// SyncEnabled 返回一个读取配置文件的自动同步判断。
-//
-// 输入：cfgPath 配置文件；fallback 读失败时沿用的启动状态
-// 输出：每次调用都重新读取 mount.auto_sync / mount.sync_seconds
-// 预期：面板改设置后下一轮同步即生效，不需要重启桌面壳
-func SyncEnabled(cfgPath string, fallback bool) func() bool {
-	return func() bool {
-		cur, err := config.Load(cfgPath)
-		if err != nil {
-			return fallback
-		}
-		return cur.Mount.SyncOn()
-	}
-}
-
-// coverInvalidator 是可失效头像元数据缓存的节点源（*telegramstore.Store 实现）。
-type coverInvalidator interface {
-	InvalidateCover()
-}
-
-// AutoSyncWhile 周期性把频道差异应用进索引并通知挂载点刷新。
-// 每轮先问 enabled：返回 false 时跳过本轮（只等下一个 tick）。
-// onPtsMoved 在本轮 pts 有推进时调用（含头像/权限等非文件更新），
-// 装配根用它失效头像缓存——事件驱动，不额外轮询 Telegram。
-func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool, onPtsMoved func()) {
-	tick := time.Tick(interval)
-	syncOnce := func() (tgsync.ChannelSyncResult, error) {
-		if mu != nil {
-			mu.Lock()
-			defer mu.Unlock()
-		}
-		return tgsync.SyncChannel(ctx, idx, d, st, 100)
-	}
-	for {
-		if enabled == nil || enabled() {
-			res, err := syncOnce()
-			if ctx.Err() != nil {
-				return
-			}
-			switch {
-			case err != nil:
-				logging.Warn("log.autosync_failed", err)
-			default:
-				if (res.Pulled > 0 || res.Deleted > 0) && notify != nil {
-					notify(res.Changed, res.Removed)
-				}
-				if res.PtsMoved {
-					// 频道有任何更新（含换头像）：头像缓存失效重建，
-					// 与第三方客户端一致靠更新流失效，不轮询
-					if cw, ok := st.(coverInvalidator); ok {
-						cw.InvalidateCover()
-					}
-					if onPtsMoved != nil {
-						onPtsMoved()
-					}
-					if notify != nil {
-						notify(nil, nil)
-					}
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick:
-		}
-	}
-}
-
-// Run 运行托盘主管进程，阻塞到「退出」。
-//
-// 输入：opts 启动参数
-// 输出：只有启动阶段失败才返回 error；正常退出返回 nil
-// 预期：网络不可用时托盘与挂载保持存在，客户端自动重连；
-//
-//	Web 面板只在菜单「打开面板」时启动，「关闭面板」立即停止
 func Run(opts Options) error {
 	cfgPath := cmp.Or(opts.ConfigPath, "config.toml")
 
@@ -984,36 +863,3 @@ func Run(opts Options) error {
 // 输入：n 字节数
 // 输出：如 "159.1 MB"
 // 预期：1024 进制，与面板的占用显示一致
-func humanBytes(n int64) string {
-	units := []string{"B", "KB", "MB", "GB", "TB"}
-	f := float64(n)
-	i := 0
-	for f >= 1024 && i < len(units)-1 {
-		f /= 1024
-		i++
-	}
-	if i == 0 {
-		return fmt.Sprintf("%d %s", n, units[i])
-	}
-	return fmt.Sprintf("%.1f %s", f, units[i])
-}
-
-// stateCode 把托盘状态语言包键映射成机器可读代码。
-//
-// 输入：key 形如 tray.state.connected
-// 输出：online / connecting / reconnecting / auth_lost / starting
-// 预期：面板按代码决定状态条颜色，不再匹配翻译后的文本
-func stateCode(key string) string {
-	switch key {
-	case "tray.state.connected":
-		return "online"
-	case "tray.state.connecting":
-		return "connecting"
-	case "tray.state.reconnecting":
-		return "reconnecting"
-	case "tray.state.auth_lost":
-		return "auth_lost"
-	default:
-		return "starting"
-	}
-}
