@@ -234,7 +234,7 @@
     "mount.sync_seconds": "0 用默认 15 秒，负数关闭自动同步",
     "mount.download_parallel": "单条连接吃不满带宽，上传下载共用连接池，8 左右较优",
     "mount.upload_parallel": "慢网络调小可减少 FLOOD_WAIT",
-    "mount.read_chunk_mb": "越大请求越少，但对慢网络不友好",
+    "mount.read_chunk_mb": "越大请求越少，但对慢网络不友好；改完对新打开的卷生效",
     "log.level": "debug 会记录每次回源，排查问题时再开",
     "downloads.dir": "默认 data/downloads；相对路径按配置文件目录解析，也支持绝对路径"
   },

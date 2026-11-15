@@ -12,6 +12,7 @@ import (
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
+	"mytgfs/internal/config"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/push"
 )
@@ -84,6 +85,12 @@ type Options struct {
 	Rebuild RebuildFunc
 	// VideoThumb 取视频缩略图；nil 时 /api/vthumb 返回 501
 	VideoThumb VideoThumbFunc
+	// MutateConfig 是配置变更的唯一入口（写盘 + 同步内存副本）；
+	// nil 时设置保存退化为直接写盘
+	MutateConfig func(mutate func(path string) error) error
+	// OnSettingsChanged 设置保存成功后回调，参数为现读的最新配置；
+	// 装配根用它把并发数、日志级别等立即应用到运行中的卷；nil 时跳过
+	OnSettingsChanged func(config.Config)
 }
 
 // NewHandler 返回面板的完整路由，供桌面壳直接挂在 webview 上。
@@ -127,7 +134,14 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/files/move", handleAPIMove(api))
 	rt.route("/api/files/remove", handleAPIRemove(api))
 	rt.route("/api/file", handleAPIFile(api))
-	dl := newDownloadStore(resolveDownloadsDir(configPath, opts.DownloadsDir), func(v string) (fm.Files, bool) {
+	dl := newDownloadStore(func() string {
+		// 下载目录每次现取：面板改 downloads.dir 立即生效，不需要重启
+		cur, err := config.Load(configPath)
+		if err == nil && cur.Downloads.Dir != "" {
+			return resolveDownloadsDir(configPath, cur.Downloads.Dir)
+		}
+		return resolveDownloadsDir(configPath, opts.DownloadsDir)
+	}, func(v string) (fm.Files, bool) {
 		if api == nil {
 			return nil, false
 		}
@@ -151,7 +165,7 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/login/user/start", handleAPIUserStart(opts))
 	rt.route("/api/login/user/code", handleAPIUserFinish(opts))
 	rt.route("/api/identity", handleAPIIdentity(opts))
-	rt.route("/api/settings", handleAPISettings(configPath))
+	rt.route("/api/settings", handleAPISettings(configPath, opts))
 	rt.route("/api/autostart", handleAPIAutostart(opts))
 	rt.route("/api/sync", handleAPISync(opts))
 	rt.route("/api/queue", handleAPIQueue(opts))

@@ -33,7 +33,7 @@ func TestSettingsAPIUsesRuntimeDefaults(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handleAPISettings(path)(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	handleAPISettings(path, Options{})(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -69,7 +69,7 @@ func TestSettingsAPIRejectsUnknownKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := strings.NewReader(`{"values":{"nope.key":"1"}}`)
 	rec := httptest.NewRecorder()
-	handleAPISettings(path)(rec, httptest.NewRequest(http.MethodPut, "/api/settings", body))
+	handleAPISettings(path, Options{})(rec, httptest.NewRequest(http.MethodPut, "/api/settings", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, 期望 400", rec.Code)
 	}

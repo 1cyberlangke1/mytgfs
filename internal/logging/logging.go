@@ -54,6 +54,32 @@ type Config struct {
 	MaxAgeDays int    // 保留天数
 }
 
+// logLevel 是全局级别开关：面板改 log.level 后 SetLevel 立即生效，不需要重启
+var logLevel slog.LevelVar
+
+// ParseLevel 把级别名换成 slog 级别；未知名字回落 Info。
+func ParseLevel(name string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// SetLevel 运行期切换全局日志级别。
+//
+// 输入：级别名 debug/info/warn/error
+// 输出：无
+// 预期：立即影响后续所有日志输出；设置保存后由装配根调用
+func SetLevel(name string) {
+	logLevel.Set(ParseLevel(name))
+}
+
 // Setup 初始化全局 slog 与轮转写入器。
 //
 // 输入：cfg 日志配置（零值用默认）
@@ -81,19 +107,8 @@ func Setup(cfg Config) (*slog.Logger, func() error) {
 		Compress:   true,
 	}
 
-	var level slog.Level
-	switch strings.ToLower(strings.TrimSpace(cfg.Level)) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
-	logger := slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
+	logLevel.Set(ParseLevel(cfg.Level))
+	logger := slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: &logLevel}))
 	slog.SetDefault(logger)
 	return logger, w.Close
 }

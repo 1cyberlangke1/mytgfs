@@ -105,9 +105,10 @@ func (t *downloadTask) clone() downloadTask {
 
 // downloadStore 管理下载目录与后台下载任务。
 //
-// open 按卷名取文件后端；dir 为空表示功能不可用（只读模式）。
+// open 按卷名取文件后端；dirFn 每次操作现取目录（空串表示功能不可用），
+// 配置里改 downloads.dir 后无需重启
 type downloadStore struct {
-	dir    string
+	dirFn  func() string
 	open   func(volume string) (fm.Files, bool)
 	events push.Events
 	base   context.Context
@@ -119,12 +120,12 @@ type downloadStore struct {
 
 // newDownloadStore 创建下载目录管理器。
 //
-// 输入：dir 下载目录；open 卷名到文件后端的解析函数；events 进度推送通道（可为 nil）
+// 输入：dirFn 每次操作现取下载目录；open 卷名到文件后端的解析函数；events 进度推送通道（可为 nil）
 // 输出：*downloadStore
 // 预期：只保存参数，不创建目录；首次写入或打开时才建目录
-func newDownloadStore(dir string, open func(string) (fm.Files, bool), events push.Events) *downloadStore {
+func newDownloadStore(dirFn func() string, open func(string) (fm.Files, bool), events push.Events) *downloadStore {
 	return &downloadStore{
-		dir: dir, open: open, events: events,
+		dirFn: dirFn, open: open, events: events,
 		base:  context.Background(),
 		tasks: make(map[string]*downloadTask),
 	}
@@ -136,13 +137,17 @@ func newDownloadStore(dir string, open func(string) (fm.Files, bool), events pus
 // 输出：绝对路径；目录为空时返回空串
 // 预期：仅用于界面展示与打开目录，不负责建目录
 func (d *downloadStore) Dir() string {
-	if d == nil || d.dir == "" {
+	if d == nil || d.dirFn == nil {
 		return ""
 	}
-	if abs, err := filepath.Abs(d.dir); err == nil {
+	dir := d.dirFn()
+	if dir == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
 		return abs
 	}
-	return d.dir
+	return dir
 }
 
 // notify 推一次「状态变了」。
@@ -165,7 +170,11 @@ func (d *downloadStore) notify() {
 //   - 只做参数校验与临时文件创建，不复制内容
 //   - 同名文件在完成时才决定最终名，重名加 " (n)" 后缀
 func (d *downloadStore) Start(vol, p string) (downloadTask, error) {
-	if d == nil || d.dir == "" || d.open == nil {
+	if d == nil || d.dirFn == nil || d.open == nil {
+		return downloadTask{}, errDownloadUnavailable
+	}
+	dir := d.dirFn()
+	if dir == "" {
 		return downloadTask{}, errDownloadUnavailable
 	}
 	if !strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
@@ -187,10 +196,10 @@ func (d *downloadStore) Start(vol, p string) (downloadTask, error) {
 	if info.IsDir() {
 		return downloadTask{}, errDownloadPath
 	}
-	if err := os.MkdirAll(d.dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return downloadTask{}, err
 	}
-	tmp, err := os.CreateTemp(d.dir, ".mytgfs-dl-*")
+	tmp, err := os.CreateTemp(dir, ".mytgfs-dl-*")
 	if err != nil {
 		return downloadTask{}, err
 	}
@@ -450,10 +459,11 @@ func (d *downloadStore) finalize(t *downloadTask) {
 // 输出：文件条目；目录不存在时返回空列表
 // 预期：跳过子目录与临时文件（以 . 开头）
 func (d *downloadStore) List() ([]downloadItem, error) {
-	if d == nil || d.dir == "" {
+	if d == nil || d.dirFn == nil {
 		return nil, errDownloadUnavailable
 	}
-	entries, err := os.ReadDir(d.dir)
+	dir := d.dirFn()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []downloadItem{}, nil
@@ -485,13 +495,13 @@ func (d *downloadStore) List() ([]downloadItem, error) {
 // 输出：error；文件名含分隔符或 .. 时拒绝
 // 预期：只删本地副本，云端内容不受影响
 func (d *downloadStore) Remove(name string) error {
-	if d == nil || d.dir == "" {
+	if d == nil || d.dirFn == nil {
 		return errDownloadUnavailable
 	}
 	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
 		return errDownloadName
 	}
-	return os.Remove(filepath.Join(d.dir, name))
+	return os.Remove(filepath.Join(d.dirFn(), name))
 }
 
 // Open 用系统文件管理器打开下载目录。
@@ -500,10 +510,10 @@ func (d *downloadStore) Remove(name string) error {
 // 输出：error；目录不存在时先创建
 // 预期：Windows 资源管理器 / macOS Finder / Linux 文件管理器
 func (d *downloadStore) Open() error {
-	if d == nil || d.dir == "" {
+	if d == nil || d.dirFn == nil {
 		return errDownloadUnavailable
 	}
-	if err := os.MkdirAll(d.dir, 0o700); err != nil {
+	if err := os.MkdirAll(d.dirFn(), 0o700); err != nil {
 		return err
 	}
 	return openPath(d.Dir())
@@ -515,14 +525,15 @@ func (d *downloadStore) Open() error {
 // 输出：完整路径；已存在时在扩展名前插入 " (n)"
 // 预期：保留扩展名，重名后缀从 1 递增，不覆盖已有文件
 func (d *downloadStore) uniquePath(name string) string {
-	target := filepath.Join(d.dir, name)
+	dir := d.dirFn()
+	target := filepath.Join(dir, name)
 	if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
 		return target
 	}
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
 	for i := 1; ; i++ {
-		cand := filepath.Join(d.dir, base+" ("+strconv.Itoa(i)+")"+ext)
+		cand := filepath.Join(dir, base+" ("+strconv.Itoa(i)+")"+ext)
 		if _, err := os.Stat(cand); errors.Is(err, os.ErrNotExist) {
 			return cand
 		}
@@ -558,13 +569,13 @@ func safeDownloadName(name string) string {
 // 输出：绝对路径
 // 预期：含分隔符/.. 的名字一律拒绝，避免越出下载目录
 func (d *downloadStore) Path(name string) (string, error) {
-	if d == nil || d.dir == "" {
+	if d == nil || d.dirFn == nil {
 		return "", errDownloadUnavailable
 	}
 	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
 		return "", errDownloadName
 	}
-	p := filepath.Join(d.dir, name)
+	p := filepath.Join(d.dirFn(), name)
 	info, err := os.Stat(p)
 	if err != nil {
 		return "", err
@@ -650,7 +661,7 @@ func handleAPIDownloadOpenFile(dl *downloadStore) http.HandlerFunc {
 // 预期：卷后端或目录未配置时返回 501；参数不合法 400
 func handleAPIDownloads(dl *downloadStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if dl == nil || dl.dir == "" {
+		if dl == nil || dl.dirFn == nil {
 			replyJSONError(w, http.StatusNotImplemented, i18n.T("err.downloads_unavailable"))
 			return
 		}
@@ -708,7 +719,7 @@ func handleAPIDownloadTask(dl *downloadStore) http.HandlerFunc {
 			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
 			return
 		}
-		if dl == nil || dl.dir == "" {
+		if dl == nil || dl.dirFn == nil {
 			replyJSONError(w, http.StatusNotImplemented, i18n.T("err.downloads_unavailable"))
 			return
 		}

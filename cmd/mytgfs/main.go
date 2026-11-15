@@ -527,6 +527,15 @@ func runWeb(args []string) {
 			Volumes: func() []string {
 				return reg.Names()
 			},
+			// 设置保存后立即应用到运行中的卷：并发数、日志级别即时生效
+			OnSettingsChanged: func(cur config.Config) {
+				for _, wv := range reg.Snapshot() {
+					wv.vf.Store.SetParallel(cur.Mount.DownloadConnections())
+					wv.vf.Store.SetUploadParallel(cur.Mount.UploadParallelism())
+				}
+				logging.SetLevel(cur.Log.Level)
+				pushHub.Publish(push.TopicStatus)
+			},
 			// 建卷需要 user 会话：临时开一条，建完就关
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
 				// 重名在建频道之前挡掉，避免建出孤儿频道

@@ -484,7 +484,9 @@ func handleAPIFile(api *filesAPI) http.HandlerFunc {
 // 预期：
 //   - schema 直接来自 config.Schema()，面板不需要手写键表
 //   - 缺省键不返回；PUT 只改提交的键，未知键返回 400
-func handleAPISettings(configPath string) http.HandlerFunc {
+//   - PUT 经 opts.MutateConfig 收敛：写盘与内存副本一步完成；
+//     成功后触发 opts.OnSettingsChanged，让并发数、日志级别、下载目录立即生效
+func handleAPISettings(configPath string, opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -518,10 +520,28 @@ func handleAPISettings(configPath string) http.HandlerFunc {
 			if !decodeBody(w, r, &in) {
 				return
 			}
-			for k, v := range in.Values {
-				if err := config.SetKey(configPath, k, valueString(v)); err != nil {
+			// 走唯一写入口：写盘与内存副本同步，避免 App 按旧配置继续跑
+			mutate := func(p string) error {
+				for k, v := range in.Values {
+					if err := config.SetKey(p, k, valueString(v)); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			if opts.MutateConfig != nil {
+				if err := opts.MutateConfig(mutate); err != nil {
 					replyJSONError(w, http.StatusBadRequest, err.Error())
 					return
+				}
+			} else if err := mutate(configPath); err != nil {
+				replyJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// 现读最新配置广播出去：装配根借此即时应用并发数/日志级别并推送
+			if opts.OnSettingsChanged != nil {
+				if cur, err := config.Load(configPath); err == nil {
+					opts.OnSettingsChanged(cur)
 				}
 			}
 			replyJSON(w, http.StatusOK, map[string]any{"saved": true})

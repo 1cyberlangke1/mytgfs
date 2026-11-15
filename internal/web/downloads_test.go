@@ -69,7 +69,7 @@ func newDownloadFixture(t *testing.T) (*downloadStore, string) {
 	}
 	ff := newFakeFiles()
 	dir := t.TempDir()
-	dl := newDownloadStore(dir, func(string) (fm.Files, bool) { return openFiles{ff, src}, true }, nil)
+	dl := newDownloadStore(func() string { return dir }, func(string) (fm.Files, bool) { return openFiles{ff, src}, true }, nil)
 	return dl, dir
 }
 
@@ -82,7 +82,7 @@ func waitDownloaded(t *testing.T, dl *downloadStore, name string) {
 			if name == "" {
 				return
 			}
-			if _, err := os.Stat(filepath.Join(dl.dir, name)); err == nil {
+			if _, err := os.Stat(filepath.Join(dl.dirFn(), name)); err == nil {
 				return
 			}
 		}
@@ -160,7 +160,7 @@ func TestDownloadBadInput(t *testing.T) {
 
 // TestDownloadUnknownVolume 卷名不存在时给出可区分错误。
 func TestDownloadUnknownVolume(t *testing.T) {
-	dl := newDownloadStore(t.TempDir(), func(string) (fm.Files, bool) { return nil, false }, nil)
+	dl := newDownloadStore(func() string { return t.TempDir() }, func(string) (fm.Files, bool) { return nil, false }, nil)
 	if _, err := dl.Start("nope", "/a.txt"); err != errDownloadVolume {
 		t.Fatalf("err = %v", err)
 	}
@@ -197,7 +197,7 @@ func TestDownloadPauseResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	dl := newDownloadStore(dir, func(string) (fm.Files, bool) {
+	dl := newDownloadStore(func() string { return dir }, func(string) (fm.Files, bool) {
 		return openFiles{&fakeFiles{}, src}, true
 	}, nil)
 	// slow 模式由 ctxFile 决定；这里换一个会注入 slow 的 opener
@@ -316,7 +316,7 @@ func TestDownloadTaskAPI(t *testing.T) {
 
 // TestDownloadsAPIUnavailable 无卷后端时返回 501，不假装成功。
 func TestDownloadsAPIUnavailable(t *testing.T) {
-	dl := newDownloadStore(t.TempDir(), nil, nil)
+	dl := newDownloadStore(func() string { return t.TempDir() }, nil, nil)
 	rec := httptest.NewRecorder()
 	body := strings.NewReader(`{"vol":"demo","path":"/a.txt"}`)
 	handleAPIDownloads(dl)(rec, httptest.NewRequest(http.MethodPost, "/api/downloads", body))
@@ -327,7 +327,7 @@ func TestDownloadsAPIUnavailable(t *testing.T) {
 
 // TestDownloadsOpenMethod 打开目录只接受 POST；GET 不触发系统调用。
 func TestDownloadsOpenMethod(t *testing.T) {
-	dl := newDownloadStore(t.TempDir(), nil, nil)
+	dl := newDownloadStore(func() string { return t.TempDir() }, nil, nil)
 	rec := httptest.NewRecorder()
 	handleAPIDownloadsOpen(dl)(rec, httptest.NewRequest(http.MethodGet, "/api/downloads/open", nil))
 	if rec.Code != http.StatusMethodNotAllowed {

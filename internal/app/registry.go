@@ -7,7 +7,10 @@ package app
 // 必须走 Take/TakeFunc：先摘除拿到句柄，再等资源关闭与删盘，
 // 结构上保证「删完即列表同步」。
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // VolumeRegistry 泛型注册表，T 为卷的运行时句柄类型。
 type VolumeRegistry[T any] struct {
@@ -107,9 +110,7 @@ func (r *VolumeRegistry[T]) SnapshotMap() map[string]T {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]T, len(r.vols))
-	for k, v := range r.vols {
-		out[k] = v
-	}
+	maps.Copy(out, r.vols)
 	return out
 }
 
