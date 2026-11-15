@@ -60,7 +60,8 @@
   "header": {
     "quickUpload": "Upload",
     "themeLight": "Light",
-    "themeDark": "Dark"
+    "themeDark": "Dark",
+    "themeSystem": "System"
   },
   "categories": {
     "folder": "Folder",

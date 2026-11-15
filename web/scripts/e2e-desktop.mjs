@@ -158,6 +158,67 @@ try {
     `dir=${downloads?.dir ?? '?'}`
   );
 
+  // 5. 主题：跟随系统时 <html>.dark 由 prefers-color-scheme 决定
+  //
+  // 输入：CDP 模拟系统深浅色 + 写入三档偏好
+  // 输出：PASS/FAIL
+  // 预期：system 跟随模拟的系统设置（含切换即时生效），light/dark 强制生效
+  async function emulateDark(dark) {
+    await rpc('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }],
+    });
+  }
+
+  async function setTheme(value) {
+    await evaluate(`localStorage.setItem('mytgfs_theme_v1', ${JSON.stringify(JSON.stringify(value))})`);
+    // 导航会销毁执行上下文，reload 自身的返回可能失败，忽略
+    await evaluate('location.reload()').catch(() => {});
+    for (let i = 0; i < 60; i++) {
+      try {
+        const ready = await evaluate(
+          `document.readyState === 'complete' && (document.querySelector('#root')?.children.length ?? 0) > 0`
+        );
+        if (ready) return true;
+      } catch {}
+      await sleep(250);
+    }
+    return false;
+  }
+
+  async function isDark() {
+    return await evaluate(`document.documentElement.classList.contains('dark')`);
+  }
+
+  await emulateDark(true);
+  const originalTheme = await evaluate(`localStorage.getItem('mytgfs_theme_v1')`);
+  const loaded = await setTheme('system');
+  check('跟随系统（系统深色）渲染深色', loaded && (await isDark()) === true);
+
+  await setTheme('light');
+  check('强制浅色忽略系统深色', (await isDark()) === false);
+
+  await setTheme('dark');
+  check('强制深色渲染深色', (await isDark()) === true);
+
+  // 跟随系统下切换系统设置：不刷新页面也要跟着变
+  await setTheme('system');
+  await emulateDark(false);
+  await sleep(500);
+  check('系统切浅色后无需刷新即变浅色', (await isDark()) === false);
+  await emulateDark(true);
+  await sleep(500);
+  check('系统切深色后无需刷新即变深色', (await isDark()) === true);
+
+  // 还原成默认：跟随系统 + 取消模拟
+  await rpc('Emulation.setEmulatedMedia', { features: [] });
+  if (originalTheme) {
+    await evaluate(
+      `localStorage.setItem('mytgfs_theme_v1', ${JSON.stringify(originalTheme)})`
+    );
+  } else {
+    await evaluate(`localStorage.removeItem('mytgfs_theme_v1')`);
+  }
+
   console.log('只读端到端结束：未向 Telegram 写入任何数据');
 } catch (e) {
   console.error('E2E_ERROR', e.message);

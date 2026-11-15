@@ -9,6 +9,21 @@
     <meta property="og:description" content="Single-user local Web management console for Telegram private channel file volumes with chunked resumable uploads." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      // 首屏前先定深浅色：跟随系统时读 prefers-color-scheme，
+      // 免得深色系统上先闪一帧浅色再被 React 纠正
+      (function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem('mytgfs_theme_v1') || '"system"');
+          var dark =
+            stored === 'dark' ||
+            (stored !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          // 隐私模式禁用存储时按浅色渲染，React 挂载后会再校正
+        }
+      })();
+    </script>
   </head>
   <body class="bg-[#F6F6F3] text-zinc-900 dark:bg-[#090A0F] dark:text-zinc-100 antialiased selection:bg-blue-500/20 selection:text-blue-600 dark:selection:text-blue-300">
     <div id="root"></div>

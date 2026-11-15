@@ -60,7 +60,8 @@
   "header": {
     "quickUpload": "上传文件",
     "themeLight": "浅色",
-    "themeDark": "深色"
+    "themeDark": "深色",
+    "themeSystem": "跟随系统"
   },
   "categories": {
     "folder": "文件夹",

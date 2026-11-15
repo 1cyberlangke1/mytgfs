@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Loader2,
   Moon,
+  Monitor,
   PanelLeftClose,
   PanelLeftOpen,
   Sliders,
@@ -239,9 +240,11 @@ export default function App() {
     if (saved && DICTIONARY[saved]) return saved;
     return 'zh';
   });
-  const [theme, setTheme] = useState<ThemeMode>(() =>
-    loadFromStorage<ThemeMode>(STORAGE_KEYS.theme, 'dark')
-  );
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const saved = loadFromStorage<ThemeMode | null>(STORAGE_KEYS.theme, null);
+    // 缺省跟随系统；旧版本只存过 light/dark，读到非法值也回落到跟随系统
+    return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
+  });
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
 
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
@@ -669,11 +672,23 @@ export default function App() {
   }, [reloadState, reloadFiles, reloadSettings]);
 
   // 主题
+  //
+  // 输入：theme 三档（浅色 / 深色 / 跟随系统）
+  // 输出：<html> 上的 dark 类
+  // 预期：跟随系统时监听 prefers-color-scheme，系统切深浅后立即生效，
+  //       不需要刷新页面；偏好本身写进 localStorage 供下次启动复用
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'dark') root.classList.add('dark');
-    else root.classList.remove('dark');
     window.localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(theme));
+    if (theme !== 'system') {
+      root.classList.toggle('dark', theme === 'dark');
+      return;
+    }
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => root.classList.toggle('dark', media.matches);
+    apply();
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
   }, [theme]);
 
   useEffect(() => {
@@ -782,6 +797,9 @@ export default function App() {
         )
       );
       uploadAbort.current.delete(task.id);
+      // 传完就不再需要 File 与速率采样：留着会把整份文件钉在内存里
+      uploadInputs.current.delete(task.id);
+      uploadSpeed.current.delete(task.id);
       await reloadFiles();
       await reloadState();
     } catch (err) {
@@ -944,6 +962,14 @@ export default function App() {
     // 服务端持久化表才是队列的真实来源：只清本地数组等于假按钮
     clearQueue()
       .then(() => {
+        const dropped = uploadTasks.filter(
+          (tr) => tr.state === 'completed' || tr.state === 'failed'
+        );
+        for (const tr of dropped) {
+          // 清记录同时放掉 File 引用，否则重试入口没了、内存却还占着
+          uploadInputs.current.delete(tr.id);
+          uploadSpeed.current.delete(tr.id);
+        }
         setUploadTasks((prev) => prev.filter((tr) => tr.state !== 'completed' && tr.state !== 'failed'));
         pushToast(t.overview.queueClearedToast, 'success');
       })
@@ -1162,6 +1188,21 @@ export default function App() {
     { id: 'downloads', label: t.nav.downloads, icon: <HardDriveDownload className="w-4 h-4 shrink-0" /> },
   ];
 
+  // 主题按钮：点一下切到下一档，浅色 → 深色 → 跟随系统 → 浅色
+  //
+  // 输入：theme 当前档位
+  // 输出：下一档的图标与文案（按钮显示的是「点了会变成什么」）
+  // 预期：三处主题按钮共用同一套映射，不会各写一遍
+  const themeNext: ThemeMode = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
+  const ThemeNextIcon = themeNext === 'light' ? Sun : themeNext === 'dark' ? Moon : Monitor;
+  const themeNextLabel =
+    themeNext === 'light'
+      ? t.header.themeLight
+      : themeNext === 'dark'
+        ? t.header.themeDark
+        : t.header.themeSystem;
+  const themeIconClass = `shrink-0 ${themeNext === 'light' ? 'text-amber-400' : 'text-zinc-700 dark:text-zinc-300'}`;
+
   return (
     <div
       dir={localeMeta.dir}
@@ -1236,14 +1277,10 @@ export default function App() {
               type="button"
               variant="outline"
               size="icon"
-              onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
-              aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+              onClick={() => setTheme(themeNext)}
+              aria-label={themeNextLabel}
             >
-              {theme === 'dark' ? (
-                <Sun className="w-3.5 h-3.5 text-amber-400" />
-              ) : (
-                <Moon className="w-3.5 h-3.5 text-zinc-700" />
-              )}
+              <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
             </Button>
           </div>
         </div>
@@ -1474,15 +1511,11 @@ export default function App() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
-                  aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+                  onClick={() => setTheme(themeNext)}
+                  aria-label={themeNextLabel}
                   className="px-0 justify-center"
                 >
-                  {theme === 'dark' ? (
-                    <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  ) : (
-                    <Moon className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
-                  )}
+                  <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
                 </Button>
               </div>
             ) : (
@@ -1511,22 +1544,13 @@ export default function App() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setTheme((th) => (th === 'dark' ? 'light' : 'dark'))}
-                  aria-label={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
-                  title={theme === 'dark' ? t.header.themeLight : t.header.themeDark}
+                  onClick={() => setTheme(themeNext)}
+                  aria-label={themeNextLabel}
+                  title={themeNextLabel}
                   className="px-2.5 shrink-0"
                 >
-                  {theme === 'dark' ? (
-                    <>
-                      <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span className="truncate max-w-[72px]">{t.header.themeLight}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Moon className="w-3.5 h-3.5 text-zinc-700 shrink-0" />
-                      <span className="truncate max-w-[72px]">{t.header.themeDark}</span>
-                    </>
-                  )}
+                  <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
+                  <span className="truncate max-w-[72px]">{themeNextLabel}</span>
                 </Button>
               </div>
             )}

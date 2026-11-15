@@ -96,7 +96,8 @@ export type SortOrder = 'asc' | 'desc';
 export type NavTab = 'overview' | 'files' | 'settings' | 'downloads';
 // 语言包目录里的文件名即 Locale；新增语言只丢 JSON，不改类型
 export type Locale = string;
-export type ThemeMode = 'light' | 'dark';
+// ThemeMode 是外观偏好：system 表示跟随操作系统的深浅色设置
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type ConfigErrorCode =
   | 'SYNTAX_MISSING_EQ'
