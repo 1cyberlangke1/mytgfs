@@ -85,34 +85,6 @@ func TestCoverImageDownloadsLargest(t *testing.T) {
 	}
 }
 
-// TestCoverChangedBaseline 首次观测只建基线，之后按 id 变化判断。
-func TestCoverChangedBaseline(t *testing.T) {
-	api := newFakeAPI()
-	api.fullPhoto = photoFixture(55, &tg.PhotoSize{Type: "a", W: 1, H: 1, Size: 4})
-	st := New(api, 42)
-
-	if changed, err := st.CoverChanged(t.Context()); err != nil || changed {
-		t.Fatalf("首次观测 changed=%v err=%v，期望 false/nil", changed, err)
-	}
-	if changed, err := st.CoverChanged(t.Context()); err != nil || changed {
-		t.Fatalf("未变化 changed=%v err=%v，期望 false/nil", changed, err)
-	}
-
-	api.mu.Lock()
-	api.fullPhoto = photoFixture(56, &tg.PhotoSize{Type: "a", W: 1, H: 1, Size: 4})
-	api.mu.Unlock()
-	if changed, err := st.CoverChanged(t.Context()); err != nil || !changed {
-		t.Fatalf("换头像 changed=%v err=%v，期望 true/nil", changed, err)
-	}
-
-	api.mu.Lock()
-	api.fullPhoto = &tg.PhotoEmpty{}
-	api.mu.Unlock()
-	if changed, err := st.CoverChanged(t.Context()); err != nil || !changed {
-		t.Fatalf("删头像 changed=%v err=%v，期望 true/nil", changed, err)
-	}
-}
-
 // TestLargestPhotoSize 跳过没有尺寸信息的条目。
 func TestLargestPhotoSize(t *testing.T) {
 	got, ok := largestPhotoSize([]tg.PhotoSizeClass{

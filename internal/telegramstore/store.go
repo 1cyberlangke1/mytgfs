@@ -72,14 +72,12 @@ type Store struct {
 	dl          *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
 	threadCount int                    // 下载工作协程上限，0 用默认值
 
-	// photoMu 保护频道头像元数据缓存；Cover* 方法不额外走网络
+	// photoMu 保护频道头像元数据缓存；Cover* 方法不额外走网络。
+	// 缓存没有过期时间：频道 pts 变化时由同步循环 InvalidateCover 失效
 	photoMu sync.Mutex
 	photo   *tg.Photo
 	photoAt time.Time
 	photoOK bool
-	// coverSeen 是上一次观测到的头像 id，用于判断别人换了头像
-	coverSeen int64
-	coverInit bool
 
 	// resumeStore 保存上传断点，nil 表示不做断点续传
 	resumeStore ResumeStore

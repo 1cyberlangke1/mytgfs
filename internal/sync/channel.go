@@ -48,6 +48,7 @@ type ChannelSyncResult struct {
 	Pulled    int      // 应用成功的变更条数
 	Deleted   int      // 从索引移除的节点数
 	Pts       int      // 同步后的 pts
+	PtsMoved  bool     // 本轮 pts 有推进（含头像/权限等非文件更新），可据此失效派生缓存
 	Truncated bool     // 差异过大，建议上层全量重建
 	Rounds    int      // 差异调用轮数
 	Changed   []string // 新增/编辑的路径，供界面刷新
@@ -94,6 +95,7 @@ func SyncChannel(ctx context.Context, idx *index.Index, d ChannelDiffer, st Node
 	if ok && v > 0 {
 		pts = int(v)
 	}
+	oldPts := pts
 	res.Pts = pts
 
 	retried := false
@@ -141,6 +143,7 @@ func SyncChannel(ctx context.Context, idx *index.Index, d ChannelDiffer, st Node
 			return res, err
 		}
 		res.Pts = pts
+		res.PtsMoved = res.PtsMoved || pts != oldPts
 
 		if diff.Final || diff.TooLong {
 			return res, nil

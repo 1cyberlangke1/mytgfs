@@ -35,7 +35,8 @@ func newFakeProvider(store *fakeCoverStore, set func(context.Context, int64, []b
 			}
 			return coverVolume{}, false
 		},
-		set: set,
+		set:   set,
+		cache: make(map[int64]coverEntry),
 	}
 }
 

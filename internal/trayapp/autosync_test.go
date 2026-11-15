@@ -69,12 +69,14 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 	go func() {
 		defer close(finished)
 		AutoSyncWhile(ctx, func(changed, _ []string) {
-			paths = changed
+			if len(changed) > 0 {
+				paths = changed
+			}
 			select {
 			case notified <- struct{}{}:
 			default:
 			}
-		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil)
+		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil)
 	}()
 
 	select {
@@ -101,47 +103,64 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 	}
 }
 
-// coverNodes 在 fakeNodes 基础上报告一次头像变化。
+// coverNodes 在 fakeNodes 基础上记录头像元数据失效次数。
 type coverNodes struct {
 	fakeNodes
+	invalidations atomic.Int64
+}
+
+func (c *coverNodes) InvalidateCover() { c.invalidations.Add(1) }
+
+// ptsDiffer 每轮都推进 pts：模拟频道有更新（含换头像）。
+type ptsDiffer struct {
+	mu    sync.Mutex
 	calls int
 }
 
-func (c *coverNodes) CoverChanged(context.Context) (bool, error) {
-	c.calls++
-	return c.calls == 1, nil
+func (f *ptsDiffer) ChannelDifference(_ context.Context, pts, _ int) (tgsync.Difference, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return tgsync.Difference{Pts: pts + 1, Final: true}, nil
 }
 
-// TestAutoSyncNotifiesCoverChange 头像变化用空列表通知一次。
+// TestAutoSyncInvalidatesCoverOnPtsMove pts 推进时失效头像缓存并空列表通知。
 //
-// 输入：带 CoverChanged 的节点源
-// 输出：notify 至少收到一次 changed/removed 都为空的调用
-// 预期：封面不参与节点差异，但面板仍要收到刷新信号
-func TestAutoSyncNotifiesCoverChange(t *testing.T) {
+// 输入：pts 每轮推进的差异源 + 带 InvalidateCover 的节点源
+// 输出：InvalidateCover 被调用、onPtsMoved 被调用、notify 收到空变更
+// 预期：头像更新走事件失效，不做任何额外轮询
+func TestAutoSyncInvalidatesCoverOnPtsMove(t *testing.T) {
 	idx := newTestIndex(t)
 	ctx := t.Context()
 	nodes := &coverNodes{}
 	events := make(chan [2]int, 8)
+	hooked := make(chan struct{}, 1)
 	go AutoSyncWhile(ctx, func(changed, removed []string) {
 		events <- [2]int{len(changed), len(removed)}
-	}, idx, &fakeDiffer{}, nodes, 20*time.Millisecond, nil, nil)
+	}, idx, &ptsDiffer{}, nodes, 20*time.Millisecond, nil, nil, func() {
+		select {
+		case hooked <- struct{}{}:
+		default:
+		}
+	})
 
 	deadline := time.After(3 * time.Second)
-	sawEmpty := false
-	for range 3 {
+	sawEmpty, sawHook := false, false
+	for !sawEmpty || !sawHook {
 		select {
 		case e := <-events:
 			if e[0] == 0 && e[1] == 0 {
 				sawEmpty = true
 			}
+		case <-hooked:
+			sawHook = true
 		case <-deadline:
-			t.Fatal("三秒内没有收到通知")
-		}
-		if sawEmpty {
-			return
+			t.Fatalf("三秒内没等到: empty=%v hook=%v invalidated=%d", sawEmpty, sawHook, nodes.invalidations.Load())
 		}
 	}
-	t.Fatal("没有收到空列表的封面变化通知")
+	if nodes.invalidations.Load() == 0 {
+		t.Fatal("pts 推进未失效头像元数据缓存")
+	}
 }
 
 // TestAutoSyncNilNotify 回调可省略。
@@ -151,7 +170,7 @@ func TestAutoSyncNilNotify(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		AutoSyncWhile(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil)
+		AutoSyncWhile(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil)
 	}()
 	time.Sleep(60 * time.Millisecond)
 	cancel()
@@ -168,7 +187,7 @@ func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
 	ctx := t.Context()
 	var on atomic.Bool
 	d := &fakeDiffer{}
-	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, on.Load)
+	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, on.Load, nil)
 
 	time.Sleep(60 * time.Millisecond)
 	d.mu.Lock()

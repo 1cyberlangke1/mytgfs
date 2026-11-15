@@ -457,6 +457,15 @@ func runWeb(args []string) {
 		vsync, vstop := context.WithCancel(ctx)
 		var vwg sync.WaitGroup
 
+		// 封面服务在装配层创建：挂载循环要在 pts 变化时失效它的缓存
+		coverProvider := app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
+			wv, ok := reg.Get(name)
+			if !ok || wv.vf == nil {
+				return nil, false
+			}
+			return wv.vf, true
+		}, datadir.Path("thumbs"))
+
 		// mountRuntime 打开一个卷并挂进运行时注册表，起该卷的自动同步协程。
 		// 启动与面板建卷/attach 共用这一条路径，两端永远走同一份逻辑
 		syncInterval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
@@ -475,7 +484,10 @@ func runWeb(args []string) {
 				done := make(chan struct{})
 				vwg.Go(func() {
 					defer close(done)
-					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, syncInterval, nil, syncOn)
+					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, syncInterval, nil, syncOn, func() {
+						// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
+						coverProvider.InvalidateVolume(name)
+					})
 				})
 				wv.stop = func() { vcancel(); <-done }
 			}
@@ -686,14 +698,8 @@ func runWeb(args []string) {
 				}
 				return total, nil
 			},
-			// 封面就是频道头像：按卷名找到对应 Store
-			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
-				wv, ok := reg.Get(name)
-				if !ok {
-					return nil, false
-				}
-				return wv.vf, true
-			}),
+			// 封面就是频道头像：复用装配层的封面服务
+			Cover: coverProvider,
 			// 重建索引：用 user 会话全量拉频道历史后覆盖本地节点
 			Rebuild: func(ctx context.Context, name string) (any, error) {
 				wv, ok := reg.Get(name)

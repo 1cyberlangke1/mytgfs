@@ -17,8 +17,8 @@ import (
 	"mytgfs/internal/i18n"
 )
 
-// coverTTL 是头像元数据缓存时长：别人换头像最多这么久被同步轮询发现。
-const coverTTL = 30 * time.Second
+// 头像元数据缓存没有过期时间：频道 pts 变化（含换头像）由同步循环调用
+// InvalidateCover 失效，与第三方客户端一致靠更新流，不轮询。
 
 // ErrNoCover 表示频道当前没有头像。
 var ErrNoCover error = errNoCover{}
@@ -41,32 +41,6 @@ func (s *Store) CoverVersion(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	return strconv.FormatInt(id, 10), nil
-}
-
-// CoverChanged 判断别人是否换过头像。
-//
-// 输入：ctx
-// 输出：true 表示相对上次观测发生了变化
-// 预期：
-//   - 第一次观测只建立基线，返回 false，避免启动时无谓刷新
-//   - 头像被删除也算变化（id 变 0）
-func (s *Store) CoverChanged(ctx context.Context) (bool, error) {
-	id, _, err := s.coverPhoto(ctx, true)
-	if err != nil {
-		return false, err
-	}
-	s.photoMu.Lock()
-	defer s.photoMu.Unlock()
-	if !s.coverInit {
-		s.coverInit = true
-		s.coverSeen = id
-		return false, nil
-	}
-	if s.coverSeen == id {
-		return false, nil
-	}
-	s.coverSeen = id
-	return true, nil
 }
 
 // CoverImage 下载频道头像。
@@ -137,7 +111,7 @@ func (s *Store) InvalidateCover() {
 // 预期：只缓存成功结果；查询失败不污染缓存
 func (s *Store) coverPhoto(ctx context.Context, force bool) (int64, *tg.Photo, error) {
 	s.photoMu.Lock()
-	if !force && s.photoOK && time.Since(s.photoAt) < coverTTL {
+	if !force && s.photoOK {
 		p := s.photo
 		s.photoMu.Unlock()
 		if p == nil {

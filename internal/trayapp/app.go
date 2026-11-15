@@ -114,18 +114,16 @@ func SyncEnabled(cfgPath string, fallback bool) func() bool {
 	}
 }
 
-// coverWatcher 是可选的频道头像变化源。
-//
-// 输入：ctx
-// 输出：true 表示头像相对上次观测变了
-// 预期：NodeSource 不强制实现；实现了就每轮顺带检查一次
-type coverWatcher interface {
-	CoverChanged(ctx context.Context) (bool, error)
+// coverInvalidator 是可失效头像元数据缓存的节点源（*telegramstore.Store 实现）。
+type coverInvalidator interface {
+	InvalidateCover()
 }
 
 // AutoSyncWhile 周期性把频道差异应用进索引并通知挂载点刷新。
 // 每轮先问 enabled：返回 false 时跳过本轮（只等下一个 tick）。
-func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool) {
+// onPtsMoved 在本轮 pts 有推进时调用（含头像/权限等非文件更新），
+// 装配根用它失效头像缓存——事件驱动，不额外轮询 Telegram。
+func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool, onPtsMoved func()) {
 	tick := time.Tick(interval)
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
 		if mu != nil {
@@ -143,13 +141,22 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 			switch {
 			case err != nil:
 				logging.Warn("log.autosync_failed", err)
-			case (res.Pulled > 0 || res.Deleted > 0) && notify != nil:
-				notify(res.Changed, res.Removed)
-			}
-			// 别人换了频道头像：推一条空变更，面板据此重取封面
-			if cw, ok := st.(coverWatcher); ok && notify != nil {
-				if changed, cerr := cw.CoverChanged(ctx); cerr == nil && changed {
-					notify(nil, nil)
+			default:
+				if (res.Pulled > 0 || res.Deleted > 0) && notify != nil {
+					notify(res.Changed, res.Removed)
+				}
+				if res.PtsMoved {
+					// 频道有任何更新（含换头像）：头像缓存失效重建，
+					// 与第三方客户端一致靠更新流失效，不轮询
+					if cw, ok := st.(coverInvalidator); ok {
+						cw.InvalidateCover()
+					}
+					if onPtsMoved != nil {
+						onPtsMoved()
+					}
+					if notify != nil {
+						notify(nil, nil)
+					}
 				}
 			}
 		}
@@ -350,6 +357,15 @@ func Run(opts Options) error {
 
 	// 装配根复用：开卷与写频道头像都走同一套配置/会话
 	appRoot := app.New(cfg, app.Options{Push: pushHub, ConfigPath: cfgPath})
+
+	// 封面服务在装配层创建：挂载循环要在 pts 变化时失效它的缓存
+	coverProvider := app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
+		v, ok := reg.Get(name)
+		if !ok || v.vf == nil {
+			return nil, false
+		}
+		return v.vf, true
+	}, datadir.Path("thumbs"))
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
@@ -623,14 +639,9 @@ func Run(opts Options) error {
 				}
 				return total, nil
 			},
-			// 封面就是频道头像：按卷名找到对应 Store
-			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
-				v, ok := reg.Get(name)
-				if !ok || v.vf == nil {
-					return nil, false
-				}
-				return v.vf, true
-			}),
+			// 封面就是频道头像：按卷名找到对应 Store；字节缓存落 thumbs 目录
+			// 封面就是频道头像：复用装配层的封面服务
+			Cover: coverProvider,
 			// 重建索引：user 会话全量拉历史后覆盖本地节点
 			Rebuild: func(ctx context.Context, name string) (any, error) {
 				v, ok := reg.Get(name)
@@ -691,7 +702,10 @@ func Run(opts Options) error {
 			interval = SyncInterval(0)
 		}
 		vwg.Go(func() {
-			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncOn)
+			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncOn, func() {
+				// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
+				coverProvider.InvalidateVolume(name)
+			})
 		})
 
 		mu.Lock()
