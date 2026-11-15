@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileItem, VolumeInfo } from '../types';
+import type { FileItem, TransferTask, VolumeInfo } from '../types';
 import {
   DEFAULT_UPLOAD_CHUNK_BYTES,
   MAX_SINGLE_FILE_BYTES,
@@ -14,6 +14,7 @@ import {
   inferFileCategory,
   searchFilesRecursively,
   sortFileItems,
+  summarizeUploadBatch,
   validateAndPlanUpload,
   volumeDisplayName,
 } from './fsLogic';
@@ -284,5 +285,62 @@ describe('volumeDisplayName', () => {
 
   it('标题与卷名相同时不重复显示', () => {
     expect(volumeDisplayName('demo', 'demo')).toBe('demo');
+  });
+});
+
+// transfer 构造上传任务：只填汇总用得上的字段
+function transfer(partial: Partial<TransferTask> & Pick<TransferTask, 'id'>): TransferTask {
+  return {
+    fileName: `${partial.id}.bin`,
+    volumeId: 'v1',
+    targetParentId: null,
+    direction: 'upload',
+    size: 100,
+    transferredBytes: 0,
+    state: 'queued',
+    speedBps: 0,
+    isChunkedResume: false,
+    chunkSize: 0,
+    currentChunk: 0,
+    totalChunks: 1,
+    createdAt: '2026-01-01T00:00:00Z',
+    ...partial,
+  };
+}
+
+describe('summarizeUploadBatch', () => {
+  it('同批次汇总已传字节与总量', () => {
+    const s = summarizeUploadBatch([
+      transfer({ id: 'a', batchId: 'b1', size: 100, transferredBytes: 50 }),
+      transfer({ id: 'b', batchId: 'b1', size: 300, transferredBytes: 300 }),
+    ]);
+    expect(s).toEqual({ files: 2, done: 350, total: 400 });
+  });
+
+  it('多个批次时只看最新的一批', () => {
+    const s = summarizeUploadBatch([
+      transfer({ id: 'old', batchId: 'b1', size: 10, transferredBytes: 10 }),
+      transfer({ id: 'old2', batchId: 'b1', size: 10, transferredBytes: 10 }),
+      transfer({ id: 'n2', batchId: 'b2', size: 200, transferredBytes: 0, createdAt: '2026-02-01T00:00:00Z' }),
+      transfer({ id: 'n1', batchId: 'b2', size: 200, transferredBytes: 20, createdAt: '2026-02-01T00:00:00Z' }),
+    ]);
+    expect(s).toEqual({ files: 2, done: 20, total: 400 });
+  });
+
+  it('单文件批次不显示汇总', () => {
+    expect(summarizeUploadBatch([transfer({ id: 'a', batchId: 'b1' })])).toBeNull();
+  });
+
+  it('没有批次号时返回 null', () => {
+    expect(summarizeUploadBatch([transfer({ id: 'a' }), transfer({ id: 'b' })])).toBeNull();
+    expect(summarizeUploadBatch([])).toBeNull();
+  });
+
+  it('已传字节超出大小时按大小封顶', () => {
+    const s = summarizeUploadBatch([
+      transfer({ id: 'a', batchId: 'b1', size: 100, transferredBytes: 180 }),
+      transfer({ id: 'b', batchId: 'b1', size: 100, transferredBytes: 100 }),
+    ]);
+    expect(s).toEqual({ files: 2, done: 200, total: 200 });
   });
 });

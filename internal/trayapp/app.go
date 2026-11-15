@@ -481,7 +481,22 @@ func Run(opts Options) error {
 						Name: name, Title: title, BotUsername: bn,
 					})
 					res = r
-					return cerr
+					if cerr != nil {
+						return cerr
+					}
+					// 建完频道后才发现已取消：先把频道删掉，不能写进配置留半挂状态
+					if ctx.Err() != nil {
+						_ = volume.CleanupCancelled(ctx, uc.API(), res)
+						return ctx.Err()
+					}
+					vol := config.Volume{
+						Name:    res.Name,
+						ChatID:  res.ChannelID,
+						Enabled: true,
+					}
+					return appRoot.MutateConfig(func(p string) error {
+						return config.AppendVolume(p, vol)
+					})
 				})
 				if rerr != nil {
 					if tgclient.IsAuthLost(rerr) {
@@ -491,16 +506,6 @@ func Run(opts Options) error {
 				}
 				if res.AvatarErr != nil {
 					logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
-				}
-				vol := config.Volume{
-					Name:    res.Name,
-					ChatID:  res.ChannelID,
-					Enabled: true,
-				}
-				if aerr := appRoot.MutateConfig(func(p string) error {
-					return config.AppendVolume(p, vol)
-				}); aerr != nil {
-					return nil, aerr
 				}
 				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
 				reconcileVolumes()

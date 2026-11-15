@@ -48,6 +48,9 @@ func (f *fakeListAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClas
 func (f *fakeListAPI) ChannelsEditPhoto(context.Context, *tg.ChannelsEditPhotoRequest) (tg.UpdatesClass, error) {
 	panic("unused")
 }
+func (f *fakeListAPI) ChannelsDeleteChannel(context.Context, tg.InputChannelClass) (tg.UpdatesClass, error) {
+	panic("unused")
+}
 func (f *fakeListAPI) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequest) (bool, error) {
 	panic("unused")
 }

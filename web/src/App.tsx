@@ -139,6 +139,8 @@ interface ToastMessage {
   id: string;
   type: 'success' | 'error' | 'pending';
   text: string;
+  /** 可选操作按钮（如长任务的「取消」）；点一下执行并关掉这条提示 */
+  action?: { label: string; onClick: () => void };
 }
 
 // EMPTY_SETTINGS 是服务端设置到达前的占位；不携带任何默认数字，默认值只由服务端给。
@@ -300,6 +302,8 @@ export default function App() {
 
   // uploadAbort 记录每个上传任务的取消句柄；uploadInputs 保留 File 以便暂停后重发
   const uploadAbort = useRef(new Map<string, AbortController>());
+  // longOps 记录建卷/重建索这类长任务的取消句柄，键形如 create:<name>
+  const longOps = useRef(new Map<string, AbortController>());
   // rel 保留浏览器给的相对路径（文件夹上传），重发时层级不能丢
   const uploadInputs = useRef(
     new Map<
@@ -351,9 +355,13 @@ export default function App() {
 
   // pushToast 弹一条提示并返回 id；pending 类型不自动消失，
   // 由调用方在操作完成/失败后 dismissToast 撤掉再换结果 toast
-  const pushToast = (text: string, type: 'success' | 'error' | 'pending' = 'success'): string => {
+  const pushToast = (
+    text: string,
+    type: 'success' | 'error' | 'pending' = 'success',
+    action?: { label: string; onClick: () => void }
+  ): string => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev.slice(-3), { id, type, text }]);
+    setToasts((prev) => [...prev.slice(-3), { id, type, text, ...(action ? { action } : {}) }]);
     if (type !== 'pending') {
       window.setTimeout(() => {
         setToasts((prev) => prev.filter((item) => item.id !== id));
@@ -874,6 +882,8 @@ export default function App() {
     const rels = accepted.map(
       (file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
     );
+    // 同一次选择上传的文件共享批次号，概览页据此显示整批总进度
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const plan = accepted.map((file, index) => {
       const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const task: TransferTask = {
@@ -893,6 +903,7 @@ export default function App() {
         createdAt: new Date().toISOString(),
         category: inferFileCategory(file.name, false),
         opKind: 'upload',
+        batchId,
       };
       uploadInputs.current.set(id, {
         file,
@@ -1097,19 +1108,31 @@ export default function App() {
 
 
   // handleCreateVolume 在 Telegram 侧建频道并写入配置，成功后刷新卷列表。
-  // 建频道要十几秒：点击确认立刻弹「正在创建」，完成/失败再换结果 toast
+  // 建频道要十几秒：点击确认立刻弹「正在创建」并带取消按钮；
+  // 取消会断开请求，服务端随即把刚建出来的空频道删掉
   const handleCreateVolume = (name: string, title: string) => {
-    const pending = pushToast(interpolate(t.volume.creating, { name }, locale), 'pending');
-    createVolume(name, title)
+    const ctrl = new AbortController();
+    const key = `create:${name}`;
+    longOps.current.set(key, ctrl);
+    const pending = pushToast(interpolate(t.volume.creating, { name }, locale), 'pending', {
+      label: t.files.cancel,
+      onClick: () => ctrl.abort(),
+    });
+    createVolume(name, title, ctrl.signal)
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => {
         dismissToast(pending);
         pushToast(interpolate(t.volume.createSuccess, { name }, locale), 'success');
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         dismissToast(pending);
+        if (ctrl.signal.aborted) {
+          pushToast(interpolate(t.volume.createCancelled, { name }, locale), 'success');
+          return;
+        }
         pushToast(errText(err), 'error');
-      });
+      })
+      .finally(() => longOps.current.delete(key));
   };
 
   // handleAttachVolume 挂载已有频道：名称 + chat_id，后端只读校验后写配置
@@ -1165,18 +1188,31 @@ export default function App() {
   };
 
   // handleRebuildVolume 触发服务端按频道历史重建索引，完成后刷新当前卷。
-  // 全量翻历史要几十秒：先弹「正在重建」，完成再换结果
+  // 全量翻历史要几十秒：先弹「正在重建」并带取消按钮；取消后服务端在写本地之前就停了
   const handleRebuildVolume = async (volume: string): Promise<void> => {
-    const pending = pushToast(interpolate(t.files.rebuilding, { name: volume }, locale), 'pending');
+    const ctrl = new AbortController();
+    const key = `rebuild:${volume}`;
+    longOps.current.set(key, ctrl);
+    const pending = pushToast(
+      interpolate(t.files.rebuilding, { name: volume }, locale),
+      'pending',
+      { label: t.files.cancel, onClick: () => ctrl.abort() }
+    );
     try {
-      const res = await rebuildVolume(volume);
+      const res = await rebuildVolume(volume, ctrl.signal);
       await reloadState();
       await reloadFiles([volume]);
       dismissToast(pending);
       pushToast(interpolate(t.files.rebuildDone, { count: res.files }, locale), 'success');
     } catch (err) {
       dismissToast(pending);
-      pushToast(errText(err), 'error');
+      if (ctrl.signal.aborted) {
+        pushToast(interpolate(t.files.rebuildCancelled, { name: volume }, locale), 'success');
+      } else {
+        pushToast(errText(err), 'error');
+      }
+    } finally {
+      longOps.current.delete(key);
     }
   };
 
@@ -1812,6 +1848,18 @@ export default function App() {
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 )}
                 <span className="leading-relaxed">{toast.text}</span>
+                {toast.action && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.action?.onClick();
+                      setToasts((prev) => prev.filter((item) => item.id !== toast.id));
+                    }}
+                    className="ms-1 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-semibold shrink-0 cursor-pointer"
+                  >
+                    {toast.action.label}
+                  </button>
+                )}
               </div>
               <button
                 type="button"

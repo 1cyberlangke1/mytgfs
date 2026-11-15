@@ -14,6 +14,7 @@ import {
   HardDrive,
   LayoutGrid,
   Link2,
+  Keyboard,
   List,
   Loader2,
   Pencil,
@@ -249,6 +250,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const [showAttachVolume, setShowAttachVolume] = useState(false);
   const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
   const [attachFormError, setAttachFormError] = useState('');
+  // 快捷键说明弹窗
+  const [showShortcuts, setShowShortcuts] = useState(false);
   // 频道列表按需加载：只有打开弹窗并点「载入」时才连 Telegram
   const [channels, setChannels] = useState<
     { id: number; chat_id: number; title: string; username: string; creator: boolean; admin: boolean }[]
@@ -934,6 +937,17 @@ export const FilesView: React.FC<FilesViewProps> = ({
                   <LayoutGrid className="w-3.5 h-3.5" />
                 </motion.button>
               </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setShowShortcuts(true)}
+                aria-label={t.files.shortcutsBtn}
+                title={t.files.shortcutsBtn}
+              >
+                <Keyboard className="w-4 h-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -1017,6 +1031,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
+            aria-keyshortcuts="ArrowUp ArrowDown Space Control+A Enter F2 Delete Escape"
             aria-label={t.files.colName}
             className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
           >
@@ -1136,6 +1151,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
+            aria-keyshortcuts="ArrowUp ArrowDown Space Control+A Enter F2 Delete Escape"
             aria-label={t.files.colName}
             className="will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
           >
@@ -1919,6 +1935,52 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 }}
               >
                 {t.files.rebuildConfirm}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal 10: Keyboard Shortcuts */}
+      {showShortcuts && (
+        <Modal
+          onClose={() => setShowShortcuts(false)}
+          labelledBy="modal-shortcuts-title"
+          panelClassName="w-full max-w-md"
+        >
+          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+            <h3
+              id="modal-shortcuts-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.files.shortcutsTitle}
+            </h3>
+            <dl className="space-y-2">
+              {[
+                ['↑ / ↓', t.files.shortcutNavigate],
+                ['Space', t.files.shortcutSelect],
+                ['Ctrl+A', t.files.shortcutSelectAll],
+                ['Enter', t.files.shortcutOpen],
+                ['F2', t.files.shortcutRename],
+                ['Delete', t.files.shortcutDelete],
+                ['Esc', t.files.shortcutClose],
+              ].map(([keys, desc]) => (
+                <div key={keys} className="flex items-center justify-between gap-4 text-xs">
+                  <dt className="text-zinc-600 dark:text-zinc-400">{desc}</dt>
+                  <dd>
+                    <kbd
+                      dir="ltr"
+                      className="px-2 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 font-mono text-[11px] text-zinc-800 dark:text-zinc-200"
+                    >
+                      {keys}
+                    </kbd>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex items-center justify-end pt-2">
+              <Button type="button" variant="outline" onClick={() => setShowShortcuts(false)}>
+                {t.files.closeShortcuts}
               </Button>
             </div>
           </div>

@@ -64,6 +64,10 @@ func (f *fakePhotoAPI) MessagesGetDialogs(context.Context, *tg.MessagesGetDialog
 	panic("unused")
 }
 
+func (f *fakePhotoAPI) ChannelsDeleteChannel(context.Context, tg.InputChannelClass) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+
 var _ API = (*fakePhotoAPI)(nil)
 
 // TestSetPhotoUploadsOnePart 给定 access_hash 时只发 0 号分片并调 editPhoto。

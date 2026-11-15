@@ -20,13 +20,14 @@ import {
   TransferTask,
   VolumeInfo,
 } from '../types';
-import { computeOverviewSummary, formatBytes, volumeDisplayName } from '../utils/fsLogic';
+import { computeOverviewSummary, formatBytes, summarizeUploadBatch, volumeDisplayName } from '../utils/fsLogic';
 import { coverURL } from '../api';
 import {
   Translations,
   formatNumber,
   formatPercent,
   formatPlural,
+  interpolate,
 } from '../utils/i18n';
 import { BrandEmblemSvg, RichFileTypeEmblem } from './VisualAssets';
 import { Button, IOS_SOFT_SPRING, IOS_SPRING } from './ui';
@@ -82,6 +83,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const summary = computeOverviewSummary(volumes, files);
   const targetVolumeId =
     volumes.find((v) => v.id === activeVolumeId)?.id || volumes[0]?.id || '';
+
+  // 整批上传总进度：只看最近一次批量上传的批次（同 batchId）；
+  // 单文件上传不显示汇总条，避免和文件自己的进度条重复
+  const uploadBatch = summarizeUploadBatch(transfers);
+  const uploadPct =
+    uploadBatch && uploadBatch.total > 0
+      ? Math.min(100, Math.round((uploadBatch.done / uploadBatch.total) * 100))
+      : 0;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -335,6 +344,33 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </Button>
           )}
         </div>
+
+        {uploadBatch && (
+          <div className="surface-card rounded-2xl px-4 py-3 space-y-2">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                {interpolate(t.overview.batchUploadLabel, { count: uploadBatch.files }, locale)}
+              </span>
+              <span className="font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
+                {formatPercent(uploadPct, locale)} · {formatBytes(uploadBatch.done, 2, locale)} /{' '}
+                {formatBytes(uploadBatch.total, 2, locale)}
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={uploadPct}
+              aria-label={interpolate(t.overview.batchUploadLabel, { count: uploadBatch.files }, locale)}
+              className="h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden"
+            >
+              <div
+                className="h-full rounded-full bg-[#007AFF] dark:bg-[#0A84FF] transition-[width] duration-300"
+                style={{ width: `${uploadPct}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {transfers.length === 0 ? (
           <div className="surface-card rounded-2xl p-8 text-center">

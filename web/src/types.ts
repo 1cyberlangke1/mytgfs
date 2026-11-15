@@ -53,6 +53,8 @@ export interface TransferTask {
   category?: FileCategory;
   // opKind 是服务端队列里的操作类型；前端本地上传任务固定为 upload
   opKind?: 'upload' | 'download' | 'mkdir' | 'rename' | 'remove' | 'copy';
+  /** 同一次「上传文件/上传文件夹」的批次号，用于汇总整批进度 */
+  batchId?: string;
 }
 
 export interface AppSettingDef {

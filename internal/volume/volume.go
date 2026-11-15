@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"mytgfs/internal/brand"
 	"mytgfs/internal/channel"
@@ -73,6 +74,10 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 
 	botID, err := channel.AddBot(ctx, api, ch, req.BotUsername)
 	if err != nil {
+		// 请求被取消：把刚建出来的空频道删掉，避免留下孤儿频道
+		if ctx.Err() != nil {
+			_ = CleanupCancelled(ctx, api, partial)
+		}
 		return partial, fmt.Errorf(i18n.T("err.channel_created_bot_failed")+": %w", ch.ChannelID, err)
 	}
 	partial.BotID = botID
@@ -87,10 +92,39 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 	if err := channel.MuteForever(ctx, api, ch); err != nil {
 		partial.Muted = false
 		partial.MuteErr = err
+		if ctx.Err() != nil {
+			_ = CleanupCancelled(ctx, api, partial)
+			return partial, ctx.Err()
+		}
 		return partial, nil
 	}
 	partial.Muted = true
+	// 设头像阶段被取消时同样不留孤儿频道
+	if ctx.Err() != nil {
+		_ = CleanupCancelled(ctx, api, partial)
+		return partial, ctx.Err()
+	}
 	return partial, nil
+}
+
+// cleanupTimeout 是取消后清理孤儿频道的超时。
+const cleanupTimeout = 15 * time.Second
+
+// CleanupCancelled 删除建卷过程中已经建出来的频道。
+//
+// 输入：ctx 请求上下文（此时通常已取消）；api user 会话；res 建卷的部分结果
+// 输出：删除错误；res 没有频道 id 时返回 nil
+// 预期：用 context.WithoutCancel 保证请求取消后删除 RPC 仍能发完；失败只返回错误，由调用方记日志
+func CleanupCancelled(ctx context.Context, api channel.DeleteAPI, res Result) error {
+	if res.ChannelID == 0 {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	return channel.Delete(cctx, api, &channel.Result{
+		ChannelID:  res.ChannelID,
+		AccessHash: res.AccessHash,
+	})
 }
 
 // ChatID 把 channel ID 转成 Bot API 风格的 -100... 形式。

@@ -4,6 +4,7 @@ import {
   Locale,
   SortField,
   SortOrder,
+  TransferTask,
   VolumeInfo,
 } from '../types';
 import { getLocaleMeta } from './i18n';
@@ -377,4 +378,29 @@ export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[])
     totalBytes,
     perVolume: perVolume.map((v, i) => ({ ...v, sharePct: pcts[i] ?? 0 })),
   };
+}
+
+// summarizeUploadBatch 汇总最近一次批量上传的整批进度。
+//
+// 输入：当前任务列表（顺序不限）
+// 输出：{files,done,total}；同一批次不足 2 个文件时返回 null（单文件不显示汇总条）
+// 预期：批次按 createdAt 最晚的那条判定；已完成任务按 size 封顶，进度不会超过 100%
+export function summarizeUploadBatch(
+  tasks: TransferTask[]
+): { files: number; done: number; total: number } | null {
+  let newest: TransferTask | undefined;
+  for (const task of tasks) {
+    if (task.direction !== 'upload' || !task.batchId) continue;
+    if (!newest || task.createdAt > newest.createdAt) newest = task;
+  }
+  if (!newest?.batchId) return null;
+  const batch = tasks.filter((task) => task.batchId === newest.batchId);
+  if (batch.length < 2) return null;
+  let done = 0;
+  let total = 0;
+  for (const task of batch) {
+    total += task.size;
+    done += Math.min(task.transferredBytes, task.size);
+  }
+  return { files: batch.length, done, total };
 }

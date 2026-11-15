@@ -339,9 +339,14 @@ export function triggerSync(): Promise<unknown> {
 }
 
 // rebuildVolume 按频道历史全量重建指定卷的本地索引。
-export function rebuildVolume(volume: string): Promise<{ files: number }> {
+//
+// 输入：volume 卷名；signal 可中断（取消即断开请求，服务端 r.Context() 随之取消）
+export function rebuildVolume(
+  volume: string,
+  signal?: AbortSignal
+): Promise<{ files: number }> {
   const q = new URLSearchParams({ vol: volume });
-  return request(`/api/rebuild?${q.toString()}`, { method: 'POST' });
+  return request(`/api/rebuild?${q.toString()}`, { method: 'POST', signal });
 }
 
 // clearQueue 删除服务端已结束（成功/失败）的任务记录。
@@ -353,14 +358,18 @@ export function clearQueue(): Promise<{ removed: number }> {
 }
 
 // createVolume 新建卷：后端建 Telegram 频道并写配置。
+//
+// 输入：name/title；signal 可中断（取消后服务端会把刚建出的空频道删掉）
 export function createVolume(
   name: string,
-  title: string
+  title: string,
+  signal?: AbortSignal
 ): Promise<{ name: string; channel_id: number; chat_id: number }> {
   return request('/api/volumes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, title }),
+    signal,
   });
 }
 

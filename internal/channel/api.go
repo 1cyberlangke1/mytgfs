@@ -23,5 +23,6 @@ type API interface {
 	MessagesGetDialogs(ctx context.Context, req *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error)
 	ChannelsGetChannels(ctx context.Context, req []tg.InputChannelClass) (tg.MessagesChatsClass, error)
 	ChannelsEditPhoto(ctx context.Context, req *tg.ChannelsEditPhotoRequest) (tg.UpdatesClass, error)
+	ChannelsDeleteChannel(ctx context.Context, channel tg.InputChannelClass) (tg.UpdatesClass, error)
 	UploadSaveFilePart(ctx context.Context, req *tg.UploadSaveFilePartRequest) (bool, error)
 }

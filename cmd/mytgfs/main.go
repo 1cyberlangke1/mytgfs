@@ -598,24 +598,29 @@ func runWeb(args []string) {
 						Name: name, Title: title, BotUsername: bn,
 					})
 					res = r
-					return cerr
+					if cerr != nil {
+						return cerr
+					}
+					// 建完频道后才发现已取消：先把频道删掉，不能写进配置留半挂状态
+					if ctx.Err() != nil {
+						_ = volume.CleanupCancelled(ctx, uc.API(), res)
+						return ctx.Err()
+					}
+					vol := config.Volume{
+						Name:    res.Name,
+						ChatID:  res.ChannelID,
+						Enabled: true,
+					}
+					// 建卷唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
+					return appRoot.MutateConfig(func(p string) error {
+						return config.AppendVolume(p, vol)
+					})
 				})
 				if rerr != nil {
 					return nil, rerr
 				}
 				if res.AvatarErr != nil {
 					logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
-				}
-				vol := config.Volume{
-					Name:    res.Name,
-					ChatID:  res.ChannelID,
-					Enabled: true,
-				}
-				// 建卷唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
-				if aerr := appRoot.MutateConfig(func(p string) error {
-					return config.AppendVolume(p, vol)
-				}); aerr != nil {
-					return nil, aerr
 				}
 				reconcile()
 				return map[string]any{

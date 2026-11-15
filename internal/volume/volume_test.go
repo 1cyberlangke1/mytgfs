@@ -21,6 +21,7 @@ type fakeAPI struct {
 	notifyReq *tg.AccountUpdateNotifySettingsRequest
 	uploadReq *tg.UploadSaveFilePartRequest
 	photoReq  *tg.ChannelsEditPhotoRequest
+	deleteReq tg.InputChannelClass
 
 	createErr  error
 	resolveErr error
@@ -28,6 +29,10 @@ type fakeAPI struct {
 	notifyErr  error
 	uploadErr  error
 	photoErr   error
+	deleteErr  error
+
+	// onCreate 在建频道成功后调用，用来模拟「建完就被取消」
+	onCreate func()
 
 	users []tg.UserClass
 }
@@ -37,12 +42,18 @@ func (f *fakeAPI) ChannelsCreateChannel(_ context.Context, req *tg.ChannelsCreat
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	return &tg.Updates{Chats: []tg.ChatClass{
 		&tg.Channel{ID: 123, AccessHash: 456, Title: req.Title},
 	}}, nil
 }
 
-func (f *fakeAPI) ContactsResolveUsername(_ context.Context, _ *tg.ContactsResolveUsernameRequest) (*tg.ContactsResolvedPeer, error) {
+func (f *fakeAPI) ContactsResolveUsername(ctx context.Context, _ *tg.ContactsResolveUsernameRequest) (*tg.ContactsResolvedPeer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if f.resolveErr != nil {
 		return nil, f.resolveErr
 	}
@@ -271,6 +282,45 @@ func TestCreateAvatarFailureIsNotFatal(t *testing.T) {
 	if res.AvatarErr == nil {
 		t.Error("AvatarErr 应该保留失败原因")
 	}
+}
+
+// TestCreateCancelCleansUpChannel 取消建卷时删除刚建出的频道。
+//
+// 输入：建频道成功后立刻取消 ctx（bot 提权因 ctx 取消而失败）
+// 输出：Create 返回错误；deleteChannel 收到该频道
+// 预期：不把孤儿频道留在账号里
+func TestCreateCancelCleansUpChannel(t *testing.T) {
+	api := newFake()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	api.onCreate = cancel
+
+	if _, err := Create(ctx, api, Request{Name: "work", BotUsername: "mybot"}); err == nil {
+		t.Fatal("取消后应该返回错误")
+	}
+	ch, ok := api.deleteReq.(*tg.InputChannel)
+	if !ok || ch.ChannelID != 123 || ch.AccessHash != 456 {
+		t.Fatalf("deleted channel = %+v", api.deleteReq)
+	}
+}
+
+// TestCleanupCancelledWithoutChannel 没有频道 id 时不做任何事。
+func TestCleanupCancelledWithoutChannel(t *testing.T) {
+	api := newFake()
+	if err := CleanupCancelled(context.Background(), api, Result{}); err != nil {
+		t.Fatalf("CleanupCancelled: %v", err)
+	}
+	if api.deleteReq != nil {
+		t.Error("没有频道时不应该调 deleteChannel")
+	}
+}
+
+func (f *fakeAPI) ChannelsDeleteChannel(_ context.Context, channel tg.InputChannelClass) (tg.UpdatesClass, error) {
+	f.deleteReq = channel
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	return &tg.Updates{}, nil
 }
 
 // jpegSize 解出 JPEG 的宽高。
