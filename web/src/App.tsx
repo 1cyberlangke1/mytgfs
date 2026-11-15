@@ -210,14 +210,14 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
   };
 }
 
-// queueFromServer 把服务端串行队列快照转成传输任务。
+// queueFromServer 把服务端队列快照转成传输任务。
 //
-// 输入：q 队列项（volume/kind/name 由服务端给出）；index 序号
-// 输出：按服务端 state 映射的传输任务（done→completed，failed 带原因）
+// 输入：q 队列项（volume/kind/name/done/size 由服务端给出）；index 序号
+// 输出：按服务端 state 映射的传输任务（done→completed，failed 带原因），
+//       带已传字节与总字节，进度条据此显示真实百分比
 // 预期：已完成的活儿必须显示「已完成」，不能一律当成排队中
 function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
-  const volumeId = q.volume || (q.name.includes(':') ? q.name.slice(0, q.name.indexOf(':')) : '');
-  const name = q.name.includes(':') ? q.name.slice(q.name.indexOf(':') + 1) : q.name;
+  const volumeId = q.volume || '';
   const kind = (q.kind || 'upload') as TransferTask['opKind'];
   const state: TransferTask['state'] =
     q.state === 'done'
@@ -229,12 +229,12 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
       : 'queued';
   return {
     id: `q-${index}-${q.id}`,
-    fileName: name.split('/').pop() || name,
+    fileName: q.name.split('/').pop() || q.name,
     volumeId,
     targetParentId: null,
     direction: kind === 'download' ? 'download' : 'upload',
-    size: 0,
-    transferredBytes: 0,
+    size: q.size ?? 0,
+    transferredBytes: q.done ?? 0,
     state,
     speedBps: 0,
     isChunkedResume: false,
@@ -242,7 +242,7 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     currentChunk: 0,
     totalChunks: 0,
     createdAt: new Date().toISOString(),
-    category: inferFileCategory(name, false),
+    category: inferFileCategory(q.name, false),
     errorMessage: q.error,
     opKind: kind,
   };
@@ -532,15 +532,39 @@ export default function App() {
   // 上一次连接状态：reloadState 是唯一能观察到跃迁的位置
   const connRef = useRef<ConnectionStatus>('connecting');
 
-  // 合并上传中、下载中与服务端排队任务；同名的活动上传优先，避免重复行
+  // 合并上传中、下载中与服务端队列任务。
+  //
+  // 输入：浏览器侧上传任务、服务端下载进度、服务端队列快照
+  // 输出：一行的上传任务优先取服务端队列的真实字节数（浏览器→面板那一段是 localhost，
+  //       秒到，真正耗时在队列里的 Telegram 上传）
+  // 预期：同一个文件只出现一行；队列里没有对应行的任务照旧显示
   const transfers = useMemo(() => {
-    const active = new Set(
-      uploadTasks
-        .filter((t) => t.state === 'transferring' || t.state === 'queued')
-        .map((t) => `${t.volumeId}:${t.fileName}`)
-    );
-    const queued = serverQueue.filter((q) => !active.has(`${q.volumeId}:${q.fileName}`));
-    return [...uploadTasks, ...serverTransfers, ...queued];
+    const byKey = new Map<string, TransferTask>();
+    for (const q of serverQueue) byKey.set(`${q.volumeId}:${q.fileName}`, q);
+    const merged = uploadTasks.map((t) => {
+      const key = `${t.volumeId}:${t.fileName}`;
+      const q = byKey.get(key);
+      if (!q) return t;
+      byKey.delete(key);
+      const size = q.size > 0 ? q.size : t.size;
+      const done = q.state === 'completed' ? size : Math.max(t.transferredBytes, q.transferredBytes);
+      const state: TransferTask['state'] =
+        q.state === 'failed'
+          ? 'failed'
+          : q.state === 'completed'
+            ? 'completed'
+            : t.state === 'completed' || t.state === 'failed'
+              ? 'queued'
+              : t.state;
+      return {
+        ...t,
+        size,
+        transferredBytes: done,
+        state,
+        errorMessage: q.errorMessage ?? t.errorMessage,
+      };
+    });
+    return [...merged, ...serverTransfers, ...byKey.values()];
   }, [uploadTasks, serverTransfers, serverQueue]);
 
   const cycleNextLocale = () => {

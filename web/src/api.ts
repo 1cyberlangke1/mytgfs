@@ -46,6 +46,10 @@ export interface ApiQueueItem {
   state: string;
   attempt: number;
   error?: string;
+  /** 已推进字节；未知时缺省 */
+  done?: number;
+  /** 总字节；非上传任务为 0 */
+  size?: number;
 }
 
 export interface ApiState {

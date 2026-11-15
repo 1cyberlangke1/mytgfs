@@ -151,7 +151,7 @@ func (f *fakeStore) Upload(context.Context, io.Reader, int64, string, string, st
 	return nil, errors.New("不应调用非续传上传")
 }
 
-func (f *fakeStore) UploadResumable(_ context.Context, _ io.ReaderAt, size int64, key, _ string, _ string, caption string) (*telegramstore.Part, error) {
+func (f *fakeStore) UploadResumable(_ context.Context, _ io.ReaderAt, size int64, key, _ string, _ string, caption string, _ ...telegramstore.UploadOption) (*telegramstore.Part, error) {
 	if f.uploadErr != nil {
 		return nil, f.uploadErr
 	}

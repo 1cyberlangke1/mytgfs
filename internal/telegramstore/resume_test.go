@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/gotd/td/tgerr"
@@ -67,6 +68,46 @@ func TestUploadResumableSkipsDoneParts(t *testing.T) {
 	}
 	if _, ok := rs.data["k"]; ok {
 		t.Fatal("成功后断点应被清除")
+	}
+}
+
+// TestUploadProgressReportsBytes 进度回调按已上传字节单调推进，收尾等于总大小。
+//
+// 输入：1MiB 文件、2 个分片、一个收集回调的切片
+// 输出：回调值单调不减，最后一次等于 size
+// 预期：面板据此显示真实百分比，不能从 0 直接跳满或倒退
+func TestUploadProgressReportsBytes(t *testing.T) {
+	const size = 1 << 20
+	api := newFakeAPI()
+	api.uploadSize = size
+	s := New(api, 42)
+	s.SetInterval(0)
+	s.SetResumeStore(newMemResume())
+
+	var mu sync.Mutex
+	var seen []int64
+	data := bytes.Repeat([]byte("b"), size)
+	if _, err := s.UploadResumable(context.Background(), bytes.NewReader(data), size, "k", "f.bin",
+		"application/octet-stream", "p", WithUploadProgress(func(done, total int64) {
+			if total != size {
+				t.Errorf("total = %d, 期望 %d", total, size)
+			}
+			mu.Lock()
+			seen = append(seen, done)
+			mu.Unlock()
+		})); err != nil {
+		t.Fatalf("上传失败: %v", err)
+	}
+	if len(seen) < 2 {
+		t.Fatalf("进度回调次数 = %d, 期望至少 2 次", len(seen))
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] < seen[i-1] {
+			t.Fatalf("进度倒退：%v", seen)
+		}
+	}
+	if got := seen[len(seen)-1]; got != size {
+		t.Fatalf("最终进度 = %d, 期望 %d", got, size)
 	}
 }
 

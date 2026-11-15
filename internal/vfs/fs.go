@@ -31,7 +31,7 @@ type Store interface {
 	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error)
 	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
 	// UploadResumable 按内容 key 断点续传，中断后能跳过已上传分片
-	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*telegramstore.Part, error)
+	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string, opts ...telegramstore.UploadOption) (*telegramstore.Part, error)
 	// Refresh 按消息 ID 重新拉取 document 元数据（file_reference 过期时用）
 	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
 	// Copy 引用已有 document 发一条新消息，不重传字节（写时去重用）

@@ -37,7 +37,7 @@ type Index interface {
 // Store 是本包需要的存储能力。
 type Store interface {
 	Copy(ctx context.Context, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, error)
-	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*telegramstore.Part, error)
+	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string, opts ...telegramstore.UploadOption) (*telegramstore.Part, error)
 }
 
 // Request 描述一次写入。
@@ -48,6 +48,8 @@ type Request struct {
 	SHA     string      // 内容 sha256（十六进制），同时作为续传键
 	Mime    string      // MIME；空则用 application/octet-stream
 	Caption string      // 已编码好的 caption
+	// OnProgress 可选：按已上传字节回报进度，供队列与面板显示真实百分比
+	OnProgress func(done int64)
 }
 
 // Hash 计算内容摘要，供续传键与去重使用。
@@ -90,7 +92,12 @@ func Write(ctx context.Context, idx Index, st Store, req Request) (*telegramstor
 		return part, reused, err
 	}
 
-	p, uerr := st.UploadResumable(ctx, req.Reader, req.Size, req.SHA, name, mime, req.Caption)
+	p, uerr := st.UploadResumable(ctx, req.Reader, req.Size, req.SHA, name, mime, req.Caption,
+		telegramstore.WithUploadProgress(func(done, _ int64) {
+			if req.OnProgress != nil {
+				req.OnProgress(done)
+			}
+		}))
 	if uerr != nil {
 		return nil, false, uerr
 	}

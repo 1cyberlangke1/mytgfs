@@ -130,7 +130,7 @@ func (d *FileSystem) handleJob(ctx context.Context, job queue.Job) error {
 		if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 			return err
 		}
-		return d.uploadNow(ctx, p)
+		return d.uploadNow(ctx, p, d.reporter(job.ID, p.Size))
 	case jobCopy:
 		var p copyJob
 		if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
@@ -254,8 +254,20 @@ func (d *FileSystem) removeNow(ctx context.Context, id int) error {
 	return nil
 }
 
+// reporter 把上传字节进度转给队列，供面板显示真实百分比。
+//
+// 输入：jobID 队列任务 id；size 文件总字节
+// 输出：回调；队列未接入时返回 nil
+// 预期：回调只写内存映射并推事件，不会产生 Telegram 请求
+func (d *FileSystem) reporter(jobID, size int64) func(done int64) {
+	if d.q == nil || jobID == 0 {
+		return nil
+	}
+	return func(done int64) { d.q.Report(jobID, done, size) }
+}
+
 // uploadNow 提交临时文件；临时文件已不存在则清账收尾。
-func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob) error {
+func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob, progress func(done int64)) error {
 	tmp, err := os.Open(p.Temp)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -296,7 +308,7 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob) error {
 		_ = os.Remove(p.Temp)
 		return nil
 	}
-	cerr := helper.commitAt(ctx, tmp, p)
+	cerr := helper.commitAt(ctx, tmp, p, progress)
 	_ = tmp.Close()
 	if cerr != nil {
 		return cerr

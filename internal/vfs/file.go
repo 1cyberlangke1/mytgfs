@@ -65,16 +65,17 @@ func (f *file) Abort() error {
 // 输入：ctx；tmp 已写完的临时文件；p 定稿的任务参数
 // 输出：error
 // 预期：上传或登记失败时保留 pending 账本，重启由队列重放
-func (f *file) commitAt(ctx context.Context, tmp *os.File, p uploadJob) error {
+func (f *file) commitAt(ctx context.Context, tmp *os.File, p uploadJob, progress func(done int64)) error {
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	part, _, uerr := upload.Write(ctx, f.d.idx, f.d.store, upload.Request{
-		Path:    p.Path,
-		Reader:  tmp,
-		Size:    p.Size,
-		SHA:     p.Sha,
-		Caption: p.Body,
+		Path:       p.Path,
+		Reader:     tmp,
+		Size:       p.Size,
+		SHA:        p.Sha,
+		Caption:    p.Body,
+		OnProgress: progress,
 	})
 	if uerr != nil {
 		return uerr

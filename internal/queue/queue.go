@@ -85,6 +85,10 @@ type Item struct {
 	State   string `json:"state"`
 	Attempt int    `json:"attempt"`
 	Err     string `json:"error,omitempty"`
+	// Done 是已推进的字节数，Size 是总字节数；未知时为 0。
+	// 只有执行中的任务会上报，面板据此显示真实进度而不是 0/100
+	Done int64 `json:"done,omitempty"`
+	Size int64 `json:"size,omitempty"`
 }
 
 // ErrQueueFull 表示排队任务已达上限。
@@ -121,6 +125,17 @@ type Queue struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
+
+	// progMu/progress 记录执行中任务的字节进度：键是任务 id。
+	// 只放内存、不落库：重启后任务重排，进度从 0 重新上报即可
+	progMu   sync.Mutex
+	progress map[int64]progress
+}
+
+// progress 是一条任务的字节进度。
+type progress struct {
+	done int64
+	size int64
 }
 
 // schema 是任务表；state+id 建索引因为取队首是热路径。
@@ -173,6 +188,7 @@ func Open(db *sql.DB, workers int, onChange func()) (*Queue, error) {
 		workers:  workers,
 		wakes:    wakes,
 		waiters:  make(map[int64][]chan struct{}),
+		progress: make(map[int64]progress),
 		onChange: onChange,
 	}, nil
 }
@@ -445,6 +461,48 @@ func (q *Queue) Wait(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Report 记录执行中任务的字节进度并推一次状态。
+//
+// 输入：id 任务 id；done 已完成字节；size 总字节
+// 输出：无
+// 预期：handler 在执行过程中调用；只更新内存，任务结束即删除；
+//
+//	done 单调不减，size 取最后一次非零值
+func (q *Queue) Report(id, done, size int64) {
+	if id == 0 || size <= 0 {
+		return
+	}
+	if done < 0 {
+		done = 0
+	}
+	if done > size {
+		done = size
+	}
+	q.progMu.Lock()
+	prev, ok := q.progress[id]
+	if ok && done < prev.done && prev.size == size {
+		// 续传回到早期分片时会报更小的值：进度条不能倒退
+		done = prev.done
+	}
+	q.progress[id] = progress{done: done, size: size}
+	q.progMu.Unlock()
+	q.changed()
+}
+
+// progressOf 读取任务进度。
+//
+// 输入：id 任务 id
+// 输出：done 与 size；没有记录时为 0
+func (q *Queue) progressOf(id int64) (int64, int64) {
+	q.progMu.Lock()
+	p, ok := q.progress[id]
+	q.progMu.Unlock()
+	if !ok {
+		return 0, 0
+	}
+	return p.done, p.size
+}
+
 // Snapshot 返回最近的任务快照，最新的排在最前。
 func (q *Queue) Snapshot() []Item {
 	rows, err := q.db.Query(`
@@ -460,6 +518,7 @@ ORDER BY id DESC LIMIT ?`, keepFinished)
 		if err := rows.Scan(&it.ID, &it.Volume, &it.Kind, &it.Name, &it.State, &it.Attempt, &it.Err); err != nil {
 			return out
 		}
+		it.Done, it.Size = q.progressOf(it.ID)
 		out = append(out, it)
 	}
 	return out
@@ -519,23 +578,81 @@ func (q *Queue) loop(ctx context.Context, wake chan struct{}) {
 	}
 }
 
-// claim 领取一条任务：同卷已有 running 时跳过，实现卷内串行。
+// uploadLane 是同一卷内允许同时推进的上传任务数。
+//
+// 输入：无
+// 输出：同卷并发上传上限
+// 预期：每个上传任务内部本来就有 upload_parallel 路分片；再叠 3 个任务，
+//
+//	是为了让「每个文件固定的几次往返」重叠起来，而不是按某次测速结果调参；
+//	频道消息速率仍由 Store 的 1 msg/s 限流兜住，不随这里放大
+const uploadLane = 3
+
+// claim 领取一条任务。
+//
+// 输入：ctx
+// 输出：任务、是否领到、错误
+// 预期：同卷的元数据操作仍然互斥；同卷上传最多 uploadLane 个并行，
+//
+//	让多个小文件的固定往返重叠，而不会把频道写操作堆在一起
 func (q *Queue) claim(ctx context.Context) (Job, bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	var job Job
-	err := q.db.QueryRowContext(ctx, `
-SELECT id, volume, kind, name, payload, attempt FROM jobs
-WHERE state = ?
-  AND volume NOT IN (SELECT volume FROM jobs WHERE state = ?)
-ORDER BY id LIMIT 1`, stateQueued, stateRunning).
-		Scan(&job.ID, &job.Volume, &job.Kind, &job.Name, &job.Payload, &job.Attempt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Job{}, false, nil
-	}
+	// 先看正在跑的任务：按卷统计总在跑数与上传数
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT volume, kind, COUNT(*) FROM jobs WHERE state = ? GROUP BY volume, kind`, stateRunning)
 	if err != nil {
 		return Job{}, false, err
+	}
+	running := make(map[string]int)   // 卷内正在跑的任务数
+	uploading := make(map[string]int) // 卷内正在跑的上传任务数
+	for rows.Next() {
+		var vol, kind string
+		var n int
+		if err := rows.Scan(&vol, &kind, &n); err != nil {
+			rows.Close()
+			return Job{}, false, err
+		}
+		running[vol] += n
+		if kind == "upload" {
+			uploading[vol] = n
+		}
+	}
+	rows.Close()
+
+	// 再按先来后到挑一条能跑的
+	cands, err := q.db.QueryContext(ctx,
+		`SELECT id, volume, kind, name, payload, attempt FROM jobs WHERE state = ? ORDER BY id LIMIT 64`,
+		stateQueued)
+	if err != nil {
+		return Job{}, false, err
+	}
+	var job Job
+	found := false
+	for cands.Next() {
+		var c Job
+		if err := cands.Scan(&c.ID, &c.Volume, &c.Kind, &c.Name, &c.Payload, &c.Attempt); err != nil {
+			cands.Close()
+			return Job{}, false, err
+		}
+		if found {
+			continue
+		}
+		busy := running[c.Volume]
+		if c.Kind == "upload" {
+			// 同卷有非上传任务在跑时不插队；上传数量没到上限就让位
+			if busy > uploading[c.Volume] || uploading[c.Volume] >= uploadLane {
+				continue
+			}
+		} else if busy > 0 {
+			continue
+		}
+		job, found = c, true
+	}
+	cands.Close()
+	if !found {
+		return Job{}, false, nil
 	}
 	res, err := q.db.ExecContext(ctx,
 		`UPDATE jobs SET state = ?, attempt = attempt + 1, updated_at = ? WHERE id = ? AND state = ?`,
@@ -640,6 +757,12 @@ DELETE FROM jobs WHERE state IN (?, ?) AND id NOT IN (
 )`, stateDone, stateFailed, stateDone, stateFailed, keepFinished)
 	// 结束（成功或失败）必须推一次：这是面板从「执行中」变成最终状态的唯一时点
 	q.changed()
+	// 进度只属于执行期，任务结束后不再保留
+	q.progMu.Lock()
+	delete(q.progress, id)
+	q.progMu.Unlock()
+	// 车道让出来后叫醒睡着的 worker：同卷上传并行后，结束的那条可能正是别人在等的名额
+	q.signal()
 	// 唤醒所有等待该任务结束的调用方
 	q.notifyDoneClose(id)
 }

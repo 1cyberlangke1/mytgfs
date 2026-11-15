@@ -127,7 +127,7 @@ func TestUploadNowRejectsTruncatedTemp(t *testing.T) {
 
 	err = fsys.uploadNow(ctx, uploadJob{
 		Path: "/x.bin", Temp: tmp.Name(), Size: 10, Sha: "s", Base: "x.bin", Parent: 0,
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("尺寸不符应报错")
 	}

@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -75,15 +76,39 @@ type ResumeStore interface {
 // 预期：只影响 UploadResumable，普通 Upload 行为不变
 func (s *Store) SetResumeStore(rs ResumeStore) { s.resumeStore = rs }
 
+// UploadOption 调整单次上传的行为。
+type UploadOption func(*uploadOpts)
+
+// uploadOpts 是一次上传的可选参数。
+type uploadOpts struct {
+	progress func(done, size int64)
+}
+
+// WithUploadProgress 让上传按已完成字节汇报进度。
+//
+// 输入：fn 每次分片落地后回调（done 已完成字节，size 总字节）
+// 输出：UploadOption
+// 预期：回调可能在多个分片协程里并发触发，实现要自己保证线程安全；
+//
+//	回调里不要做重活，每片都会调一次
+func WithUploadProgress(fn func(done, size int64)) UploadOption {
+	return func(o *uploadOpts) { o.progress = fn }
+}
+
 // UploadResumable 上传文件并在中断后从断点继续。
 //
-// 输入：r 随机读源；size 字节数；key 断点键（空表示不续传）；name/mime/caption 同 Upload
+// 输入：r 随机读源；size 字节数；key 断点键（空表示不续传）；name/mime/caption 同 Upload；
+// opts 可选（进度回调）
 // 输出：新消息的 Part
 // 预期：
 //   - 断点存在且分片大小一致时跳过已完成分片
 //   - 断点失效（临时区过期/片数不符）时清空重传一次
 //   - sendMedia 成功后才清断点，所以发送失败也能只重发最后一步
-func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string) (*Part, error) {
+func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string, opts ...UploadOption) (*Part, error) {
+	var o uploadOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
 	if size < 0 || size > MaxFileSize {
 		return nil, ErrTooLarge
 	}
@@ -102,14 +127,14 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 		slog.Debug(i18n.T("log.upload_resume", len(done), total), "key", key)
 	}
 
-	if err := s.sendParts(ctx, r, size, resume, done, key); err != nil {
+	if err := s.sendParts(ctx, r, size, resume, done, key, o.progress); err != nil {
 		if !IsUploadStateError(err) {
 			return nil, err
 		}
 		// 服务端临时区已过期或分片状态对不上：清断点整份重传一次
 		s.clearResume(key)
 		resume, done = s.newResume(partSize, total)
-		if err := s.sendParts(ctx, r, size, resume, done, key); err != nil {
+		if err := s.sendParts(ctx, r, size, resume, done, key, o.progress); err != nil {
 			return nil, err
 		}
 	}
@@ -124,7 +149,7 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 	// 服务端临时文件过期或片数不符：清断点，整份重传一次
 	s.clearResume(key)
 	resume, done = s.newResume(partSize, total)
-	if err := s.sendParts(ctx, r, size, resume, done, key); err != nil {
+	if err := s.sendParts(ctx, r, size, resume, done, key, o.progress); err != nil {
 		return nil, err
 	}
 	part, err = s.sendUploaded(ctx, peer, resume, size, name, mime, caption)
@@ -263,20 +288,34 @@ func (s *Store) clearResume(key string) {
 
 // sendParts 并发上传所有未完成分片。
 //
-// 输入：r 随机读源；size 总字节；resume 断点（含 file_id）；done 已完成位图；key 断点键
+// 输入：r 随机读源；size 总字节；resume 断点（含 file_id）；done 已完成位图；key 断点键；
+// progress 可选的字节进度回调（每片落地后按已传字节调用）
 // 输出：error；任一分片失败即取消其余分片
 // 预期：顺序无关，Telegram 按 file_part 组装；断点按 resumeSaveInterval 定时落盘
-func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume *UploadResume, done map[int]bool, key string) error {
+func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume *UploadResume, done map[int]bool, key string, progress func(done, size int64)) error {
 	total := resume.TotalParts
 	partSize := resume.PartSize
 	big := size > uploadBigLimit
 	lastSave := time.Now()
 
 	var (
-		mu       sync.Mutex
-		firstErr error
-		doneN    int
+		mu        sync.Mutex
+		firstErr  error
+		doneN     int
+		doneBytes atomic.Int64
 	)
+	// 续传时先把已完成的分片算进进度，面板不会从 0 重来
+	for idx := range total {
+		if done[idx] {
+			doneBytes.Add(partLen(idx, partSize, size))
+		}
+	}
+	report := func() {
+		if progress != nil {
+			progress(min(doneBytes.Load(), size), size)
+		}
+	}
+	report()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -314,6 +353,7 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 				mu.Lock()
 				done[idx] = true
 				doneN++
+				doneBytes.Add(int64(n))
 				// 按时间落盘：快网络少写盘，慢网络也不会丢太多进度
 				due := time.Since(lastSave) >= resumeSaveInterval
 				if due {
@@ -321,6 +361,8 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 					s.saveResume(key, resume, done)
 				}
 				mu.Unlock()
+				// 回调放在锁外：上层会写内存映射并推事件，不能占着队列的锁
+				report()
 			}
 		})
 	}
@@ -358,6 +400,22 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 	}
 	s.saveResume(key, resume, done)
 	return nil
+}
+
+// partLen 返回第 idx 片的字节数（最后一片可能不满）。
+//
+// 输入：idx 分片序号；partSize 分片大小；size 总字节
+// 输出：该片实际字节数
+// 预期：用于按字节汇报进度；越界时返回 0
+func partLen(idx, partSize int, size int64) int64 {
+	off := int64(idx) * int64(partSize)
+	if off >= size {
+		return 0
+	}
+	if rest := size - off; rest < int64(partSize) {
+		return rest
+	}
+	return int64(partSize)
 }
 
 // savePart 发送单个分片。

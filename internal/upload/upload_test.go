@@ -38,7 +38,7 @@ func (f *fakeStore) Copy(_ context.Context, src *telegramstore.Part, _, _, _ str
 	return &telegramstore.Part{MessageID: 7, DocumentID: src.DocumentID}, nil
 }
 
-func (f *fakeStore) UploadResumable(context.Context, io.ReaderAt, int64, string, string, string, string) (*telegramstore.Part, error) {
+func (f *fakeStore) UploadResumable(context.Context, io.ReaderAt, int64, string, string, string, string, ...telegramstore.UploadOption) (*telegramstore.Part, error) {
 	f.uploads++
 	if f.uploadErr != nil {
 		return nil, f.uploadErr
