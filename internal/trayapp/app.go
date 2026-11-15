@@ -374,6 +374,9 @@ func Run(opts Options) error {
 		})
 
 	// 面板路由：桌面壳直接挂在 webview 上，不监听端口
+	// reconcileVolumes 让运行时卷表对齐到配置文件（建卷/attach/删卷共用收尾），
+	// 定义在 mountOne 之后；面板请求发生时已赋值
+	var reconcileVolumes func()
 	buildPanel := func() http.Handler {
 		webOpts := web.Options{
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
@@ -469,12 +472,13 @@ func Run(opts Options) error {
 				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
 					return nil, aerr
 				}
+				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
+				reconcileVolumes()
 				out := map[string]any{
-					"name":             res.Name,
-					"channel_id":       res.ChannelID,
-					"chat_id":          res.ChatID,
-					"muted":            res.Muted,
-					"restart_required": true,
+					"name":       res.Name,
+					"channel_id": res.ChannelID,
+					"chat_id":    res.ChatID,
+					"muted":      res.Muted,
 				}
 				if res.MuteErr != nil {
 					out["mute_error"] = res.MuteErr.Error()
@@ -548,6 +552,8 @@ func Run(opts Options) error {
 				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
 					return nil, werr
 				}
+				// attach 完立即挂载并推送：与建卷同一条对齐路径
+				reconcileVolumes()
 				return map[string]any{
 					"name":       res.Name,
 					"channel_id": res.ChannelID,
@@ -693,6 +699,37 @@ func Run(opts Options) error {
 			close(tv.done)
 			rebuildMenu()
 		})
+	}
+
+	// reconcileVolumes 把运行时卷表对齐到配置文件：
+	// 配置里启用而未挂载的 → mountOne 挂载；挂载了而配置里没有/停用的 → 停掉。
+	// 建卷/attach/删卷等一切配置变更都以调用它收尾，两端耦合，用户不需要重启
+	reconcileVolumes = func() {
+		cur, err := config.Load(cfgPath)
+		if err != nil {
+			logging.Warn("log.volume_warn", err)
+			return
+		}
+		want := make(map[string]bool, len(cur.Volumes))
+		for _, v := range cur.Volumes {
+			if v.Enabled {
+				want[strings.ToLower(v.Name)] = true
+			}
+		}
+		for _, v := range cur.Volumes {
+			if v.Enabled {
+				if _, mounted := reg.Get(v.Name); !mounted {
+					mountOne(v.Name, v.ChatID)
+				}
+			}
+		}
+		for _, tv := range reg.Snapshot() {
+			if !want[strings.ToLower(tv.name)] {
+				tv.cancel() // 生命周期协程负责关索引、摘注册表、close(done)
+				<-tv.done
+			}
+		}
+		pushHub.Publish(push.TopicStatus)
 	}
 
 	// isMounted 判断卷是否已经在托盘里。

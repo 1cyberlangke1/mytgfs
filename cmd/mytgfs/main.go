@@ -40,7 +40,6 @@ import (
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/version"
-	"mytgfs/internal/vfs"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
 )
@@ -454,26 +453,71 @@ func runWeb(args []string) {
 		}
 		defer closePool()
 		appRoot := app.New(cfg, app.Options{Push: pushHub})
-		reg := openWebVolumes(ctx, appRoot, api)
-
-		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容。
-		// 每卷独立协程：删卷时只停被删卷，其它卷不受影响
+		reg := app.NewVolumeRegistry[*webVolume]()
 		vsync, vstop := context.WithCancel(ctx)
 		var vwg sync.WaitGroup
-		if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); cfg.Mount.SyncOn() {
-			syncOn := trayapp.SyncEnabled(cfgPath, cfg.Mount.SyncOn())
-			for _, wv := range reg.Snapshot() {
-				wv := wv
-				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: wv.vf.Volume.ChatID}
+
+		// mountRuntime 打开一个卷并挂进运行时注册表，起该卷的自动同步协程。
+		// 启动与面板建卷/attach 共用这一条路径，两端永远走同一份逻辑
+		syncInterval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
+		syncOn := trayapp.SyncEnabled(cfgPath, cfg.Mount.SyncOn())
+		mountRuntime := func(name string, chatID int64) {
+			vf, err := appRoot.OpenVolume(ctx, name, api)
+			if err != nil {
+				logging.Warn("tray.volume.open_failed", err, name)
+				return
+			}
+			wv := &webVolume{vf: vf, mgr: vf.Files, idx: vf.Index, store: vf.Store}
+			// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
+			if cfg.Mount.SyncOn() {
+				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: chatID}
 				vctx, vcancel := context.WithCancel(vsync)
 				done := make(chan struct{})
 				vwg.Go(func() {
 					defer close(done)
-					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil, syncOn)
+					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, syncInterval, nil, syncOn)
 				})
 				wv.stop = func() { vcancel(); <-done }
 			}
+			reg.Put(name, wv)
 		}
+
+		// reconcile 让运行时卷表与配置文件强制一致：
+		// 配置里启用而未挂载的 → 挂载；挂载了而配置里没有/停用的 → 停掉并关闭。
+		// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
+		reconcile := func() {
+			cur, err := config.Load(cfgPath)
+			if err != nil {
+				logging.Warn("log.volume_warn", err)
+				return
+			}
+			want := make(map[string]bool, len(cur.Volumes))
+			for _, v := range cur.Volumes {
+				if v.Enabled {
+					want[strings.ToLower(v.Name)] = true
+				}
+			}
+			for _, v := range cur.Volumes {
+				if v.Enabled {
+					if _, ok := reg.Get(v.Name); !ok {
+						mountRuntime(v.Name, v.ChatID)
+					}
+				}
+			}
+			for _, wv := range reg.Snapshot() {
+				if !want[strings.ToLower(wv.vf.Volume.Name)] {
+					if wv.stop != nil {
+						wv.stop() // 先停自动同步，避免并发使用已关闭的索引
+					}
+					_ = wv.vf.Close() // 关队列与索引
+					reg.Delete(wv.vf.Volume.Name)
+				}
+			}
+			// 全部对齐完再推：面板一次刷新就能看到最终卷列表
+			pushHub.Publish(push.TopicStatus)
+		}
+		// 启动即对齐：配置里启用的卷全部挂上
+		reconcile()
 		// 先停自动同步再关索引：顺序反了会写已关闭的库
 		defer func() {
 			vstop()
@@ -529,6 +573,8 @@ func runWeb(args []string) {
 				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
 					return nil, aerr
 				}
+				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
+				reconcile()
 				return map[string]any{
 					"name":       res.Name,
 					"channel_id": res.ChannelID,
@@ -568,18 +614,11 @@ func runWeb(args []string) {
 				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
 					return rerr
 				}
-				// 两份账合一：配置文件已删，运行时账本同步摘除并停掉该卷的同步协程
-				wv, mounted := reg.Take(name)
-				if mounted {
-					if wv.stop != nil {
-						wv.stop() // 先停自动同步，避免并发使用已关闭的索引
-					}
-					_ = wv.vf.Close() // 关队列与索引
-				}
+				// 运行时账本对齐配置：停同步、关队列与索引、从注册表摘除，一次完成
+				reconcile()
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
-				pushHub.Publish(push.TopicStatus)
 				return nil
 			},
 			// 添加已有频道：用 bot 会话校验频道可见性与发言权
@@ -598,6 +637,8 @@ func runWeb(args []string) {
 				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
 					return nil, werr
 				}
+				// attach 完立即挂载并推送：与建卷同一条对齐路径
+				reconcile()
 				return map[string]any{
 					"name":       res.Name,
 					"channel_id": res.ChannelID,
@@ -693,35 +734,11 @@ func runWeb(args []string) {
 type webVolume struct {
 	vf    *app.VolumeFS
 	mgr   *fm.Manager
-	davfs *vfs.FileSystem
 	idx   *index.Index
 	store *telegramstore.Store
 	// stop 停掉该卷的自动同步协程并等它退出；删卷时先调它再关索引，
 	// 避免同步协程并发使用已关闭的库。未启动同步的卷为 nil。
 	stop func()
-}
-
-// openWebVolumes 为每个启用的卷打开文件系统后端。
-//
-// 输入：ctx；a 装配根；api 已认证的 MTProto 客户端
-// 输出：卷注册表（列卷/开卷/删卷的唯一账本）；打开失败的卷直接跳过（面板里就不显示）
-// 预期：只读索引 + 可写存储，每个卷独立 db 文件
-func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) *app.VolumeRegistry[*webVolume] {
-	reg := app.NewVolumeRegistry[*webVolume]()
-	for _, v := range a.Config().Volumes {
-		if !v.Enabled {
-			continue
-		}
-		vf, err := a.OpenVolume(ctx, v.Name, api)
-		if err != nil {
-			logging.Warn("tray.volume.open_failed", err, v.Name)
-			continue
-		}
-		reg.Put(v.Name, &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store})
-	}
-	// 卷处理结束就推一条 status：全部失败也要推，面板才能结束等待
-	a.Events().Publish(push.TopicStatus)
-	return reg
 }
 
 // closeWebVolumes 先停每个卷的队列，再关索引。
