@@ -554,10 +554,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
       matchesShortcutWithShift(e, shortcuts.moveDown) ||
       matchesShortcutWithShift(e, shortcuts.moveUp)
     ) {
-      e.preventDefault();
       const down = matchesShortcutWithShift(e, shortcuts.moveDown);
       const step = down ? 1 : -1;
       const at = items.findIndex((i) => i.id === cursorId);
+      // 光标已经在首/末项还要继续往外走：不拦截按键，
+      // 让页面级方向键把焦点移出列表（↑ 去工具栏搜索框、↓ 去分页）
+      if (at >= 0 && ((down && at === items.length - 1) || (!down && at === 0))) return;
+      e.preventDefault();
       const next = at < 0 ? (step > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, at + step));
       const target = items[next];
       if (!target) return;

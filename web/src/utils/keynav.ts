@@ -99,6 +99,23 @@ export function moveFocusDirection(dir: Direction): boolean {
   return true;
 }
 
+// focusAdjacent 按 DOM 顺序把焦点挪到相邻控件。
+//
+// 输入：起点元素；delta 正数向后、负数向前
+// 输出：移动成功 true；起点不在候选里或越界 false
+// 预期：工具栏这类同一行控件，DOM 顺序与视觉顺序一致，
+//       用相邻项比几何方向更可预测（下拉框只吃上下键，左右要能走出去）
+export function focusAdjacent(from: HTMLElement, delta: number): boolean {
+  const list = candidates();
+  const at = list.indexOf(from);
+  if (at < 0) return false;
+  const next = list[at + delta];
+  if (!next) return false;
+  next.focus();
+  next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
+
 // scrollContainer 找当前元素所在的滚动容器。
 //
 // 输入：起始元素

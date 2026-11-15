@@ -125,12 +125,110 @@ async function pollTrue(fn, timeout = 2500) {
   return false;
 }
 
-const key = (k) =>
+// 真实按键：走 CDP 输入管线（keydown → 浏览器默认行为 → keyup），
+// 页面里 preventDefault 会真的拦住文字输入，与用户手按一致。
+//
+// 输入：键名（ArrowUp/Down/Left/Right/Enter/Escape/Delete/F2/Tab/Space）
+// 输出：无
+// 预期：合成 KeyboardEvent 不会触发原生行为（不放文字、不改 select），
+//       所以这里必须用 CDP dispatchKeyEvent
+const VK = {
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  Enter: 13,
+  Escape: 27,
+  Delete: 46,
+  F2: 113,
+  Tab: 9,
+  Space: 32,
+};
+const CODE = {
+  ArrowUp: 'ArrowUp',
+  ArrowDown: 'ArrowDown',
+  ArrowLeft: 'ArrowLeft',
+  ArrowRight: 'ArrowRight',
+  Enter: 'Enter',
+  Escape: 'Escape',
+  Delete: 'Delete',
+  F2: 'F2',
+  Tab: 'Tab',
+  Space: 'Space',
+};
+
+const key = async (k) => {
+  const common = {
+    key: k === 'Space' ? ' ' : k,
+    code: CODE[k] ?? k,
+    windowsVirtualKeyCode: VK[k] ?? 0,
+    nativeVirtualKeyCode: VK[k] ?? 0,
+  };
+  await rpc('Input.dispatchKeyEvent', { type: 'keyDown', ...common });
+  await rpc('Input.dispatchKeyEvent', { type: 'keyUp', ...common });
+};
+
+// rawKey 打一个可见字符：带 text 的 keyDown 才会真正插入；
+// 页面若 preventDefault，文字不会落进输入框——正是「未按 Enter 不能编辑」要验的行为。
+const rawKey = async (ch) => {
+  const code = 'Key' + ch.toUpperCase();
+  const vk = ch.toUpperCase().charCodeAt(0);
+  await rpc('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: ch,
+    code,
+    text: ch,
+    unmodifiedText: ch,
+    windowsVirtualKeyCode: vk,
+    nativeVirtualKeyCode: vk,
+  });
+  await rpc('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code });
+};
+
+// hasCursor 判断列表里是否已经有行带光标环（键盘游标已就位）。
+const hasCursor = () =>
   evaluate(`(() => {
-    const el = document.activeElement || document.body;
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true }));
-    return true;
+    const rows = [...document.querySelectorAll('[data-file-id]')];
+    return rows.some((r) => String(r.className).includes('ring-[#007AFF]'));
   })()`);
+
+// focusInfo 描述当前焦点落在哪一类控件上，供连续操作断言。
+//
+// 输入：无
+// 输出：{kind, id, value?}；kind ∈ body|input|select|list|nav|other
+// 预期：id 用 id/aria-label/href 这类稳定标识，避免文本随数据变化
+const focusInfo = () =>
+  evaluate(`(() => {
+    const el = document.activeElement;
+    if (!el || el === document.body) return { kind: 'body', id: 'body' };
+    if (el.closest('nav[aria-label]')) {
+      return { kind: 'nav', id: el.getAttribute('href') || 'nav' };
+    }
+    if (el.hasAttribute('aria-keyshortcuts')) return { kind: 'list', id: 'list' };
+    if (el.tagName === 'INPUT') {
+      return { kind: 'input', id: el.type + ':' + (el.getAttribute('aria-label') || el.id || ''), value: el.value };
+    }
+    if (el.tagName === 'SELECT') {
+      return { kind: 'select', id: el.id || el.getAttribute('aria-label') || 'select', value: el.value };
+    }
+    return { kind: 'other', id: (el.getAttribute('aria-label') || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24) };
+  })()`);
+
+// walkUntil 连续按键直到条件成立，返回经过的焦点轨迹。
+//
+// 输入：按键名；判定函数（接收 focusInfo）；最多按几次
+// 输出：{ok, trail}
+// 预期：轨迹用于失败时看清「卡在哪一项」，不猜次数
+async function walkUntil(keyName, ok, max = 12) {
+  const trail = [];
+  for (let i = 0; i < max; i += 1) {
+    await key(keyName);
+    const info = await focusInfo();
+    trail.push(info.id);
+    if (ok(info)) return { ok: true, trail };
+  }
+  return { ok: false, trail };
+}
 
 // focused 返回当前焦点元素在 DOM 中的稳定标识：导航项用 href，其余退到 aria-label/文本。
 //
@@ -290,6 +388,7 @@ try {
   // ---- 3. 删除：确认框取消不删，确认后数据变少 ----
   await focusList();
   await key('ArrowDown');
+  await waitFor('游标就位', hasCursor);
   await key('Delete');
   await waitFor('删除确认框打开', () => evaluate(`!!document.querySelector('dialog[open]')`));
   check('Delete 打开删除确认框', true);
@@ -306,6 +405,7 @@ try {
 
   await focusList();
   await key('ArrowDown');
+  await waitFor('游标就位', hasCursor);
   await key('Delete');
   await waitFor('删除确认框再次打开', () => evaluate(`!!document.querySelector('dialog[open]')`));
   const confirmed = await evaluate(`(() => {
@@ -326,6 +426,7 @@ try {
   // ---- 4. 改名：F2 打开弹窗，提交后落到数据里 ----
   await waitFor('列表恢复', focusList);
   await key('ArrowDown');
+  await waitFor('游标就位', hasCursor);
   await key('F2');
   await waitFor('改名弹窗打开', () => evaluate(`!!document.querySelector('dialog[open] input')`));
   const renamed = await evaluate(`(() => {
@@ -347,10 +448,28 @@ try {
   });
   check('F2 改名生效', renamedInTree === 'e2e-renamed.txt', renamedInTree);
 
-  // ---- 5. 搜索：输入后只剩匹配项 ----
+  // ---- 5. 连续键盘：列表 → 工具栏 → 搜索框 → 下拉 → 回到列表 ----
   await waitFor('搜索框出现', () => evaluate(`!!document.querySelector('input[type="search"]')`));
-  await evaluate(`document.querySelector('input[type="search"]').focus(); true`);
-  await setValue('input[type="search"]', 'clip');
+  await waitFor('列表聚焦', focusList);
+
+  // 5.1 在列表里一路按 ↑，焦点必须能走出列表落到工具栏
+  //     列表首项再按 ↑ 时不再拦截按键，交给页面级焦点移动
+  const leaveList = await walkUntil('ArrowUp', (i) => i.kind !== 'list', 14);
+  check('↑ 能把光标移出列表到工具栏', leaveList.ok, leaveList.trail.join(' > '));
+
+  // 5.2 工具栏里连续按 ←，必须能走到搜索框（下拉框不再把方向键吃掉）
+  const toSearch = await walkUntil('ArrowLeft', (i) => i.kind === 'input', 8);
+  check('← 从工具栏走到搜索框', toSearch.ok, toSearch.trail.join(' > '));
+
+  // 5.2 未按 Enter 前，字符不许进搜索框（两段式：选中 ≠ 编辑）
+  await rawKey('c');
+  await rawKey('l');
+  const beforeEnter = await focusInfo();
+  check('搜索框未按 Enter 时不接收文字', beforeEnter.kind === 'input' && beforeEnter.value === '', JSON.stringify(beforeEnter));
+
+  // 5.3 Enter 进入编辑，同一个键位立刻变成可输入
+  await key('Enter');
+  for (const ch of 'clip') await rawKey(ch);
   const filtered = await waitFor('搜索过滤生效', () =>
     evaluate(`(() => {
       const list = document.querySelector('[aria-keyshortcuts]');
@@ -359,14 +478,70 @@ try {
       return text.includes('clip.mp4') && !text.includes('song.mp3') && !text.includes('e2e-renamed');
     })()`)
   );
-  check('搜索框过滤列表', filtered === true);
-  await setValue('input[type="search"]', '');
-  await waitFor('清空搜索恢复列表', () =>
+  check('Enter 后搜索框可输入并过滤列表', filtered === true);
+
+  // 5.4 Esc 退出编辑、清空搜索并把焦点还给列表
+  await key('Escape');
+  const searchCleared = await waitFor('搜索清空且回到列表', async () => {
+    const info = await focusInfo();
+    const value = await evaluate(`document.querySelector('input[type="search"]').value`);
+    return info.kind === 'list' && value === '' ? info.id : false;
+  });
+  check('Esc 退出搜索并回到列表', searchCleared === 'list');
+
+  // 5.5 工具栏里连续按 →：每一步焦点都必须换到下一项，
+  //     经过下拉框时左右键要能把焦点带出来（下拉只吃上下键）
+  await walkUntil('ArrowUp', (i) => i.kind !== 'list', 14);
+  const before = await focusInfo();
+  const steps = [];
+  let stuck = '';
+  for (let i = 0; i < 6; i += 1) {
+    const from = await focusInfo();
+    await key('ArrowRight');
+    const to = await focusInfo();
+    steps.push(from.id + '→' + to.id);
+    if (to.id === from.id) {
+      stuck = from.id;
+      break;
+    }
+    // 同一控件上按 → 不能改选项值（改选项要 Enter 进入编辑才算）
+    if (from.kind === 'select' && to.id === from.id && to.value !== from.value) {
+      stuck = from.id + ' 选项被左右键改掉';
+      break;
+    }
+  }
+  check('工具栏连续 → 不卡住（含下拉框）', stuck === '', stuck || steps.join(' | '));
+  check('连续步进起点在工具栏', before.kind === 'input' || before.kind === 'select' || before.kind === 'other', JSON.stringify(before));
+
+  // 5.6 连续 ← 走回搜索框，验证反向同样通
+  const backToSearch = await walkUntil('ArrowLeft', (i) => i.kind === 'input', 8);
+  check('← 能连续走回搜索框', backToSearch.ok, backToSearch.trail.join(' > '));
+
+  // 5.7 回到列表确认键盘仍然可用：F2 能打开改名弹窗，Esc 能关掉
+  // 先 Esc 清掉游标：游标停在末项时 ↓ 会按设计把焦点送出列表到分页按钮
+  // 先等列表真的渲染出条目再按键：列表还在重渲染时按键会被当成页面级方向键
+  await waitFor('列表有内容', () =>
     evaluate(`(() => {
       const list = document.querySelector('[aria-keyshortcuts]');
-      return !!list && list.textContent.includes('clip.mp4');
+      return !!list && list.querySelectorAll('[data-file-id]').length > 0;
     })()`)
   );
+  await focusList();
+  // 游标可能停在上一步的末项，此时 ↓ 会把焦点送去分页按钮：先 Esc 清掉再 ↓
+  await key('Escape');
+  await waitFor('游标清空', () =>
+    evaluate(`![...document.querySelectorAll('[data-file-id]')].some((r) => String(r.className).includes('ring-[#007AFF]'))`)
+  );
+  await focusList();
+  await key('ArrowDown');
+  await waitFor('游标就位', hasCursor);
+  await key('F2');
+  const dialogBack = await waitFor('连续操作后 F2 仍能打开改名', () =>
+    evaluate(`!!document.querySelector('dialog[open] input')`)
+  );
+  check('连续操作后文件页键盘仍可用', dialogBack === true);
+  await key('Escape');
+  await waitFor('改名弹窗关闭', () => evaluate(`!document.querySelector('dialog[open]')`));
 
   // ---- 6. 设置页：合法值写盘、非法值拒绝 ----
   await clickNav('#settings');
