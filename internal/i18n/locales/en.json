@@ -153,6 +153,7 @@
   "err.thumb_fetch": "failed to fetch the thumbnail",
   "err.unknown_diff_type": "unknown channel difference type %T",
   "err.upload_bad_request": "Invalid upload request",
+  "err.upload_busy": "this upload session is already committing",
   "err.upload_empty": "cannot upload an empty file",
   "err.upload_incomplete": "Upload is incomplete and cannot be committed",
   "err.upload_no_result": "upload returned no document",

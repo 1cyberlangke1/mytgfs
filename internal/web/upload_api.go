@@ -53,6 +53,8 @@ type uploadSession struct {
 	done     int64
 	file     *os.File
 	lastUsed time.Time
+	// busy 表示正在提交：回收协程不得关闭这个句柄
+	busy bool
 }
 
 // uploadAPI 管理所有分片会话。
@@ -187,8 +189,21 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.busy {
+		// 同一个会话只允许一个提交在跑：否则两条协程会同时读同一个临时文件
+		s.mu.Unlock()
+		replyJSONError(w, http.StatusConflict, i18n.T("err.upload_busy"))
+		return
+	}
 	done, size := s.done, s.size
+	s.busy = true
 	s.mu.Unlock()
+	// 提交期间抓住 busy 标记，回收协程不会把正在读的句柄关掉
+	defer func() {
+		s.mu.Lock()
+		s.busy = false
+		s.mu.Unlock()
+	}()
 	if size >= 0 && done != size {
 		u.drop(s.id)
 		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_incomplete"))
@@ -304,29 +319,55 @@ func (u *uploadAPI) drop(id string) {
 }
 
 // evictLocked 回收超时或超量的会话；调用方需持 u.mu。
+//
+// 正在提交（busy）或正在写分片（TryLock 失败）的会话跳过：
+// 关掉正在使用的句柄会把临时文件写坏，留到下一轮回收。
 func (u *uploadAPI) evictLocked() {
 	cutoff := time.Now().Add(-uploadIdleTimeout)
 	for id, s := range u.sess {
-		if s.lastUsed.Before(cutoff) {
+		if s.lastUsed.Before(cutoff) && u.discard(s) {
 			delete(u.sess, id)
-			_ = s.file.Close()
-			_ = os.Remove(s.file.Name())
 		}
 	}
 	for len(u.sess) >= uploadMaxSessions {
 		var oldest *uploadSession
 		for _, s := range u.sess {
+			if !s.mu.TryLock() {
+				continue
+			}
+			inUse := s.busy
+			s.mu.Unlock()
+			if inUse {
+				continue
+			}
 			if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {
 				oldest = s
 			}
 		}
-		if oldest == nil {
+		if oldest == nil || !u.discard(oldest) {
 			return
 		}
 		delete(u.sess, oldest.id)
-		_ = oldest.file.Close()
-		_ = os.Remove(oldest.file.Name())
 	}
+}
+
+// discard 关闭并删除会话的临时文件。
+//
+// 输入：s 会话
+// 输出：true 表示已关闭并删除；false 表示正在使用，本轮跳过
+func (u *uploadAPI) discard(s *uploadSession) bool {
+	if !s.mu.TryLock() {
+		return false
+	}
+	if s.busy {
+		s.mu.Unlock()
+		return false
+	}
+	name := s.file.Name()
+	_ = s.file.Close()
+	s.mu.Unlock()
+	_ = os.Remove(name)
+	return true
 }
 
 // newToken 生成 n 字节随机数的十六进制串。

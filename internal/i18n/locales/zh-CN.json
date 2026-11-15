@@ -153,6 +153,7 @@
   "err.thumb_fetch": "读取缩略图失败",
   "err.unknown_diff_type": "未知的频道差异类型 %T",
   "err.upload_bad_request": "上传参数不合法",
+  "err.upload_busy": "这个上传会话正在提交中，请稍等",
   "err.upload_empty": "空文件不能上传",
   "err.upload_incomplete": "文件还没传完，不能提交",
   "err.upload_no_result": "上传没有返回文档信息",

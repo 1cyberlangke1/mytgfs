@@ -102,14 +102,14 @@ func (b *Bus) PublishEvery(topic string, every time.Duration) {
 // 输入：topic 主题名
 // 输出：无
 // 预期：不阻塞；没有订阅者时直接返回
+//
+// 发送必须在持锁状态下完成：退订会关闭通道，先快照再在锁外发送会撞上
+// 「快照后、发送前被关闭」的窗口，触发 send on closed channel 崩溃。
+// 这里的发送全是非阻塞的，持锁代价可以忽略。
 func (b *Bus) Publish(topic string) {
 	b.mu.Lock()
-	chans := make([]chan struct{}, 0, len(b.subs[topic]))
+	defer b.mu.Unlock()
 	for ch := range b.subs[topic] {
-		chans = append(chans, ch)
-	}
-	b.mu.Unlock()
-	for _, ch := range chans {
 		select {
 		case ch <- struct{}{}:
 		default:

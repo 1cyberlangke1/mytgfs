@@ -234,3 +234,28 @@ func TestUploadAPIStatus(t *testing.T) {
 		t.Fatalf("进度不符: %s", rec.Body.String())
 	}
 }
+
+// TestUploadAPICommitRejectsBusy 同一会话并发提交只允许一个。
+//
+// 输入：会话已被标记 busy
+// 输出：409，且不入库
+// 预期：两条协程不会同时读同一个临时文件，也不会重复入库
+func TestUploadAPICommitRejectsBusy(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	id := initSession(t, api, `{"vol":"demo","dir":"/","name":"a.bin","size":1}`)
+	putChunk(t, api, id, 0, "x")
+
+	api.mu.Lock()
+	api.sess[id].busy = true
+	api.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	api.handleCommit(rec, httptest.NewRequest(http.MethodPost, "/api/upload/commit?id="+id, nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d，期望 409", rec.Code)
+	}
+	if len(f.uploads) != 0 {
+		t.Fatalf("并发提交不该入库: %v", f.uploads)
+	}
+}

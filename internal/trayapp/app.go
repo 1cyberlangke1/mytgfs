@@ -739,7 +739,12 @@ func Run(opts Options) error {
 	// 配置里启用而未挂载的 → mountOne 挂载；挂载了而配置里没有/停用的 → 停掉。
 	// 建卷/attach/删卷等一切配置变更都以调用它收尾；周期对账也让
 	// CLI 建卷、手编 config.toml 等外部改动自动被收编，不需要重启
+	// reconcileMu 串行化对账：菜单回调与周期对账可能同时进来，
+	// 并发 mountOne 会把同一个卷挂两次（两份队列抢同一个索引库）
+	var reconcileMu sync.Mutex
 	reconcileVolumes = func() {
+		reconcileMu.Lock()
+		defer reconcileMu.Unlock()
 		cur, err := config.Load(cfgPath)
 		if err != nil {
 			logging.Warn("log.volume_warn", err)

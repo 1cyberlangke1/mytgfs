@@ -195,20 +195,20 @@ func partsOf(size int64, partSize int) int {
 func (s *Store) SetUploadParallel(n int) {
 	switch {
 	case n <= 0:
-		s.uploadWorkers = defaultUploadWorkers
+		s.uploadWorkers.Store(defaultUploadWorkers)
 	case n > 16:
-		s.uploadWorkers = 16
+		s.uploadWorkers.Store(16)
 	default:
-		s.uploadWorkers = n
+		s.uploadWorkers.Store(int64(n))
 	}
 }
 
 // workers 返回上传并发数。
 func (s *Store) workers() int {
-	if s.uploadWorkers <= 0 {
-		return defaultUploadWorkers
+	if n := int(s.uploadWorkers.Load()); n > 0 {
+		return n
 	}
-	return s.uploadWorkers
+	return defaultUploadWorkers
 }
 
 // loadResume 读取可用断点。

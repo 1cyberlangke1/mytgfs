@@ -232,10 +232,16 @@ func (d *downloadStore) Start(vol, p string) (downloadTask, error) {
 //
 // 输入：任务
 // 输出：无
-// 预期：协程退出时关闭 stop；Resume 据此确认旧协程已经停手
+// 预期：任务已被取消/不在表里时不重启；协程退出时关闭 stop，
+// Resume 据此确认旧协程已经停手
 func (d *downloadStore) launch(t *downloadTask) {
 	stop := make(chan struct{})
 	d.mu.Lock()
+	if _, alive := d.tasks[t.ID]; !alive || t.State != downloadRunning {
+		d.mu.Unlock()
+		close(stop)
+		return
+	}
 	t.stop = stop
 	d.mu.Unlock()
 	go func() {
@@ -352,8 +358,23 @@ func (d *downloadStore) run(t *downloadTask) {
 	d.mu.Lock()
 	t.cancel = cancel
 	offset := t.Done
+	// 登记 cancel 之前可能已经被暂停/取消：拿到锁后确认一次，别抢跑
+	running := t.State == downloadRunning
+	_, alive := d.tasks[t.ID]
 	d.mu.Unlock()
 	defer cancel()
+	// 任务被取消后退出：临时文件不留在下载目录里
+	defer func() {
+		d.mu.Lock()
+		_, still := d.tasks[t.ID]
+		d.mu.Unlock()
+		if !still {
+			_ = os.Remove(t.tmp)
+		}
+	}()
+	if !running || !alive {
+		return
+	}
 
 	fail := func(err error) {
 		d.mu.Lock()
@@ -439,6 +460,11 @@ func (d *downloadStore) run(t *downloadTask) {
 // 预期：改名失败按失败处理并保留临时文件，便于排查
 func (d *downloadStore) finalize(t *downloadTask) {
 	d.mu.Lock()
+	if _, alive := d.tasks[t.ID]; !alive {
+		// 复制期间被取消：任务已从表里摘除，临时文件由 run 的收尾删掉
+		d.mu.Unlock()
+		return
+	}
 	target := d.uniquePath(t.Name)
 	if err := os.Rename(t.tmp, target); err != nil {
 		t.State = downloadFailed

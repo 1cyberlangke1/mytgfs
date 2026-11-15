@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
@@ -92,8 +93,9 @@ type Store struct {
 	// limiter 是发消息节流器，x/time/rate 实现，默认每秒 1 条
 	limiter *rate.Limiter
 
-	dl          *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
-	threadCount int                    // 下载工作协程上限，0 用默认值
+	dl *downloader.Downloader // 由 gotd 负责分块、并发、CDN、file_reference
+	// threadCount 是下载工作协程上限；运行期改设置时用原子量，避免与在飞下载竞态
+	threadCount atomic.Int64
 
 	// photoMu 保护频道头像元数据缓存；Cover* 方法不额外走网络。
 	// 缓存没有过期时间：频道 pts 变化时由同步循环 InvalidateCover 失效
@@ -104,8 +106,8 @@ type Store struct {
 
 	// resumeStore 保存上传断点，nil 表示不做断点续传
 	resumeStore ResumeStore
-	// uploadWorkers 是上传并发分片数，0 用默认值
-	uploadWorkers int
+	// uploadWorkers 是上传并发分片数；运行期可改，用原子量避免与在飞上传竞态
+	uploadWorkers atomic.Int64
 }
 
 // New 创建存储。
@@ -141,11 +143,11 @@ func (s *Store) SetInterval(d time.Duration) {
 func (s *Store) SetParallel(n int) {
 	switch {
 	case n <= 0:
-		s.threadCount = defaultThreads
+		s.threadCount.Store(defaultThreads)
 	case n > 32:
-		s.threadCount = 32
+		s.threadCount.Store(32)
 	default:
-		s.threadCount = n
+		s.threadCount.Store(int64(n))
 	}
 }
 

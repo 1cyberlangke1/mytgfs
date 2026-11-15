@@ -501,7 +501,12 @@ func runWeb(args []string) {
 		// reconcile 让运行时卷表与配置文件强制一致：
 		// 每次都从磁盘现读（外部编辑/CLI 建卷也会被收编），再对齐注册表。
 		// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
+		// reconcileMu 串行化对账：面板建卷/删卷与周期对账可能同时进来，
+		// 并发挂载会把同一个卷挂两次（两份队列抢同一个索引库）
+		var reconcileMu sync.Mutex
 		reconcile := func() {
+			reconcileMu.Lock()
+			defer reconcileMu.Unlock()
 			cur, err := config.Load(cfgPath)
 			if err != nil {
 				logging.Warn("log.volume_warn", err)

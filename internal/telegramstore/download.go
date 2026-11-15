@@ -89,11 +89,13 @@ func (s *Store) ReadRange(ctx context.Context, p *Part, offset int64, length int
 }
 
 // threads 返回下载工作协程上限。
+//
+// 运行期可在设置里改，用原子量读，避免与在飞下载的数据竞争。
 func (s *Store) threads() int {
-	if s.threadCount <= 0 {
-		return defaultThreads
+	if n := int(s.threadCount.Load()); n > 0 {
+		return n
 	}
-	return s.threadCount
+	return defaultThreads
 }
 
 // dl 是 Store 内共享的 downloader，带自适应窗口调度器。
