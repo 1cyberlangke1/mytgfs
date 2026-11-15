@@ -454,32 +454,31 @@ func runWeb(args []string) {
 		}
 		defer closePool()
 		appRoot := app.New(cfg, app.Options{Push: pushHub})
-		vols := openWebVolumes(ctx, appRoot, api)
-		defer closeWebVolumes(vols)
+		reg := openWebVolumes(ctx, appRoot, api)
 
-		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
+		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容。
+		// 每卷独立协程：删卷时只停被删卷，其它卷不受影响
 		vsync, vstop := context.WithCancel(ctx)
 		var vwg sync.WaitGroup
 		if interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds); cfg.Mount.SyncOn() {
 			syncOn := trayapp.SyncEnabled(cfgPath, cfg.Mount.SyncOn())
-			for _, vol := range cfg.Volumes {
-				if !vol.Enabled {
-					continue
-				}
-				wv, ok := vols[vol.Name]
-				if !ok {
-					continue
-				}
-				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: vol.ChatID}
+			for _, wv := range reg.Snapshot() {
+				wv := wv
+				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: wv.vf.Volume.ChatID}
+				vctx, vcancel := context.WithCancel(vsync)
+				done := make(chan struct{})
 				vwg.Go(func() {
-					trayapp.AutoSyncWhile(vsync, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil, syncOn)
+					defer close(done)
+					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, interval, nil, syncOn)
 				})
+				wv.stop = func() { vcancel(); <-done }
 			}
 		}
 		// 先停自动同步再关索引：顺序反了会写已关闭的库
 		defer func() {
 			vstop()
 			vwg.Wait()
+			closeWebVolumes(reg.Snapshot())
 		}()
 
 		return serve(web.Options{
@@ -487,20 +486,14 @@ func runWeb(args []string) {
 			// 开机自启与命令行共用同一套系统注册项
 			Autostart: autostart.Control{},
 			Files: func(name string) (fm.Files, bool) {
-				v, ok := vols[name]
+				v, ok := reg.Get(name)
 				if !ok {
 					return nil, false
 				}
 				return v.mgr, true
 			},
 			Volumes: func() []string {
-				names := make([]string, 0, len(vols))
-				for _, v := range cfg.Volumes {
-					if _, ok := vols[v.Name]; ok {
-						names = append(names, v.Name)
-					}
-				}
-				return names
+				return reg.Names()
 			},
 			// 建卷需要 user 会话：临时开一条，建完就关
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
@@ -575,9 +568,18 @@ func runWeb(args []string) {
 				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
 					return rerr
 				}
+				// 两份账合一：配置文件已删，运行时账本同步摘除并停掉该卷的同步协程
+				wv, mounted := reg.Take(name)
+				if mounted {
+					if wv.stop != nil {
+						wv.stop() // 先停自动同步，避免并发使用已关闭的索引
+					}
+					_ = wv.vf.Close() // 关队列与索引
+				}
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
+				pushHub.Publish(push.TopicStatus)
 				return nil
 			},
 			// 添加已有频道：用 bot 会话校验频道可见性与发言权
@@ -609,7 +611,7 @@ func runWeb(args []string) {
 			},
 			// 卷用量：面板卷标签直接显示文件数与占用
 			Stats: func(name string) (int64, int64, bool) {
-				v, ok := vols[name]
+				v, ok := reg.Get(name)
 				if !ok {
 					return 0, 0, false
 				}
@@ -631,7 +633,7 @@ func runWeb(args []string) {
 			// 清空已结束的队列记录：面板按钮直接落到各卷的持久化表
 			ClearQueue: func(ctx context.Context) (int64, error) {
 				var total int64
-				for _, wv := range vols {
+				for _, wv := range reg.Snapshot() {
 					n, cerr := wv.vf.ClearQueue(ctx)
 					if cerr != nil {
 						return total, cerr
@@ -642,7 +644,7 @@ func runWeb(args []string) {
 			},
 			// 封面就是频道头像：按卷名找到对应 Store
 			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
-				wv, ok := vols[name]
+				wv, ok := reg.Get(name)
 				if !ok {
 					return nil, false
 				}
@@ -650,7 +652,7 @@ func runWeb(args []string) {
 			}),
 			// 重建索引：用 user 会话全量拉频道历史后覆盖本地节点
 			Rebuild: func(ctx context.Context, name string) (any, error) {
-				wv, ok := vols[name]
+				wv, ok := reg.Get(name)
 				if !ok {
 					return nil, app.ErrVolumeNotFound{Name: name}
 				}
@@ -662,7 +664,7 @@ func runWeb(args []string) {
 			},
 			// 视频缩略图：Telegram 已生成的缩略图，按卷转发
 			VideoThumb: func(ctx context.Context, vol, path string) ([]byte, string, error) {
-				wv, ok := vols[vol]
+				wv, ok := reg.Get(vol)
 				if !ok {
 					return nil, "", os.ErrNotExist
 				}
@@ -670,7 +672,7 @@ func runWeb(args []string) {
 			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
-				return webStatus(ctx, cfg, vols), nil
+				return webStatus(ctx, cfg, reg.SnapshotMap()), nil
 			},
 		})
 	})
@@ -694,15 +696,18 @@ type webVolume struct {
 	davfs *vfs.FileSystem
 	idx   *index.Index
 	store *telegramstore.Store
+	// stop 停掉该卷的自动同步协程并等它退出；删卷时先调它再关索引，
+	// 避免同步协程并发使用已关闭的库。未启动同步的卷为 nil。
+	stop func()
 }
 
 // openWebVolumes 为每个启用的卷打开文件系统后端。
 //
 // 输入：ctx；a 装配根；api 已认证的 MTProto 客户端
-// 输出：卷名 → 后端；打开失败的卷直接跳过（面板里就不显示）
+// 输出：卷注册表（列卷/开卷/删卷的唯一账本）；打开失败的卷直接跳过（面板里就不显示）
 // 预期：只读索引 + 可写存储，每个卷独立 db 文件
-func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[string]*webVolume {
-	out := map[string]*webVolume{}
+func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) *app.VolumeRegistry[*webVolume] {
+	reg := app.NewVolumeRegistry[*webVolume]()
 	for _, v := range a.Config().Volumes {
 		if !v.Enabled {
 			continue
@@ -712,15 +717,15 @@ func openWebVolumes(ctx context.Context, a *app.App, api telegramstore.API) map[
 			logging.Warn("tray.volume.open_failed", err, v.Name)
 			continue
 		}
-		out[v.Name] = &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store}
+		reg.Put(v.Name, &webVolume{vf: vf, mgr: vf.Files, davfs: vf.FS, idx: vf.Index, store: vf.Store})
 	}
 	// 卷处理结束就推一条 status：全部失败也要推，面板才能结束等待
 	a.Events().Publish(push.TopicStatus)
-	return out
+	return reg
 }
 
 // closeWebVolumes 先停每个卷的队列，再关索引。
-func closeWebVolumes(vols map[string]*webVolume) {
+func closeWebVolumes(vols []*webVolume) {
 	for _, v := range vols {
 		if v.vf != nil {
 			_ = v.vf.Close()

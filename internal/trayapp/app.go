@@ -288,9 +288,14 @@ func Run(opts Options) error {
 		store  *telegramstore.Store
 		differ tgsync.ChannelDiffer
 		mu     sync.Mutex // 自动同步与手动同步互斥
+		// cancel 停掉该卷的同步协程；done 在清理协程关完索引与连接池后关闭。
+		// 删卷时先摘列表再 cancel 并等 done，之后才能安全删除索引文件
+		//（Windows 下打开中的 SQLite 文件删除会失败）。
+		cancel context.CancelFunc
+		done   chan struct{}
 	}
-	var volMu sync.Mutex
-	var volumes []*trayVolume
+	// reg 是运行中卷的唯一账本：列卷/开卷/删卷共用，删卷时同步摘除
+	reg := app.NewVolumeRegistry[*trayVolume]()
 
 	// 自动同步开关：每轮读配置，面板改设置后下一轮生效
 	syncOn := SyncEnabled(cfgPath, cfg.Mount.SyncOn())
@@ -381,9 +386,7 @@ func Run(opts Options) error {
 				st := connText
 				code := stateCode(connKey)
 				stateMu.Unlock()
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
+				vs := reg.Snapshot()
 				list := make([]map[string]any, 0, len(vs))
 				var xfers []vfs.Transfer
 				var queued []queue.Item
@@ -412,9 +415,7 @@ func Run(opts Options) error {
 				}, nil
 			},
 			Sync: func(ctx context.Context) (any, error) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
+				vs := reg.Snapshot()
 				out := make([]map[string]any, 0, len(vs))
 				for _, v := range vs {
 					v.mu.Lock()
@@ -513,9 +514,18 @@ func Run(opts Options) error {
 				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
 					return rerr
 				}
+				// 两份账合一：配置文件已删，运行时列表必须同步摘除，
+				// 否则面板列卷（读列表）与文件操作（读配置）各说各话
+				tv, mounted := reg.TakeFunc(func(n string) bool { return strings.EqualFold(n, name) })
+				if mounted {
+					tv.cancel() // 停自动同步
+					<-tv.done   // 等索引与连接池关闭完成
+				}
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
+				rebuildMenu()
+				pushHub.Publish(push.TopicStatus)
 				return nil
 			},
 			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
@@ -551,20 +561,15 @@ func Run(opts Options) error {
 			},
 			// 文件管理：复用打开卷时创建的文件系统后端，不加额外连接
 			Files: func(name string) (fm.Files, bool) {
-				volMu.Lock()
-				defer volMu.Unlock()
-				for _, v := range volumes {
-					if v.name == name && v.fmgr != nil {
-						return v.fmgr, true
-					}
+				v, ok := reg.Get(name)
+				if !ok || v.fmgr == nil {
+					return nil, false
 				}
-				return nil, false
+				return v.fmgr, true
 			},
 			Volumes: func() []string {
-				volMu.Lock()
-				defer volMu.Unlock()
-				names := make([]string, 0, len(volumes))
-				for _, v := range volumes {
+				names := make([]string, 0, 4)
+				for _, v := range reg.Snapshot() {
 					if v.fmgr != nil {
 						names = append(names, v.name)
 					}
@@ -573,24 +578,19 @@ func Run(opts Options) error {
 			},
 			// 卷用量：面板卷标签直接显示文件数与占用
 			Stats: func(name string) (int64, int64, bool) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
-				for _, v := range vs {
-					if v.name != name {
-						continue
-					}
-					files, ferr := v.idx.CountFiles(context.Background())
-					if ferr != nil {
-						return 0, 0, false
-					}
-					used, uerr := v.idx.Used(context.Background())
-					if uerr != nil {
-						return 0, 0, false
-					}
-					return int64(files), used, true
+				v, ok := reg.Get(name)
+				if !ok || v.idx == nil {
+					return 0, 0, false
 				}
-				return 0, 0, false
+				files, ferr := v.idx.CountFiles(context.Background())
+				if ferr != nil {
+					return 0, 0, false
+				}
+				used, uerr := v.idx.Used(context.Background())
+				if uerr != nil {
+					return 0, 0, false
+				}
+				return int64(files), used, true
 			},
 			// 分片上传的临时文件统一按时间清扫
 			TempDir: datadir.Path("tmp"),
@@ -598,11 +598,8 @@ func Run(opts Options) error {
 			Push: pushHub,
 			// 清空已结束的队列记录：面板按钮直接落到各卷的持久化表
 			ClearQueue: func(ctx context.Context) (int64, error) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
 				var total int64
-				for _, v := range vs {
+				for _, v := range reg.Snapshot() {
 					n, cerr := v.vf.ClearQueue(ctx)
 					if cerr != nil {
 						return total, cerr
@@ -613,46 +610,33 @@ func Run(opts Options) error {
 			},
 			// 封面就是频道头像：按卷名找到对应 Store
 			Cover: app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
-				for _, v := range vs {
-					if v.name == name && v.vf != nil {
-						return v.vf, true
-					}
+				v, ok := reg.Get(name)
+				if !ok || v.vf == nil {
+					return nil, false
 				}
-				return nil, false
+				return v.vf, true
 			}),
 			// 重建索引：user 会话全量拉历史后覆盖本地节点
 			Rebuild: func(ctx context.Context, name string) (any, error) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
-				for _, v := range vs {
-					if v.name != name || v.vf == nil {
-						continue
-					}
-					v.mu.Lock()
-					n, rerr := appRoot.RebuildIndex(ctx, v.idx, volume.NormalizeChatID(v.vf.Volume.ChatID))
-					v.mu.Unlock()
-					if rerr != nil {
-						return nil, rerr
-					}
-					return map[string]any{"files": n}, nil
+				v, ok := reg.Get(name)
+				if !ok || v.vf == nil {
+					return nil, app.ErrVolumeNotFound{Name: name}
 				}
-				return nil, app.ErrVolumeNotFound{Name: name}
+				v.mu.Lock()
+				n, rerr := appRoot.RebuildIndex(ctx, v.idx, volume.NormalizeChatID(v.vf.Volume.ChatID))
+				v.mu.Unlock()
+				if rerr != nil {
+					return nil, rerr
+				}
+				return map[string]any{"files": n}, nil
 			},
 			// 视频缩略图：Telegram 已生成的缩略图，按卷转发
 			VideoThumb: func(ctx context.Context, vol, path string) ([]byte, string, error) {
-				volMu.Lock()
-				vs := append([]*trayVolume(nil), volumes...)
-				volMu.Unlock()
-				for _, v := range vs {
-					if v.name == vol && v.vf != nil {
-						return v.vf.VideoThumb(ctx, path)
-					}
+				v, ok := reg.Get(vol)
+				if !ok || v.vf == nil {
+					return nil, "", os.ErrNotExist
 				}
-				return nil, "", os.ErrNotExist
+				return v.vf.VideoThumb(ctx, path)
 			},
 		}
 		return web.NewHandler(cfgPath, webOpts)
@@ -678,11 +662,9 @@ func Run(opts Options) error {
 		}
 		idx, store, fsys, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-		tv := &trayVolume{vf: vf, name: name, idx: idx, fsys: fsys, fmgr: fmgr, store: store, differ: differ}
+		tv := &trayVolume{vf: vf, name: name, idx: idx, fsys: fsys, fmgr: fmgr, store: store, differ: differ, cancel: vcancel, done: make(chan struct{})}
 
-		volMu.Lock()
-		volumes = append(volumes, tv)
-		volMu.Unlock()
+		reg.Put(name, tv)
 		// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
 		pushHub.Publish(push.TopicStatus)
 		rebuildMenu()
@@ -701,34 +683,22 @@ func Run(opts Options) error {
 		cancels = append(cancels, vcancel)
 		mu.Unlock()
 
-		// 卷常驻到退出：FUSE 挂载已移除，这里不再有内核挂载点需要等待
+		// 卷常驻到退出或被删卷：vctx 取消后清理资源并把自己从账本摘除
 		wg.Go(func() {
 			<-vctx.Done()
 			vwg.Wait()
 			_ = vf.Close()
 			closePool()
-			volMu.Lock()
-			for i, v := range volumes {
-				if v == tv {
-					volumes = append(volumes[:i], volumes[i+1:]...)
-					break
-				}
-			}
-			volMu.Unlock()
+			reg.Delete(name)
+			close(tv.done)
 			rebuildMenu()
 		})
 	}
 
 	// isMounted 判断卷是否已经在托盘里。
 	isMounted := func(name string) bool {
-		volMu.Lock()
-		defer volMu.Unlock()
-		for _, v := range volumes {
-			if v.name == name {
-				return true
-			}
-		}
-		return false
+		_, ok := reg.Get(name)
+		return ok
 	}
 	// mountAll 尝试挂载所有尚未就绪的卷。
 	mountAll := func() {
@@ -815,9 +785,7 @@ func Run(opts Options) error {
 		statusItem = menu.Add(text)
 		statusItem.SetEnabled(false)
 
-		volMu.Lock()
-		vs := append([]*trayVolume(nil), volumes...)
-		volMu.Unlock()
+		vs := reg.Snapshot()
 		if len(vs) > 0 {
 			menu.AddSeparator()
 			// 每卷一项：名字 + 已用容量，点击直接打开该卷文件页
@@ -859,9 +827,7 @@ func Run(opts Options) error {
 		st := connText
 		stateMu.Unlock()
 		lines := []string{st}
-		volMu.Lock()
-		vs := append([]*trayVolume(nil), volumes...)
-		volMu.Unlock()
+		vs := reg.Snapshot()
 		var downloads, queued int
 		for _, v := range vs {
 			if children, lerr := v.idx.Children(rootCtx, 0); lerr == nil {
