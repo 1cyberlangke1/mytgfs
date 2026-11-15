@@ -4,8 +4,6 @@ package web
 // /api/vthumb 优先返回这张封面，没有时再回落到 Telegram 缩略图。
 
 import (
-	"crypto/sha1"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -18,17 +16,34 @@ import (
 // maxPosterBytes 是浏览器上传封面的上限。
 const maxPosterBytes = 8 << 20
 
-// posterKey 返回封面的缓存键。
-func posterKey(vol, p, v string) string {
-	return fmt.Sprintf("poster-%x", sha1.Sum([]byte(vol+"\x00"+p+"\x00"+v)))
-}
-
-// posterPath 返回封面文件路径。
+// posterPath 返回浏览器封面缓存文件的路径。
+//
+// 布局：thumbs/<vol>/<路径哈希>-<版本>.jpg，分卷便于删卷整块清理；
+// v 只允许数字（它是修改时间），防路径注入。
 func posterPath(dir, vol, p, v string) string {
 	if strings.TrimSpace(dir) == "" {
 		dir = "data/thumbs"
 	}
-	return filepath.Join(dir, posterKey(vol, p, v)+".jpg")
+	if v == "" {
+		v = "0"
+	}
+	if !onlyDigits(v) {
+		v = "0"
+	}
+	return filepath.Join(dir, vol, pathHash(vol, p)+"-"+v+".jpg")
+}
+
+// onlyDigits 判断字符串是否全是数字。
+func onlyDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // handleAPIPoster 保存浏览器抽出的视频封面。

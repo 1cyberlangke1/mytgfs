@@ -249,6 +249,41 @@ func TestVerifyDiskKeepsCacheWhenOffline(t *testing.T) {
 	}
 }
 
+// PurgeChat 删卷时清掉该频道的内存缓存与磁盘文件。
+func TestPurgeChatRemovesDiskFiles(t *testing.T) {
+	cacheDir := t.TempDir()
+	kill := filepath.Join(cacheDir, "cover-42-100.jpg")
+	keep := filepath.Join(cacheDir, "cover-43-200.jpg")
+	if err := os.WriteFile(kill, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := &CoverProvider{
+		lookup: func(name string) (coverVolume, bool) {
+			if name == "demo" {
+				return coverVolume{store: &fakeCoverStore{}, chatID: 42}, true
+			}
+			return coverVolume{}, false
+		},
+		cacheDir: cacheDir,
+		cache:    make(map[int64]coverEntry),
+	}
+	provider.remember(42, "100", []byte("mem"))
+	provider.PurgeChat(42)
+
+	if _, err := os.Stat(kill); !os.IsNotExist(err) {
+		t.Fatal("该频道的磁盘缓存应被删除")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatal("别的频道的磁盘缓存不应被动")
+	}
+	if _, ok := provider.cache[42]; ok {
+		t.Fatal("内存缓存条目应被删除")
+	}
+}
+
 // 没有磁盘缓存目录时，ErrNoCover 保持原语义：返回空结果而不是错误
 func TestCoverImageNoCoverWithoutDisk(t *testing.T) {
 	st := &countingStore{fakeCoverStore: fakeCoverStore{err: telegramstore.ErrNoCover}}

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
@@ -127,6 +128,8 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 func newMux(configPath string, opts Options) *router {
 	rt := newRouter(opts.Push)
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
+	// 旧版 flat 布局的缩略图残留按天清扫：新布局按卷分目录，旧文件自然衰减
+	go SweepFlatLegacy(thumbRootDir(opts.ThumbDir), 24*time.Hour)
 
 	rt.route("/api/state", handleAPIState(api, opts))
 	rt.route("/api/files", handleAPIFiles(api))

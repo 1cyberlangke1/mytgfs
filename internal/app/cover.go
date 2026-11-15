@@ -160,6 +160,24 @@ func (p *CoverProvider) InvalidateVolume(vol string) {
 	p.mu.Unlock()
 }
 
+// PurgeChat 删卷时清掉该频道的全部头像缓存（内存 + 磁盘）。
+//
+// 输入：chatID 频道 id（非 -100... 形式）
+// 输出：无
+// 预期：卷已删，缓存文件成为孤儿，必须清掉；磁盘文件按 chatID 前缀匹配
+func (p *CoverProvider) PurgeChat(chatID int64) {
+	p.mu.Lock()
+	delete(p.cache, chatID)
+	p.mu.Unlock()
+	if p.cacheDir == "" {
+		return
+	}
+	stale, _ := filepath.Glob(filepath.Join(p.cacheDir, p.fileName(chatID, "*")))
+	for _, f := range stale {
+		_ = os.Remove(f)
+	}
+}
+
 // SetCover 写入频道头像并让本卷的缓存立即换成新字节。
 func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) error {
 	v, ok := p.lookup(vol)

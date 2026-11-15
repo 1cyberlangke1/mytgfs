@@ -7,6 +7,7 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -56,6 +57,27 @@ func newThumbCache(dir string) *thumbCache {
 	return &thumbCache{dir: dir}
 }
 
+// thumbRootDir 返回缓存根目录（空值回落默认）。
+func thumbRootDir(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return "data/thumbs"
+	}
+	return dir
+}
+
+// volDir 返回一个卷的缓存子目录。
+func (c *thumbCache) volDir(vol string) string {
+	return filepath.Join(c.dir, vol)
+}
+
+// thumbCache 按卷分目录存放缩略图：thumbs/<vol>/<路径哈希>-<内容哈希>.jpg。
+// 分卷让删卷可以整块清理，路径哈希让删文件/改名可以按前缀清理。
+
+// pathHash 是卷内路径的缓存键前缀：同一路径的全部缓存文件共享前缀。
+func pathHash(vol, p string) string {
+	return fmt.Sprintf("%x", sha1.Sum([]byte(vol+"\x00"+p)))
+}
+
 // key 由「卷 + 路径 + 大小 + 修改时间」算出缓存键。
 //
 // 文件被覆盖后大小或时间会变，键随之变化，旧缩略图自然失效。
@@ -64,9 +86,26 @@ func thumbKey(vol, p string, e fm.Entry) string {
 	return hex.EncodeToString(h[:16])
 }
 
+// purgeEntry 删掉卷内一个路径的全部缓存文件（缩略图/封面，所有版本）。
+// 返回删除的文件数；未接线（nil）时为无害空操作。
+func (c *thumbCache) purgeEntry(vol, p string) int {
+	if c == nil {
+		return 0
+	}
+	ph := pathHash(vol, p)
+	stale, _ := filepath.Glob(filepath.Join(c.volDir(vol), ph+"-*"))
+	removed := 0
+	for _, f := range stale {
+		if os.Remove(f) == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
 // load 返回缓存文件内容；未命中返回 nil。
-func (c *thumbCache) load(key string) []byte {
-	b, err := os.ReadFile(filepath.Join(c.dir, key+".jpg"))
+func (c *thumbCache) load(vol, p, key string) []byte {
+	b, err := os.ReadFile(filepath.Join(c.volDir(vol), pathHash(vol, p)+"-"+key+".jpg"))
 	if err != nil {
 		return nil
 	}
@@ -74,9 +113,18 @@ func (c *thumbCache) load(key string) []byte {
 }
 
 // save 原子写入缓存；失败只影响下次重新生成。
-func (c *thumbCache) save(key string, data []byte) {
-	_ = os.MkdirAll(c.dir, 0o755)
-	_ = atomic.WriteFile(filepath.Join(c.dir, key+".jpg"), bytes.NewReader(data))
+// 同路径的旧键文件顺手清掉：覆盖写不会留孤儿。
+func (c *thumbCache) save(vol, p, key string, data []byte) {
+	volDir := c.volDir(vol)
+	_ = os.MkdirAll(volDir, 0o755)
+	target := filepath.Join(volDir, pathHash(vol, p)+"-"+key+".jpg")
+	_ = atomic.WriteFile(target, bytes.NewReader(data))
+	stale, _ := filepath.Glob(filepath.Join(volDir, pathHash(vol, p)+"-*.jpg"))
+	for _, f := range stale {
+		if f != target {
+			_ = os.Remove(f)
+		}
+	}
 }
 
 // handleFileThumb 输出缩略图（GET /files/thumb?vol=&path=）。
@@ -125,18 +173,18 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 			return
 		}
 
-		if b := api.thumbs.load(key); b != nil {
+		if b := api.thumbs.load(vol, p, key); b != nil {
 			writeThumb(w, b)
 			return
 		}
 
 		// 串行生成：目录里几十张图同时点开也不会把内存顶爆
 		api.thumbs.mu.Lock()
-		b := api.thumbs.load(key)
+		b := api.thumbs.load(vol, p, key)
 		if b == nil {
 			b = generateThumb(r, m, p, thumbMaxSide)
 			if b != nil {
-				api.thumbs.save(key, b)
+				api.thumbs.save(vol, p, key, b)
 			}
 		}
 		api.thumbs.mu.Unlock()

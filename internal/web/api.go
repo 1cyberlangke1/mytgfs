@@ -396,6 +396,8 @@ func handleAPIMove(api *filesAPI) http.HandlerFunc {
 				replyJSONError(w, http.StatusBadGateway, fmError(err))
 				return
 			}
+			// 旧路径的缩略图/封面缓存随改名/移动一起清掉
+			api.thumbs.purgeEntry(body.Vol, src)
 		}
 		replyJSON(w, http.StatusOK, map[string]any{"moved": len(body.Paths)})
 	}
@@ -430,6 +432,8 @@ func handleAPIRemove(api *filesAPI) http.HandlerFunc {
 				replyJSONError(w, http.StatusBadGateway, fmError(err))
 				return
 			}
+			// 文件没了，缩略图/封面缓存也一起清掉，不留孤儿
+			api.thumbs.purgeEntry(body.Vol, p)
 		}
 		replyJSON(w, http.StatusOK, map[string]any{"removed": len(body.Paths)})
 	}

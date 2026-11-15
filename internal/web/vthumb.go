@@ -4,9 +4,7 @@ package web
 
 import (
 	"context"
-	"crypto/sha1"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 
@@ -41,7 +39,8 @@ func handleFileVideoThumb(dir string, fn VideoThumbFunc) http.HandlerFunc {
 			http.Error(w, i18n.T("err.http_bad_request"), http.StatusBadRequest)
 			return
 		}
-		key := fmt.Sprintf("vthumb-%x-%s", sha1.Sum([]byte(vol+"\x00"+p)), q.Get("v"))
+		ph := pathHash(vol, p)
+		key := ph + "-" + q.Get("v")
 		w.Header().Set("ETag", `"`+key+`"`)
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 		if etagMatches(r.Header.Get("If-None-Match"), key) {

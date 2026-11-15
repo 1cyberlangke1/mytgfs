@@ -39,6 +39,7 @@ import (
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
+	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/vfs"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
@@ -547,6 +548,9 @@ func Run(opts Options) error {
 				}
 				// 运行时对齐配置：停同步、关索引、摘注册表，一次完成（内部会等卸载完再推送）
 				reconcileVolumes()
+				// 缓存清理：缩略图按卷分目录整块删，封面按频道 id 前缀删
+				web.PurgeVolumeCache(datadir.Path("thumbs"), name)
+				coverProvider.PurgeChat(volume.NormalizeChatID(target.ChatID))
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
@@ -765,6 +769,8 @@ func Run(opts Options) error {
 	mountAll := func() {
 		reconcileVolumes()
 	}
+	// 断点断片超过一天就清：Telegram 服务端临时区约一天过期，续不上的断点只会堆积
+	uploadcache.Sweep(datadir.Path("uploads"), 24*time.Hour)
 	// allMounted 判断配置里所有启用的卷是否都已挂载。
 	allMounted := func() bool {
 		cur := appRoot.Config()

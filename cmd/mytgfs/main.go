@@ -40,6 +40,7 @@ import (
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
 	"mytgfs/internal/ui"
+	"mytgfs/internal/uploadcache"
 	"mytgfs/internal/version"
 	"mytgfs/internal/volume"
 	"mytgfs/internal/web"
@@ -527,6 +528,8 @@ func runWeb(args []string) {
 		}
 		// 启动即对齐：配置里启用的卷全部挂上
 		reconcile()
+		// 断点断片超过一天就清：Telegram 服务端临时区约一天过期，续不上的断点只会堆积
+		uploadcache.Sweep(datadir.Path("uploads"), 24*time.Hour)
 		// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编
 		go func() {
 			interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
@@ -650,6 +653,9 @@ func runWeb(args []string) {
 				}
 				// 运行时账本对齐配置：停同步、关队列与索引、从注册表摘除，一次完成
 				reconcile()
+				// 缓存清理：缩略图按卷分目录整块删，封面按频道 id 前缀删
+				web.PurgeVolumeCache(datadir.Path("thumbs"), name)
+				coverProvider.PurgeChat(volume.NormalizeChatID(target.ChatID))
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
