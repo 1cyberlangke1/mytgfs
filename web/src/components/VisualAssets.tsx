@@ -1,5 +1,51 @@
-import React, { useId } from 'react';
+import React, { useId, useState, useEffect } from 'react';
 import { FileCategory } from '../types';
+
+// 已知加载失败的缩略图地址集合：列表滚动时避免对同一 404 地址反复发请求。
+const failedThumbUrls = new Set<string>();
+
+/**
+ * FileThumb 优先显示服务端缩略图，加载失败自动回退成文件类型图标。
+ *
+ * 输入：name 文件名（alt 文本）；category 文件类型；thumbnailUrl 缩略图地址（可为空）；size 图标规格
+ * 输出：<img>（正常）或 <RichFileTypeEmblem>（无地址/加载失败）
+ * 预期：失败地址进入 failedThumbUrls，后续渲染不再重试；地址变化时重置失败状态
+ */
+export const FileThumb: React.FC<{
+  name: string;
+  category: FileCategory;
+  thumbnailUrl?: string;
+  size?: 'sm' | 'lg';
+}> = ({ name, category, thumbnailUrl, size = 'sm' }) => {
+  const [failed, setFailed] = useState(
+    !thumbnailUrl || failedThumbUrls.has(thumbnailUrl)
+  );
+  useEffect(() => {
+    setFailed(!thumbnailUrl || failedThumbUrls.has(thumbnailUrl));
+  }, [thumbnailUrl]);
+
+  if (failed || !thumbnailUrl) {
+    return <RichFileTypeEmblem category={category} size={size} />;
+  }
+  const imgClass =
+    size === 'lg'
+      ? 'w-full h-full object-cover'
+      : 'w-11 h-9 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800 shrink-0';
+  return (
+    <img
+      src={thumbnailUrl}
+      alt={name}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      decoding="async"
+      onError={() => {
+        failedThumbUrls.add(thumbnailUrl);
+        setFailed(true);
+      }}
+      className={imgClass}
+    />
+  );
+};
 
 /**
  * Custom precision geometric brand emblem for mytgfs

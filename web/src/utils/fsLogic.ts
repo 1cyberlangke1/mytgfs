@@ -363,6 +363,6 @@ export function computeOverviewSummary(volumes: VolumeInfo[], files: FileItem[])
     totalVolumes,
     totalFiles,
     totalBytes,
-    perVolume: perVolume.map((v, i) => ({ ...v, sharePct: pcts[i] })),
+    perVolume: perVolume.map((v, i) => ({ ...v, sharePct: pcts[i] ?? 0 })),
   };
 }

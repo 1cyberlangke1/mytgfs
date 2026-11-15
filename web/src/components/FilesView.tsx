@@ -50,7 +50,7 @@ import {
 } from '../utils/i18n';
 import { motion } from 'motion/react';
 import { listChannels as apiListChannels } from '../api';
-import { RichFileTypeEmblem } from './VisualAssets';
+import { FileThumb, RichFileTypeEmblem } from './VisualAssets';
 import { FolderTree } from './FolderTree';
 import { Button, IOS_BOUNCE_SPRING, Input, Select, useInterruptibleViewSpring } from './ui';
 
@@ -369,16 +369,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
   };
 
   const renderCategoryVisual = (item: FileItem) => {
-    if ((item.category === 'image' || item.category === 'video') && item.thumbnailUrl) {
+    if (item.category === 'image' || item.category === 'video') {
       return (
-        <img
-          src={item.thumbnailUrl}
-          alt={item.name}
-          referrerPolicy="no-referrer"
-          loading="lazy"
-          decoding="async"
-          className="w-11 h-9 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800 shrink-0"
-        />
+        <FileThumb name={item.name} category={item.category} thumbnailUrl={item.thumbnailUrl} />
       );
     }
     return <RichFileTypeEmblem category={item.category} size="sm" />;
@@ -797,14 +790,12 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 >
                   <div>
                     <div className="relative h-32 bg-zinc-900/5 dark:bg-black/40 flex items-center justify-center overflow-hidden border-b border-zinc-200/60 dark:border-zinc-800/60">
-                      {item.thumbnailUrl ? (
-                        <img
-                          src={item.thumbnailUrl}
-                          alt={item.name}
-                          referrerPolicy="no-referrer"
-                          loading="lazy"
-                          decoding="async"
-                          className="w-full h-full object-cover"
+                      {item.category === 'image' || item.category === 'video' ? (
+                        <FileThumb
+                          name={item.name}
+                          category={item.category}
+                          thumbnailUrl={item.thumbnailUrl}
+                          size="lg"
                         />
                       ) : (
                         <RichFileTypeEmblem category={item.category} size="lg" />

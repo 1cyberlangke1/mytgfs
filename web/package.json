@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit && node scripts/check-push-contract.mjs",
+    "test": "vitest run",
     "e2e:desktop": "node scripts/e2e-desktop.mjs"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
   }
 }
