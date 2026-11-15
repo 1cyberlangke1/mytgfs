@@ -136,7 +136,32 @@ async function waitFor(label, fn, timeout = 30000) {
     }
     await sleep(100);
   }
-  throw new Error('等待超时：' + label + '（最后看到：' + JSON.stringify(last) + '）');
+  throw new Error('等待超时：' + label + '（最后看到：' + JSON.stringify(last) + '，现场：' + JSON.stringify(await snapshotState()) + '）');
+}
+
+// snapshotState 采集失败现场，让 CI 红的时候日志自己说清卡在哪。
+//
+// 输入：无
+// 输出：{active, rows, cursor, dialogs}；页面已崩时返回 null
+// 预期：只在等待超时的错误路径调用，正常跑不产生额外往返
+async function snapshotState() {
+  try {
+    return await evaluate(`(() => {
+      const el = document.activeElement || document.body;
+      const rows = [...document.querySelectorAll('[data-file-id]')];
+      const label = el.getAttribute('aria-keyshortcuts')
+        ? 'list'
+        : el.getAttribute('aria-label') || el.id || '';
+      return {
+        active: el.tagName + ':' + label,
+        rows: rows.length,
+        cursor: rows.findIndex((r) => String(r.className).includes('ring-[#007AFF]')),
+        dialogs: document.querySelectorAll('dialog[open]').length,
+      };
+    })()`);
+  } catch {
+    return null;
+  }
 }
 
 // pollTrue 与 waitFor 同，但超时返回 false 而不是抛错，用于「可能要多按一次」的键盘步骤。
@@ -300,9 +325,58 @@ const focusList = () =>
   evaluate(`(() => {
     const list = document.querySelector('[aria-keyshortcuts]');
     if (!list) return false;
-    list.focus();
-    return true;
+    if (document.activeElement !== list) list.focus();
+    return document.activeElement === list;
   })()`);
+
+// focusListStable 反复尝试直到焦点真的落在文件列表上。
+//
+// 输入：无
+// 输出：无（拿不到焦点就抛错）
+// 预期：弹窗关闭、列表重渲染都可能把焦点打回 body，
+//       这里等的是「焦点确实在列表」这个条件，不是等固定时间
+async function focusListStable() {
+  for (let i = 0; i < 40; i += 1) {
+    if (await focusList()) return;
+    await sleep(50);
+  }
+  throw new Error('文件列表拿不到焦点');
+}
+
+// clearCursor 把列表里的键盘游标清空。
+//
+// 输入：无
+// 输出：无（清不掉就抛错）
+// 预期：Esc 先清勾选再清游标，所以可能按两次；
+//       只有确实存在游标环时才按 Esc，否则 Esc 会退到上级目录
+async function clearCursor() {
+  await focusListStable();
+  for (let i = 0; i < 3; i += 1) {
+    if (!(await evaluate(`(() => {
+      const rows = [...document.querySelectorAll('[data-file-id]')];
+      return rows.some((r) => String(r.className).includes('ring-[#007AFF]'));
+    })()`))) {
+      return;
+    }
+    await key('Escape');
+  }
+  await waitFor('游标清空', () =>
+    evaluate(`![...document.querySelectorAll('[data-file-id]')].some((r) => String(r.className).includes('ring-[#007AFF]'))`)
+  );
+}
+
+// selectFirstRow 从「没有游标」的状态选中第一行。
+//
+// 输入：无
+// 输出：无（选不中就抛错）
+// 预期：游标停在末项时再按 ↓ 会按设计把焦点送出列表（去分页按钮），
+//       所以必须先把游标清掉，让 ↓ 从空状态落到第一行，不能沿用上一步的游标位置
+async function selectFirstRow() {
+  await clearCursor();
+  await focusListStable();
+  await key('ArrowDown');
+  await waitFor('游标就位', hasCursor);
+}
 
 const setValue = (selector, value) =>
   evaluate(`(() => {
@@ -414,9 +488,7 @@ try {
   check('键盘退回上级目录', true, backRoot);
 
   // ---- 3. 删除：确认框取消不删，确认后数据变少 ----
-  await focusList();
-  await key('ArrowDown');
-  await waitFor('游标就位', hasCursor);
+  await selectFirstRow();
   await key('Delete');
   await waitFor('删除确认框打开', () => evaluate(`!!document.querySelector('dialog[open]')`));
   check('Delete 打开删除确认框', true);
@@ -430,9 +502,7 @@ try {
   await waitFor('删除确认框关闭', () => evaluate(`!document.querySelector('dialog[open]')`));
   check('取消删除不改数据', (await listFiles()).length === countAfterDialog);
 
-  await focusList();
-  await key('ArrowDown');
-  await waitFor('游标就位', hasCursor);
+  await selectFirstRow();
   await key('Delete');
   await waitFor('删除确认框再次打开', () => evaluate(`!!document.querySelector('dialog[open]')`));
   const confirmed = await evaluate(`(() => {
@@ -452,8 +522,7 @@ try {
 
   // ---- 4. 改名：F2 打开弹窗，提交后落到数据里 ----
   await waitFor('列表恢复', focusList);
-  await key('ArrowDown');
-  await waitFor('游标就位', hasCursor);
+  await selectFirstRow();
   await key('F2');
   await waitFor('改名弹窗打开', () => evaluate(`!!document.querySelector('dialog[open] input')`));
   const renamed = await evaluate(`(() => {
@@ -551,15 +620,7 @@ try {
       return !!list && list.querySelectorAll('[data-file-id]').length > 0;
     })()`)
   );
-  await focusList();
-  // 游标可能停在上一步的末项，此时 ↓ 会把焦点送去分页按钮：先 Esc 清掉再 ↓
-  await key('Escape');
-  await waitFor('游标清空', () =>
-    evaluate(`![...document.querySelectorAll('[data-file-id]')].some((r) => String(r.className).includes('ring-[#007AFF]'))`)
-  );
-  await focusList();
-  await key('ArrowDown');
-  await waitFor('游标就位', hasCursor);
+  await selectFirstRow();
   await key('F2');
   const dialogBack = await waitFor('连续操作后 F2 仍能打开改名', () =>
     evaluate(`!!document.querySelector('dialog[open] input')`)
