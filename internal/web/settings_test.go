@@ -57,7 +57,12 @@ func TestSettingsAPIUsesRuntimeDefaults(t *testing.T) {
 		}
 	}
 	// 每个 schema 键都要有值，且不允许出现占位 0
+	// 例外：代理地址的空值本身就是语义（空 = 不走代理），不是漏填
+	optionalBlank := map[string]bool{"telegram.proxy": true}
 	for _, s := range got.Schema {
+		if optionalBlank[s.Key] {
+			continue
+		}
 		if strings.TrimSpace(got.Values[s.Key]) == "" {
 			t.Errorf("键 %q 返回空值", s.Key)
 		}
