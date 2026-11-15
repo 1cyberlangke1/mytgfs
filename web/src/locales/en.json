@@ -79,9 +79,6 @@
     "reconnecting": "Reconnecting",
     "invalid_credentials": "Auth Expired"
   },
-  "indexState": {
-    "normal": "Index Ready"
-  },
   "overview": {
     "title": "Overview",
     "primaryUploadBtn": "Upload Files",
@@ -118,7 +115,6 @@
     }
   },
   "files": {
-    "title": "Files",
     "volumeSelectorLabel": "Volume",
     "rootCrumb": "Root",
     "upOneLevel": "Up",

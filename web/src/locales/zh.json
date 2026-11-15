@@ -79,9 +79,6 @@
     "reconnecting": "重连中",
     "invalid_credentials": "凭据失效"
   },
-  "indexState": {
-    "normal": "索引正常"
-  },
   "overview": {
     "title": "概览",
     "primaryUploadBtn": "上传文件",
@@ -118,7 +115,6 @@
     }
   },
   "files": {
-    "title": "文件",
     "volumeSelectorLabel": "存储卷",
     "rootCrumb": "根目录",
     "upOneLevel": "上级目录",

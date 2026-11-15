@@ -856,23 +856,25 @@ export default function App() {
   const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
     const incoming = Array.from(fileList);
     if (incoming.length === 0) return;
-    // 上传前预检：超过 2GB 或名称为空直接挡下，不浪费带宽传到一半再失败
-    for (const file of incoming) {
+    // 上传前预检：单个文件不合格只跳过它，其余照常上传，
+    // 不因为一个超大文件把整批都丢掉（跳过哪些要明说）
+    const accepted = incoming.filter((file) => {
       const verdict = validateAndPlanUpload(file.name, file.size);
-      if (verdict.valid) continue;
+      if (verdict.valid) return true;
       pushToast(
         verdict.errorCode === 'FILE_TOO_LARGE'
           ? interpolate(tRef.current.files.uploadTooLarge, { name: file.name }, localeRef.current)
           : tRef.current.files.uploadEmptyName,
         'error'
       );
-      return;
-    }
+      return false;
+    });
+    if (accepted.length === 0) return;
     // 文件夹上传由 input[webkitdirectory] 提供相对路径；普通选择时为空
-    const rels = incoming.map(
+    const rels = accepted.map(
       (file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
     );
-    const plan = incoming.map((file, index) => {
+    const plan = accepted.map((file, index) => {
       const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const task: TransferTask = {
         id,
@@ -1102,7 +1104,7 @@ export default function App() {
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => {
         dismissToast(pending);
-        pushToast(t.volume.createSuccess.replace('{name}', name), 'success');
+        pushToast(interpolate(t.volume.createSuccess, { name }, locale), 'success');
       })
       .catch((err) => {
         dismissToast(pending);
@@ -1117,7 +1119,7 @@ export default function App() {
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => {
         dismissToast(pending);
-        pushToast(t.volume.attachSuccess.replace('{name}', name), 'success');
+        pushToast(interpolate(t.volume.attachSuccess, { name }, locale), 'success');
       })
       .catch((err) => {
         dismissToast(pending);
@@ -1132,7 +1134,7 @@ export default function App() {
       .then(() => Promise.all([reloadState(), reloadFiles()]))
       .then(() => {
         dismissToast(pending);
-        pushToast(t.volume.deleteSuccess.replace('{name}', name), 'success');
+        pushToast(interpolate(t.volume.deleteSuccess, { name }, locale), 'success');
       })
       .catch((err) => {
         dismissToast(pending);
@@ -1782,10 +1784,7 @@ export default function App() {
       />
 
       {/* iOS Dynamic Toast Notification Stack */}
-      <div
-        aria-live="polite"
-        className="fixed bottom-20 md:bottom-4 end-4 z-50 flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] sm:w-auto pointer-events-none"
-      >
+      <div className="fixed bottom-20 md:bottom-4 end-4 z-50 flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] sm:w-auto pointer-events-none">
         <AnimatePresence>
           {toasts.map((toast) => (
             <motion.div
@@ -1795,6 +1794,9 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.94, transition: { duration: 0.15 } }}
               transition={IOS_SPRING}
+              // 错误用 alert 立即播报，其余用 status 排队播报；
+              // 放在每条上而不是外层，避免同一个节点挂两个 live 区重复朗读
+              role={toast.type === 'error' ? 'alert' : 'status'}
               className={`pointer-events-auto flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl shadow-lg border text-xs font-medium backdrop-blur-xl ${
                 toast.type === 'error'
                   ? 'bg-red-950/90 text-red-100 border-red-800/80'

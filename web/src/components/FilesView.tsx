@@ -244,8 +244,11 @@ export const FilesView: React.FC<FilesViewProps> = ({
   // 卷管理弹窗状态
   const [showCreateVolume, setShowCreateVolume] = useState(false);
   const [newVolume, setNewVolume] = useState({ name: '', title: '' });
+  // 建卷/挂卷的行内错误：原生 alert 会阻塞整个窗口，改成字段下方红字
+  const [volumeFormError, setVolumeFormError] = useState('');
   const [showAttachVolume, setShowAttachVolume] = useState(false);
   const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
+  const [attachFormError, setAttachFormError] = useState('');
   // 频道列表按需加载：只有打开弹窗并点「载入」时才连 Telegram
   const [channels, setChannels] = useState<
     { id: number; chat_id: number; title: string; username: string; creator: boolean; admin: boolean }[]
@@ -664,6 +667,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               variant="outline"
               onClick={() => {
                 setNewVolume({ name: '', title: '' });
+                setVolumeFormError('');
                 setShowCreateVolume(true);
               }}
             >
@@ -678,6 +682,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               variant="outline"
               onClick={() => {
                 setAttachForm({ name: '', chatId: '' });
+                setAttachFormError('');
                 setChannels([]);
                 setChannelsState('idle');
                 setChannelsError('');
@@ -1577,7 +1582,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               e.preventDefault();
               const name = newVolume.name.trim();
               if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
-                window.alert(t.volume.invalidName);
+                setVolumeFormError(t.volume.invalidName);
                 return;
               }
               onCreateVolume(name, newVolume.title.trim());
@@ -1606,10 +1611,22 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 autoFocus
                 dir="ltr"
                 pattern="[A-Za-z0-9_-]{1,32}"
+                aria-invalid={volumeFormError ? true : undefined}
+                aria-describedby="volume-name-hint"
                 value={newVolume.name}
-                onChange={(e) => setNewVolume((v) => ({ ...v, name: e.target.value }))}
+                onChange={(e) => {
+                  setVolumeFormError('');
+                  setNewVolume((v) => ({ ...v, name: e.target.value }));
+                }}
               />
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.volume.nameHint}</p>
+              <p id="volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.nameHint}
+              </p>
+              {volumeFormError && (
+                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                  {volumeFormError}
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <label htmlFor="volume-title" className="block text-xs font-medium">
@@ -1646,11 +1663,11 @@ export const FilesView: React.FC<FilesViewProps> = ({
               const name = attachForm.name.trim();
               const id = Number(attachForm.chatId.trim());
               if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
-                window.alert(t.volume.invalidName);
+                setAttachFormError(t.volume.invalidName);
                 return;
               }
               if (!Number.isInteger(id) || id === 0) {
-                window.alert(t.volume.chatIdInvalid);
+                setAttachFormError(t.volume.chatIdInvalid);
                 return;
               }
               onAttachVolume(name, id);
@@ -1743,9 +1760,17 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 autoFocus
                 dir="ltr"
                 pattern="[A-Za-z0-9_-]{1,32}"
+                aria-invalid={attachFormError ? true : undefined}
+                aria-describedby="attach-volume-name-hint"
                 value={attachForm.name}
-                onChange={(e) => setAttachForm((v) => ({ ...v, name: e.target.value }))}
+                onChange={(e) => {
+                  setAttachFormError('');
+                  setAttachForm((v) => ({ ...v, name: e.target.value }));
+                }}
               />
+              <p id="attach-volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.nameHint}
+              </p>
             </div>
             <div className="space-y-1.5">
               <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
@@ -1756,10 +1781,22 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 required
                 dir="ltr"
                 inputMode="numeric"
+                aria-invalid={attachFormError ? true : undefined}
+                aria-describedby="attach-volume-chat-hint"
                 value={attachForm.chatId}
-                onChange={(e) => setAttachForm((v) => ({ ...v, chatId: e.target.value }))}
+                onChange={(e) => {
+                  setAttachFormError('');
+                  setAttachForm((v) => ({ ...v, chatId: e.target.value }));
+                }}
               />
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.volume.chatIdHint}</p>
+              <p id="attach-volume-chat-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.chatIdHint}
+              </p>
+              {attachFormError && (
+                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                  {attachFormError}
+                </p>
+              )}
             </div>
             <div className="flex items-center justify-end gap-2 pt-2">
               <Button type="button" variant="outline" onClick={() => setShowAttachVolume(false)}>
