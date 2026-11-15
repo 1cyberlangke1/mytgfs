@@ -16,9 +16,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash"
 	"io"
 	"log/slog"
 	"net/http"
@@ -53,6 +55,10 @@ type uploadSession struct {
 	// done 是已经落盘的字节数，也是下一段允许的 offset
 	done int64
 	file *os.File
+	// sum 在收分片时累计内容摘要：提交时不用再读一遍整个文件
+	sum hash.Hash
+	// adopted 表示临时文件已交给文件后端，本会话不再负责删除
+	adopted bool
 	// lastUsed 是纳秒时间戳：回收扫描与取会话并发读，用原子量避免数据竞争
 	lastUsed atomic.Int64
 	// busy 表示正在提交：回收协程不得关闭这个句柄
@@ -128,7 +134,7 @@ func (u *uploadAPI) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s := &uploadSession{
 		id: newToken(12), vol: req.Vol, dir: req.Dir, target: target,
-		size: req.Size, file: f,
+		size: req.Size, file: f, sum: sha256.New(),
 	}
 	s.lastUsed.Store(time.Now().UnixNano())
 	u.mu.Lock()
@@ -171,7 +177,7 @@ func (u *uploadAPI) handleChunk(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	n, cerr := io.Copy(s.file, r.Body)
+	n, cerr := io.Copy(io.MultiWriter(s.file, s.sum), r.Body)
 	if cerr != nil {
 		replyJSONError(w, http.StatusInternalServerError, cerr.Error())
 		return
@@ -223,18 +229,27 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusNotFound, i18n.T("err.fm_no_volume"))
 		return
 	}
-	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
-		u.drop(s.id)
-		replyJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	// 文件夹上传会带上相对路径：先把缺失的父目录补出来，再落文件
 	if err := ensureParents(r.Context(), m, s.target); err != nil {
 		u.drop(s.id)
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
-	if err := m.Upload(r.Context(), s.target, s.file); err != nil {
+	// 接管临时文件：先关句柄（Windows 下执行体要重新打开），所有权转给文件后端。
+	// 摘要在收分片时已经算好，这里不再整文件读一遍。
+	s.mu.Lock()
+	temp := s.file.Name()
+	sha := hex.EncodeToString(s.sum.Sum(nil))
+	cerr := s.file.Close()
+	s.adopted = cerr == nil
+	s.mu.Unlock()
+	if cerr != nil {
+		u.drop(s.id)
+		replyJSONError(w, http.StatusInternalServerError, cerr.Error())
+		return
+	}
+	if err := m.AdoptUpload(r.Context(), s.target, temp, done, sha); err != nil {
+		// 临时文件已交给后端：失败时保留给队列重试，不在会话里删
 		u.drop(s.id)
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
@@ -320,7 +335,12 @@ func (u *uploadAPI) drop(id string) {
 	s.mu.Lock()
 	name := s.file.Name()
 	_ = s.file.Close()
+	adopted := s.adopted
 	s.mu.Unlock()
+	if adopted {
+		// 文件已经交给上传队列，删掉会把重放要用的内容弄丢
+		return
+	}
 	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Warn(i18n.T("log.tmp_sweep_failed"), "path", name, "err", err)
 	}

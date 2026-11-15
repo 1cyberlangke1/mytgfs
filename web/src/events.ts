@@ -3,9 +3,9 @@
 // 主题名与 Go 侧 internal/push 的 Topics 一一对应；加主题只改这两处，
 // 不允许在组件里再写一套 EventSource / Events.On 分支。
 
-export type PushTopic = 'status' | 'config';
+export type PushTopic = 'status' | 'progress' | 'config';
 
-const TOPICS: PushTopic[] = ['status', 'config'];
+const TOPICS: PushTopic[] = ['status', 'progress', 'config'];
 
 // desktopEvent 与 Go 侧 push.DesktopEvent 必须给出相同字符串。
 const desktopEvent = (topic: PushTopic) => `mytgfs:${topic}`;

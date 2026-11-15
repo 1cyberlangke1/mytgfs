@@ -43,3 +43,31 @@ func TestMutationsPushStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestReadProgressPushesProgressTopic 下载进度只推 progress，不推 status。
+//
+// 输入：track 记录 1MB/4MB 的进度，再 untrack
+// 输出：progress 计数增加，status 计数保持 0
+// 预期：status 会让前端重拉整棵文件树，进度必须走独立主题
+func TestReadProgressPushesProgressTopic(t *testing.T) {
+	fsys, _, rec, cleanup := newTestFSWithEvents(t)
+	defer cleanup()
+
+	rec.Reset()
+	fsys.track("/big.bin", 1<<20, 4<<20)
+	if got := rec.Count(push.TopicProgress); got == 0 {
+		t.Fatal("track 没有推送 progress")
+	}
+	if got := rec.Count(push.TopicStatus); got != 0 {
+		t.Fatalf("track 误推了 status %d 次", got)
+	}
+
+	rec.Reset()
+	fsys.untrack("/big.bin")
+	if got := rec.Count(push.TopicProgress); got == 0 {
+		t.Fatal("untrack 没有推送 progress")
+	}
+	if got := rec.Count(push.TopicStatus); got != 0 {
+		t.Fatalf("untrack 误推了 status %d 次", got)
+	}
+}

@@ -453,11 +453,12 @@ func Run(opts Options) error {
 			},
 			// 配置变更唯一入口：写盘与内存副本一步完成
 			MutateConfig: appRoot.MutateConfig,
-			// 设置保存后立即应用到运行中的卷：并发数、日志级别即时生效
+			// 设置保存后立即应用到运行中的卷：并发数、读块、日志级别即时生效
 			OnSettingsChanged: func(cur config.Config) {
 				for _, tv := range reg.Snapshot() {
 					tv.vf.Store.SetParallel(cur.Mount.DownloadConnections())
 					tv.vf.Store.SetUploadParallel(cur.Mount.UploadParallelism())
+					tv.vf.FS.SetChunk(cur.Mount.ReadChunk())
 				}
 				logging.SetLevel(cur.Log.Level)
 				pushHub.Publish(push.TopicStatus)

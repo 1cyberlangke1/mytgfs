@@ -12,13 +12,24 @@ import (
 // TestTopicsCoverContract 固定主题清单。
 //
 // 输入：无
-// 输出：Topics 至少包含 status 与 config
+// 输出：Topics 至少包含 status、progress 与 config
 // 预期：网页版 SSE 与桌面壳共用这份清单，删主题会让两端同时失效
 func TestTopicsCoverContract(t *testing.T) {
-	for _, want := range []string{TopicStatus, TopicConfig} {
+	for _, want := range []string{TopicStatus, TopicProgress, TopicConfig} {
 		if !slices.Contains(Topics, want) {
 			t.Fatalf("Topics 缺少 %q: %v", want, Topics)
 		}
+	}
+}
+
+// TestProgressTopicSeparateFromStatus 进度主题不能与树主题重名。
+//
+// 输入：TopicProgress 与 TopicStatus
+// 输出：两者不相等
+// 预期：同名会让「只刷进度」变回「整棵文件树重拉」
+func TestProgressTopicSeparateFromStatus(t *testing.T) {
+	if TopicProgress == TopicStatus {
+		t.Fatalf("TopicProgress 与 TopicStatus 重名: %q", TopicProgress)
 	}
 }
 

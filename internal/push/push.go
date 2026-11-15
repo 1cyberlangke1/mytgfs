@@ -12,6 +12,11 @@ package push
 const (
 	// TopicStatus 表示卷内文件、任务队列或连接状态发生变化
 	TopicStatus = "status"
+	// TopicProgress 表示只有传输进度在动（文件树没变）
+	//
+	// 下载每 256KB、读文件每块进度都会推一次；前端收到只刷新任务与状态，
+	// 不重新拉文件树，否则大卷在传输期间会被反复整棵重拉
+	TopicProgress = "progress"
 	// TopicConfig 表示配置被保存（可能改变并发数、下载目录等）
 	TopicConfig = "config"
 )
@@ -21,7 +26,7 @@ const (
 // 输入：无
 // 输出：订阅顺序固定的主题名切片
 // 预期：新增主题只改这里，桌面壳与 SSE 同时生效
-var Topics = []string{TopicStatus, TopicConfig}
+var Topics = []string{TopicStatus, TopicProgress, TopicConfig}
 
 // DesktopEvent 把主题翻译成桌面壳里的事件名。
 //

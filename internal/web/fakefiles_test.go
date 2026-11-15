@@ -20,6 +20,10 @@ import (
 type fakeFiles struct {
 	uploads map[string]string
 	dirs    map[string]bool
+	// adoptCalls 记录 AdoptUpload 的调用次数：提交路径不该退回再拷一份
+	adoptCalls int
+	// lastSha 是最后一次接管的摘要，用来断言摘要在收分片时就算好了
+	lastSha string
 }
 
 func newFakeFiles() *fakeFiles {
@@ -54,6 +58,25 @@ func (f *fakeFiles) Upload(ctx context.Context, p string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	f.uploads[p] = string(data)
+	return nil
+}
+
+// AdoptUpload 接管已落盘的临时文件：测试里读进内存，等价于 Upload。
+//
+// 输入：p 目标路径；temp 临时文件；size 字节数；sha 摘要（不校验）
+// 输出：error
+// 预期：记录一次接管调用，用来断言提交路径没有退回「再拷一份」
+func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error {
+	data, err := os.ReadFile(temp)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return errors.New("adopt size mismatch")
+	}
+	f.adoptCalls++
+	f.lastSha = sha
 	f.uploads[p] = string(data)
 	return nil
 }

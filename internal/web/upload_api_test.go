@@ -4,7 +4,9 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -215,6 +217,35 @@ func TestUploadAPICreatesParents(t *testing.T) {
 	api.handleCommit(rec, httptest.NewRequest(http.MethodPost, "/api/upload/commit?id="+id, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("重复层级 commit code = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUploadAPICommitAdoptsTemp 提交时把临时文件交给后端，不再整文件拷一份。
+//
+// 输入：两段内容共 11 字节
+// 输出：AdoptUpload 调用一次，内容与 sha256 正确
+// 预期：摘要在收分片时累计，提交阶段不重新读一遍文件
+func TestUploadAPICommitAdoptsTemp(t *testing.T) {
+	f := newFakeFiles()
+	api := newTestUploadAPI(t, f)
+	id := initSession(t, api, `{"vol":"demo","dir":"/","name":"a.txt","size":11}`)
+	putChunk(t, api, id, 0, "hello")
+	putChunk(t, api, id, 5, "-world")
+
+	rec := httptest.NewRecorder()
+	api.handleCommit(rec, httptest.NewRequest(http.MethodPost, "/api/upload/commit?id="+id, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if f.adoptCalls != 1 {
+		t.Fatalf("AdoptUpload 调用 %d 次，期望 1", f.adoptCalls)
+	}
+	if got := f.uploads["/a.txt"]; got != "hello-world" {
+		t.Fatalf("落盘内容不符: %q", got)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte("hello-world")))
+	if f.lastSha != want {
+		t.Fatalf("摘要 = %s，期望 %s", f.lastSha, want)
 	}
 }
 

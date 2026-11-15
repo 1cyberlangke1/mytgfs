@@ -29,6 +29,7 @@ const (
 	jobRename = queue.KindRename
 	jobRemove = queue.KindRemove
 	jobUpload = queue.KindUpload
+	jobCopy   = queue.KindCopy
 )
 
 // mkdirJob 建目录所需的最小参数。
@@ -130,6 +131,12 @@ func (d *FileSystem) handleJob(ctx context.Context, job queue.Job) error {
 			return err
 		}
 		return d.uploadNow(ctx, p)
+	case jobCopy:
+		var p copyJob
+		if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
+			return err
+		}
+		return d.copyNow(ctx, p)
 	default:
 		return fmt.Errorf("%s: %s", job.Volume, job.Kind)
 	}

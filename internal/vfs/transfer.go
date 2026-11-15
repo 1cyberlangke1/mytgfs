@@ -38,7 +38,7 @@ func (d *FileSystem) track(name string, done, total int64) {
 	if done >= total {
 		delete(d.tr, name)
 		d.trMu.Unlock()
-		d.notify()
+		d.notifyProgress()
 		return
 	}
 	if d.tr == nil {
@@ -51,7 +51,7 @@ func (d *FileSystem) track(name string, done, total int64) {
 		t.Done = done
 	}
 	d.trMu.Unlock()
-	d.notify()
+	d.notifyProgress()
 }
 
 // untrack 移除一条下载进度。
@@ -59,7 +59,7 @@ func (d *FileSystem) untrack(name string) {
 	d.trMu.Lock()
 	delete(d.tr, name)
 	d.trMu.Unlock()
-	d.notify()
+	d.notifyProgress()
 }
 
 // Transfers 返回当前下载进度快照，按路径排序。

@@ -70,6 +70,25 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 
 	fsys := vfs.New(ctx, idx, store, a.Config().Mount.ReadChunk(), a.Events())
 	fsys.SetVolume(volName)
+	// 排队的跨卷复制任务要按卷名解析源卷：注入这一层，重启后也能重放
+	fsys.SetCopySource(func(name string) (vfs.Peer, error) {
+		if name == volName {
+			return vfs.Peer{Index: idx, Store: store}, nil
+		}
+		pv, pn, ok := a.Volume(name)
+		if !ok {
+			return vfs.Peer{}, ErrVolumeNotFound{Name: name}
+		}
+		pidx, perr := a.Index(pn)
+		if perr != nil {
+			return vfs.Peer{}, perr
+		}
+		return vfs.Peer{
+			Index:   pidx,
+			Store:   a.newStore(api, pv.ChatID),
+			Release: func() { _ = pidx.Close() },
+		}, nil
+	})
 	// 所有改动频道的操作先落库再执行：断电/断网后重启继续
 	if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
 		_ = idx.Close()

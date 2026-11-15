@@ -258,7 +258,7 @@
     "mount.sync_seconds": "0 means 15s default, negative disables auto sync",
     "mount.download_parallel": "One MTProto connection cannot saturate the link; uploads and downloads share the pool, around 8 works best",
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",
-    "mount.read_chunk_mb": "Larger means fewer requests but worse on slow links; applies to volumes opened after the change",
+    "mount.read_chunk_mb": "Larger means fewer requests but worse on slow links; takes effect immediately",
     "log.level": "debug logs every remote fetch; enable only while diagnosing",
     "downloads.dir": "Defaults to data/downloads; relative paths resolve against the config file, absolute paths are allowed"
   },

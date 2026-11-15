@@ -16,6 +16,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"mytgfs/internal/dirent"
 	"mytgfs/internal/i18n"
@@ -35,6 +36,8 @@ type Store interface {
 	Refresh(ctx context.Context, messageID int) (*telegramstore.Part, error)
 	// Copy 引用已有 document 发一条新消息，不重传字节（写时去重用）
 	Copy(ctx context.Context, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, error)
+	// CopyFrom 引用另一个卷的 document 发一条新消息（跨卷复制用）
+	CopyFrom(ctx context.Context, ref telegramstore.RefreshSource, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, *telegramstore.Part, error)
 
 	// 节点消息读写
 	SendNode(ctx context.Context, body string) (int, error)
@@ -44,10 +47,11 @@ type Store interface {
 
 // FileSystem 是卷内的文件系统实现。
 type FileSystem struct {
-	ctx    context.Context
-	idx    *index.Index
-	store  Store
-	chunk  int64
+	ctx   context.Context
+	idx   *index.Index
+	store Store
+	// chunk 运行期可调：设置页改完读块大小不用重新挂卷
+	chunk  atomic.Int64
 	volume string
 	// q 非空时所有改动频道的操作走持久化队列
 	q *queue.Queue
@@ -60,6 +64,8 @@ type FileSystem struct {
 	tr   map[string]*Transfer
 	// events 是写操作完成后通知前端的通道；构造时必填，忘接就编译不过
 	events push.Events
+	// copySource 解析跨卷复制的源卷；未接入时跨卷复制任务直接失败
+	copySource CopySource
 }
 
 // notify 推送一次「卷内容变了」。
@@ -74,16 +80,43 @@ func (d *FileSystem) notify() {
 	d.events.Publish(push.TopicStatus)
 }
 
+// notifyProgress 推送一次「进度在动，文件树没变」。
+//
+// 输入：无
+// 输出：无
+// 预期：只由读写进度路径调用；前端收到后只刷新任务条与状态，
+//
+//	不重新拉文件树，否则大文件传输期间整棵树会被反复重拉
+func (d *FileSystem) notifyProgress() {
+	if d.events == nil {
+		return
+	}
+	d.events.Publish(push.TopicProgress)
+}
+
 // New 创建卷内文件系统。
 //
 // 输入：ctx；idx 索引；store 存储；chunk 读块大小；events 状态推送通道（必填）
 // 输出：*FileSystem
 // 预期：所有路径都相对于卷根 "/"；events 为 nil 表示当前进程没有面板可通知
 func New(ctx context.Context, idx *index.Index, store Store, chunk int64, events push.Events) *FileSystem {
-	if chunk <= 0 {
-		chunk = 1 << 20
+	d := &FileSystem{ctx: ctx, idx: idx, store: store, events: events}
+	d.SetChunk(chunk)
+	return d
+}
+
+// SetChunk 运行期调整读块大小。
+//
+// 输入：size 字节数；<=0 时回到 1MB
+// 输出：无
+// 预期：只影响之后的读请求，已经在读的块按原大小读完；
+//
+//	设置页改 read_chunk_mb 后不需要重新挂卷
+func (d *FileSystem) SetChunk(size int64) {
+	if size <= 0 {
+		size = 1 << 20
 	}
-	return &FileSystem{ctx: ctx, idx: idx, store: store, chunk: chunk, events: events}
+	d.chunk.Store(size)
 }
 
 // SetQueue 挂上串行队列（测试可注入内存实现）。

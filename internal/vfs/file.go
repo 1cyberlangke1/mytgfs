@@ -262,7 +262,7 @@ func (f *file) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if f.buf == nil || f.off < f.base || f.off >= f.base+int64(len(f.buf)) {
-		length := f.d.chunk
+		length := f.d.chunk.Load()
 		if length <= 0 {
 			length = 1 << 20
 		}

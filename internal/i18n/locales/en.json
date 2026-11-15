@@ -91,6 +91,8 @@
   "err.cp_prefix": "copy failed",
   "err.cp_same_path": "source and destination are the same path",
   "err.cp_src_missing": "source is not in the index, run mytgfs sync first: %s",
+  "err.cp_src_is_dir": "copying directories is not supported: %s",
+  "err.cp_unavailable": "cross-volume copy is not wired in this process",
   "err.create_channel": "create channel",
   "err.create_channel_no_channel": "createChannel result has no channel",
   "err.create_channel_type": "createChannel returned %T",

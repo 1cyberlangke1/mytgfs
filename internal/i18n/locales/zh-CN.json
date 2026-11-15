@@ -91,6 +91,8 @@
   "err.cp_prefix": "复制失败",
   "err.cp_same_path": "源和目标是同一个路径",
   "err.cp_src_missing": "源文件不在索引里，先运行 mytgfs sync: %s",
+  "err.cp_src_is_dir": "暂不支持复制目录: %s",
+  "err.cp_unavailable": "当前进程没有接入跨卷复制",
   "err.create_channel": "建频道",
   "err.create_channel_no_channel": "createChannel 返回里没有 channel",
   "err.create_channel_type": "createChannel 返回类型 %T",

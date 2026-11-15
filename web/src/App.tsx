@@ -854,6 +854,12 @@ export default function App() {
       scheduleFiles();
       scheduleDownloads();
     };
+    // 进度事件只动字节数：文件树没变，重拉整棵树在大卷上纯属白烧
+    const onProgress = () => {
+      clearProblem('events');
+      scheduleState();
+      scheduleDownloads();
+    };
     const onConfig = () => {
       void reloadSettings();
       scheduleState();
@@ -862,7 +868,7 @@ export default function App() {
 
     // 桌面壳与网页版共用 subscribePush：组件里不再出现传输通道判断
     const unsubscribe = subscribePush(
-      { status: onStatus, config: onConfig },
+      { status: onStatus, progress: onProgress, config: onConfig },
       {
         onConnect: onStatus,
         // 断线时浏览器会一直静默重连；不提示的话用户会以为数据是实时的

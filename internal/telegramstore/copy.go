@@ -30,12 +30,21 @@ func (s *Store) Copy(ctx context.Context, src *Part, name, mime, caption string)
 	return part, err
 }
 
+// RefreshSource 是跨卷复制时刷新源引用的最小能力。
+//
+// 输入：源消息 ID
+// 输出：该消息最新的 Part
+// 预期：用接口而不是 *Store，vfs 的存储抽象才能直接当作刷新源传入
+type RefreshSource interface {
+	Refresh(ctx context.Context, messageID int) (*Part, error)
+}
+
 // CopyFrom 把别的卷里的文件复制到 s 所在频道。
 //
-// 输入：ref 源文件所在卷的 Store（只用于刷新 file_reference）；src 源记录；name/mime/caption 同 Copy
+// 输入：ref 源文件所在卷的刷新源；src 源记录；name/mime/caption 同 Copy
 // 输出：新消息 Part；refreshed 为刷新后的源 Part（未刷新时为 nil，调用方应写回源索引）
 // 预期：消息发到 s 的频道，源频道不变；跨频道时 file_reference 可能失效，必须用源 Store 刷新
-func (s *Store) CopyFrom(ctx context.Context, ref *Store, src *Part, name, mime, caption string) (*Part, *Part, error) {
+func (s *Store) CopyFrom(ctx context.Context, ref RefreshSource, src *Part, name, mime, caption string) (*Part, *Part, error) {
 	return s.copyWithRefresh(ctx, ref, src, name, mime, caption)
 }
 
@@ -44,7 +53,7 @@ func (s *Store) CopyFrom(ctx context.Context, ref *Store, src *Part, name, mime,
 // 输入：ref 负责刷新 file_reference 的 Store；src 源记录；name/mime/caption
 // 输出：目标频道的新消息 Part、刷新后的源 Part（无刷新为 nil）、error
 // 预期：同一账号内 document 的 access_hash 通用，跨频道只需一条 sendMedia
-func (s *Store) copyWithRefresh(ctx context.Context, ref *Store, src *Part, name, mime, caption string) (*Part, *Part, error) {
+func (s *Store) copyWithRefresh(ctx context.Context, ref RefreshSource, src *Part, name, mime, caption string) (*Part, *Part, error) {
 	if src == nil || src.DocumentID == 0 {
 		return nil, nil, ErrNoDocument
 	}

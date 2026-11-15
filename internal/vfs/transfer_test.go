@@ -36,8 +36,9 @@ func TestTransfersTracksRead(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("进度行数 = %d，期望 1", len(got))
 	}
-	if got[0].Path != "/big.bin" || got[0].Total != size || got[0].Done != fsys.chunk {
-		t.Fatalf("进度 = %+v，期望 Done=%d Total=%d", got[0], fsys.chunk, size)
+	chunk := fsys.chunk.Load()
+	if got[0].Path != "/big.bin" || got[0].Total != size || got[0].Done != chunk {
+		t.Fatalf("进度 = %+v，期望 Done=%d Total=%d", got[0], chunk, size)
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)

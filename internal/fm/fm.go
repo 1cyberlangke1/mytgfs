@@ -46,6 +46,8 @@ type Files interface {
 	Info(ctx context.Context, p string) (Entry, error)
 	Mkdir(ctx context.Context, p string) error
 	Upload(ctx context.Context, p string, r io.Reader) error
+	// AdoptUpload 接管已经落盘的临时文件直接入队上传；比 Upload 少一次整文件拷贝
+	AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error
 	Remove(ctx context.Context, p string) error
 	Move(ctx context.Context, from, to string) error
 	Open(ctx context.Context, p string) (vfs.File, error)
@@ -225,6 +227,53 @@ func (m *Manager) Upload(ctx context.Context, p string, r io.Reader) error {
 		return cerr
 	}
 	return f.Close()
+}
+
+// Adopter 是底层文件系统的可选能力：接管已落盘的临时文件。
+//
+// vfs.FileSystem 实现了它；没有实现的实现退化成读一遍再 Upload。
+type Adopter interface {
+	Adopt(ctx context.Context, name, temp string, size int64, sha string) error
+}
+
+// AdoptUpload 接管已经落盘的临时文件直接入队上传。
+//
+// 输入：p 卷内目标路径；temp 临时文件；size 字节数；sha 内容摘要
+// 输出：error
+// 预期：
+//   - 底层支持接管时不再复制内容，临时文件所有权转给底层
+//   - 不支持时退回「读临时文件 + Upload」，行为不变
+func (m *Manager) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error {
+	c, err := clean(p)
+	if err != nil {
+		return err
+	}
+	if c == "/" {
+		return ErrBadPath
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.fs.(Adopter); ok {
+		return a.Adopt(ctx, c, temp, size, sha)
+	}
+	f, oerr := os.Open(temp)
+	if oerr != nil {
+		return oerr
+	}
+	defer func() { _ = f.Close() }()
+	w, werr := m.fs.OpenFile(ctx, c, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if werr != nil {
+		return werr
+	}
+	if _, cerr := io.Copy(w, f); cerr != nil {
+		if a, ok := w.(interface{ Abort() error }); ok {
+			_ = a.Abort()
+		} else {
+			_ = w.Close()
+		}
+		return cerr
+	}
+	return w.Close()
 }
 
 // Remove 删除文件或目录。

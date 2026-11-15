@@ -29,9 +29,7 @@ import (
 	"mytgfs/internal/config"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	"mytgfs/internal/logging"
 	"mytgfs/internal/ui"
-	"mytgfs/internal/upload"
 	"mytgfs/internal/vfs"
 )
 
@@ -107,35 +105,41 @@ func runCopy(args []string) {
 			fatal(i18n.T("err.cp_dst_exists", dst))
 		}
 
+		srcVol := volName
 		srcStore := s.Store()
 		dstStore := s.StoreFor(dstVolume.ChatID)
-		dstFS := vfs.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk(), nil)
-		srcPart := upload.Part(source)
-		body, cerr := dstFS.NodeBody(ctx, dst, source.Sha256)
-		if cerr != nil {
-			return cerr
-		}
-		part, refreshed, cerr := dstStore.CopyFrom(ctx, srcStore, srcPart,
-			path.Base(dst), "application/octet-stream", body)
-		if cerr != nil {
-			return cerr
-		}
-		// 源 file_reference 被刷新时写回源索引，否则下次还要再刷一次
-		if refreshed != nil && dstIdx != idx {
-			updated := source
-			updated.DocumentID = refreshed.DocumentID
-			updated.AccessHash = refreshed.AccessHash
-			updated.FileReference = refreshed.FileReference
-			updated.Size = refreshed.Size
-			if perr := idx.PutNode(ctx, updated); perr != nil {
-				logging.Warn("err.index_read", perr)
+		dstFS := vfs.New(ctx, dstIdx, dstStore, a.Config().Mount.ReadChunk(), a.Events())
+		dstFS.SetVolume(dstName)
+		// 源卷解析：同卷直接复用当前句柄，跨卷时临时开一个索引并在复制结束后关掉
+		dstFS.SetCopySource(func(vol string) (vfs.Peer, error) {
+			if vol == srcVol {
+				return vfs.Peer{Index: idx, Store: srcStore}, nil
 			}
+			pv, pn, ok := a.Volume(vol)
+			if !ok {
+				return vfs.Peer{}, app.ErrVolumeNotFound{Name: vol}
+			}
+			pidx, perr := a.Index(pn)
+			if perr != nil {
+				return vfs.Peer{}, perr
+			}
+			return vfs.Peer{Index: pidx, Store: s.StoreFor(pv.ChatID), Release: func() { _ = pidx.Close() }}, nil
+		})
+		// 复制走持久化队列：断网/断电后可由面板或下次启动重放
+		if _, qerr := dstFS.AttachQueue(ctx); qerr != nil {
+			return qerr
 		}
-		if ierr := dstFS.Import(ctx, dst, part, source.Sha256, source.Mtime, true); ierr != nil {
-			return ierr
+		defer dstFS.Close()
+
+		if cerr := dstFS.Copy(ctx, srcVol, src, dst, *force); cerr != nil {
+			return cerr
+		}
+		part, ok, nerr := dstIdx.NodeByPath(ctx, dst)
+		if nerr != nil || !ok {
+			return nerr
 		}
 		ui.Outf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
-			volName, src, dstName, dst, part.DocumentID, part.MessageID, part.Size)
+			volName, src, dstName, dst, part.DocumentID, part.ID, part.Size)
 		return nil
 	})
 	if err != nil {

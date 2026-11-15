@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mytgfs/internal/fm"
+	"mytgfs/internal/push"
 	"mytgfs/internal/vfs"
 )
 
@@ -250,8 +251,11 @@ func (fmFunc) Search(context.Context, string, string, int) ([]fm.SearchHit, erro
 func (fmFunc) Info(context.Context, string) (fm.Entry, error)  { return fm.Entry{}, fs.ErrInvalid }
 func (fmFunc) Mkdir(context.Context, string) error             { return fs.ErrInvalid }
 func (fmFunc) Upload(context.Context, string, io.Reader) error { return fs.ErrInvalid }
-func (fmFunc) Remove(context.Context, string) error            { return fs.ErrInvalid }
-func (fmFunc) Move(context.Context, string, string) error      { return fs.ErrInvalid }
+func (fmFunc) AdoptUpload(context.Context, string, string, int64, string) error {
+	return fs.ErrInvalid
+}
+func (fmFunc) Remove(context.Context, string) error       { return fs.ErrInvalid }
+func (fmFunc) Move(context.Context, string, string) error { return fs.ErrInvalid }
 
 // TestSafeDownloadName 各平台非法字符替换成下划线，空名回落。
 func TestSafeDownloadName(t *testing.T) {
@@ -393,5 +397,38 @@ func TestDownloadFileOpenMethod(t *testing.T) {
 	handleAPIDownloadOpenFile(dl)(rec, httptest.NewRequest(http.MethodGet, "/api/downloads/open-file?name=a.txt", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET = %d", rec.Code)
+	}
+}
+
+// TestDownloadProgressUsesProgressTopic 逐块进度推 progress 主题。
+//
+// 输入：下载一个两倍分块大小的文件
+// 输出：progress 至少两次（每块一次）
+// 预期：进度不推 status；status 只在任务状态变化时用，
+//
+//	否则前端每 256KB 就会把每卷的整棵文件树重拉一遍
+func TestDownloadProgressUsesProgressTopic(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), downloadChunk*2)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ff := newFakeFiles()
+	ff.uploads["/big.bin"] = string(body)
+
+	dir := t.TempDir()
+	recorder := push.NewRecorder()
+	dl := newDownloadStore(
+		func() string { return dir },
+		func(string) (fm.Files, bool) { return openFiles{ff, src}, true },
+		recorder,
+	)
+	if _, err := dl.Start("demo", "/big.bin"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitDownloaded(t, dl, "big.bin")
+
+	if got := recorder.Count(push.TopicProgress); got < 2 {
+		t.Fatalf("progress 推送 %d 次，期望每个分块至少一次", got)
 	}
 }

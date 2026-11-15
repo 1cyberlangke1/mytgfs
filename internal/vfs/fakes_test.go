@@ -33,15 +33,17 @@ type fakeStore struct {
 	uploadSizes    []int64
 	copiedSrc      []int64
 	readErr        error
-	uploadErr      error
-	copyErr        error
-	refreshCall    int
-	refreshedRef   []byte
-	refreshErr     error
-	afterRefresh   func()
-	copyPart       *telegramstore.Part
-	readData       []byte
-	editErr        error
+	// readLens 记录每次 ReadRange 请求的字节数，用来验证读块大小
+	readLens     []int
+	uploadErr    error
+	copyErr      error
+	refreshCall  int
+	refreshedRef []byte
+	refreshErr   error
+	afterRefresh func()
+	copyPart     *telegramstore.Part
+	readData     []byte
+	editErr      error
 }
 
 func newFakeStore() *fakeStore {
@@ -107,6 +109,16 @@ func (f *fakeStore) Copy(_ context.Context, src *telegramstore.Part, _, _, capti
 	return f.msgs[id].part, nil
 }
 
+// CopyFrom 跨卷复制：测试里等价于 Copy（源与目标共用同一张假消息表）。
+//
+// 输入：ctx；ref 源刷新源（这里不用）；src 源记录；name/mime/caption
+// 输出：新消息 Part；refreshed 恒为 nil
+// 预期：只记录被复制的 document，用来断言没有重新上传字节
+func (f *fakeStore) CopyFrom(ctx context.Context, _ telegramstore.RefreshSource, src *telegramstore.Part, name, mime, caption string) (*telegramstore.Part, *telegramstore.Part, error) {
+	part, err := f.Copy(ctx, src, name, mime, caption)
+	return part, nil, err
+}
+
 func (f *fakeStore) Refresh(_ context.Context, messageID int) (*telegramstore.Part, error) {
 	f.refreshCall++
 	if f.refreshErr != nil {
@@ -128,6 +140,7 @@ func (f *fakeStore) ReadRange(_ context.Context, _ *telegramstore.Part, off int6
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
+	f.readLens = append(f.readLens, length)
 	if progress != nil {
 		progress(off + int64(length))
 	}

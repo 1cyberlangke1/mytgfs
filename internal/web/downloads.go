@@ -162,6 +162,18 @@ func (d *downloadStore) notify() {
 	d.events.Publish(push.TopicStatus)
 }
 
+// notifyProgress 推一次「只有字节数在涨」。
+//
+// 输入：无
+// 输出：无
+// 预期：每读写一块调用一次；前端只刷新任务条，不重新拉文件树
+func (d *downloadStore) notifyProgress() {
+	if d.events == nil {
+		return
+	}
+	d.events.Publish(push.TopicProgress)
+}
+
 // Start 建一个后台下载任务，立即返回。
 //
 // 输入：vol 卷名；p 卷内绝对路径
@@ -429,7 +441,7 @@ func (d *downloadStore) run(t *downloadTask) {
 			d.mu.Lock()
 			t.Done += int64(n)
 			d.mu.Unlock()
-			d.notify()
+			d.notifyProgress()
 		}
 		if errors.Is(rerr, io.EOF) {
 			break

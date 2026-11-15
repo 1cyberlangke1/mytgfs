@@ -35,11 +35,22 @@ const (
 )
 
 // 任务状态。
+//
+// 输入：无
+// 输出：持久化与接口里出现的状态字符串
+// 预期：面板按这些字符串渲染，改动会同时影响两边
 const (
-	stateQueued  = "queued"
-	stateRunning = "running"
-	stateDone    = "done"
-	stateFailed  = "failed"
+	StateQueued  = "queued"
+	StateRunning = "running"
+	StateDone    = "done"
+	StateFailed  = "failed"
+)
+
+const (
+	stateQueued  = StateQueued
+	stateRunning = StateRunning
+	stateDone    = StateDone
+	stateFailed  = StateFailed
 )
 
 // 运行参数。
