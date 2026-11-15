@@ -252,7 +252,12 @@ func TestDefaultValueMatchesRuntime(t *testing.T) {
 		t.Errorf("ReadChunk() = %d，期望 %d", got, int64(DefaultReadChunkMB)<<20)
 	}
 	// 每个可编辑键都必须有默认值，否则面板又会显示空白或 0
+	// 例外：代理地址的空值本身就是语义（空 = 不走代理），不是漏填
+	optionalBlank := map[string]bool{"telegram.proxy": true}
 	for _, s := range Schema() {
+		if optionalBlank[s.Key] {
+			continue
+		}
 		if strings.TrimSpace(DefaultValue(s.Key)) == "" {
 			t.Errorf("键 %q 缺少默认值", s.Key)
 		}

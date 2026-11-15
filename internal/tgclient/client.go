@@ -7,15 +7,60 @@ package tgclient
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/tg"
+	"golang.org/x/net/proxy"
 
 	"mytgfs/internal/i18n"
 )
+
+// defaultProxy 是进程级默认代理地址（host:port），空表示不启用。
+//
+// 输入：由装配根在读到配置后调用 SetDefaultProxy 设置
+// 输出：无
+// 预期：所有 tgclient.New 的调用点不必各自传代理；显式 Options.Proxy 优先
+var defaultProxy atomic.Value
+
+// SetDefaultProxy 设置进程级默认 SOCKS5 代理。
+//
+// 输入：addr 形如 127.0.0.1:7890；空串表示关闭
+// 输出：无
+// 预期：只需在入口调用一次，后续所有客户端连接都经该代理
+func SetDefaultProxy(addr string) { defaultProxy.Store(addr) }
+
+// resolverFor 按代理地址构造显式走 SOCKS5 的解析器。
+//
+// 输入：addr 代理地址；空返回 nil 解析器
+// 输出：dcs.Resolver 或 error
+// 预期：MTProto 的 TCP 由 SOCKS5 建立在代理侧，与网页版同一出口；
+//
+//	不设置时 gotd 用默认解析器直接拨 DC IP
+func resolverFor(addr string) (dcs.Resolver, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	d, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
+	cd, ok := d.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf(i18n.T("err.proxy_dialer"), addr)
+	}
+	return dcs.Plain(dcs.PlainOptions{
+		Dial: func(ctx context.Context, network, target string) (net.Conn, error) {
+			return cd.DialContext(ctx, network, target)
+		},
+	}), nil
+}
 
 // ConnState 是主连接状态，屏蔽 gotd 的具体枚举。
 type ConnState int
@@ -42,6 +87,10 @@ type Options struct {
 	// 输入：ctx 与导致判定的错误；输出：非 nil 时停止 Run
 	// 预期：nil 时默认停止 Run，避免拿着失效会话无限重连空转
 	OnAuthLost func(ctx context.Context, err error) error
+	// Proxy 是 SOCKS5 代理地址（host:port）；空则用进程默认值（telegram.proxy）。
+	// 输入：127.0.0.1:7890 之类；输出：无
+	// 预期：设置后 MTProto 的 TCP 由代理建立
+	Proxy string
 }
 
 // Client 包装 telegram.Client 与 floodwait 调度器。
@@ -80,6 +129,16 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		onAuthLost = func(_ context.Context, err error) error { return err }
 	}
 
+	// 代理地址：显式 Options.Proxy 优先，其次进程默认值（由装配根从配置注入）
+	addr := opts.Proxy
+	if addr == "" {
+		addr, _ = defaultProxy.Load().(string)
+	}
+	resolver, rerr := resolverFor(addr)
+	if rerr != nil {
+		slog.Warn(i18n.T("log.proxy_unavailable", rerr), "err", rerr)
+	}
+
 	client := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage:    sess,
 		Middlewares:       []telegram.Middleware{waiter},
@@ -87,6 +146,8 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		OnAuthLost:        onAuthLost,
 		// AllowCDN 让大文件走 CDN 边缘节点，而不是全部挤在主 DC
 		AllowCDN: true,
+		// Resolver 显式走 SOCKS5 时由代理建立 MTProto 的 TCP
+		Resolver: resolver,
 	})
 	return &Client{Client: client, waiter: waiter}
 }

@@ -61,7 +61,7 @@ function shortcutLabel(t: Translations, action: ShortcutAction): string {
 }
 
 // SECTION_ORDER 控制分组顺序：与 config.toml 的段落顺序一致。
-const SECTION_ORDER = ['mount', 'downloads', 'log'];
+const SECTION_ORDER = ['telegram', 'mount', 'downloads', 'log'];
 
 // PANEL_HIDDEN 是不在面板里出现的键：端口只能在启动参数或 config.toml 里改。
 const PANEL_HIDDEN = new Set(['web.port']);

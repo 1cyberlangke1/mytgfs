@@ -12,10 +12,12 @@ import (
 	"context"
 	"fmt"
 	"mytgfs/internal/auth"
+	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/sessionstore"
+	"mytgfs/internal/tgclient"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/version"
 	"os"
@@ -24,6 +26,9 @@ import (
 
 func main() {
 	logging.SetupFromConfig("config.toml")
+	if cfg, err := config.Load("config.toml"); err == nil {
+		tgclient.SetDefaultProxy(cfg.Telegram.Proxy)
+	}
 	os.Args = append([]string{os.Args[0]}, stripJSONFlag(os.Args[1:])...)
 	if len(os.Args) < 2 {
 		usage()

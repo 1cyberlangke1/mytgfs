@@ -41,6 +41,7 @@ var settings = map[string]setting{
 	"mount.read_chunk_mb":     {"mount", "read_chunk_mb", kindInt},
 	"mount.upload_parallel":   {"mount", "upload_parallel", kindInt},
 	"log.level":               {"log", "level", kindString},
+	"telegram.proxy":          {"telegram", "proxy", kindString},
 }
 
 // SettingInfo 描述一个可读写键给界面用。
@@ -64,6 +65,7 @@ var settingDefaults = map[string]string{
 	"mount.read_chunk_mb":     strconv.Itoa(DefaultReadChunkMB),
 	"mount.upload_parallel":   strconv.Itoa(DefaultUploadParallel),
 	"log.level":               DefaultLogLevel,
+	"telegram.proxy":          "",
 }
 
 // DefaultValue 返回一个键的缺省值。

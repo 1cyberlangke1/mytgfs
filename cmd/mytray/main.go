@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"os"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/logging"
+	"mytgfs/internal/tgclient"
 	"mytgfs/internal/trayapp"
 )
 
@@ -19,6 +21,9 @@ func main() {
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
 	cfg := fs.String("config", "config.toml", "config file")
 	_ = fs.Parse(os.Args[1:])
+	if c, err := config.Load(*cfg); err == nil {
+		tgclient.SetDefaultProxy(c.Telegram.Proxy)
+	}
 
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath:     *cfg,

@@ -239,12 +239,14 @@
   },
   "settingSections": {
     "web": "面板",
+    "telegram": "账号与连接",
     "mount": "传输与同步",
     "log": "日志",
     "downloads": "下载目录"
   },
   "settingLabels": {
     "web.port": "面板端口",
+    "telegram.proxy": "SOCKS5 代理（host:port，留空不走代理）",
     "mount.auto_sync": "自动同步",
     "mount.sync_seconds": "自动同步间隔（秒）",
     "mount.download_parallel": "下载连接数",

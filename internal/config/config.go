@@ -62,6 +62,10 @@ type Telegram struct {
 	ChannelID    int64  `toml:"channel_id"`
 	AccessHash   int64  `toml:"access_hash"`
 	ChatID       int64  `toml:"chat_id"`
+	// Proxy 是 SOCKS5 代理地址（host:port），空表示不启用。
+	// 输入：配置里的 telegram.proxy；输出：无
+	// 预期：设置为 127.0.0.1:7890 时 MTProto 的 TCP 由代理建立
+	Proxy string `toml:"proxy"`
 }
 
 // 运行时默认值：配置缺省、面板展示、实际执行必须共用同一份数字。

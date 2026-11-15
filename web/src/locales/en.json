@@ -239,12 +239,14 @@
   },
   "settingSections": {
     "web": "Panel",
+    "telegram": "Account & connection",
     "mount": "Transfer & sync",
     "log": "Logging",
     "downloads": "Download directory"
   },
   "settingLabels": {
     "web.port": "Panel port",
+    "telegram.proxy": "SOCKS5 proxy (host:port, empty = direct)",
     "mount.auto_sync": "Auto sync",
     "mount.sync_seconds": "Auto sync interval (s)",
     "mount.download_parallel": "Download connections",
