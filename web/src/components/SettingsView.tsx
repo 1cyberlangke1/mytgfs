@@ -6,6 +6,7 @@ import { Translations, formatNumber, interpolate } from '../utils/i18n';
 import {
   DEFAULT_SHORTCUTS,
   SHORTCUT_ACTIONS,
+  formatShortcut,
   shortcutConflict,
   shortcutFromEvent,
   type ShortcutAction,
@@ -28,6 +29,20 @@ interface SettingsViewProps {
 // shortcutLabel 取动作的中文/英文说明，与文件页的快捷键一致。
 function shortcutLabel(t: Translations, action: ShortcutAction): string {
   switch (action) {
+    case 'tabOverview':
+      return t.settings.shortcutTabOverview;
+    case 'tabFiles':
+      return t.settings.shortcutTabFiles;
+    case 'tabSettings':
+      return t.settings.shortcutTabSettings;
+    case 'tabDownloads':
+      return t.settings.shortcutTabDownloads;
+    case 'focusSearch':
+      return t.settings.shortcutFocusSearch;
+    case 'moveUp':
+      return t.files.shortcutMoveUp;
+    case 'moveDown':
+      return t.files.shortcutMoveDown;
     case 'clearOrUp':
       return t.files.shortcutClose;
     case 'open':
@@ -431,17 +446,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-zinc-700 dark:text-zinc-300">
-              {t.files.shortcutNavigate}
-            </span>
-            <kbd
-              dir="ltr"
-              className="px-2 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 font-mono text-[11px] text-zinc-800 dark:text-zinc-200"
-            >
-              ↑ / ↓
-            </kbd>
-          </div>
           {SHORTCUT_ACTIONS.map((action) => {
             const active = listening === action;
             return (
@@ -456,14 +460,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setListening(active ? null : action);
                       setShortcutError('');
                     }}
-                    aria-label={`${shortcutLabel(t, action)}: ${active ? t.settings.shortcutListening : shortcuts[action]}`}
+                    aria-label={`${shortcutLabel(t, action)}: ${active ? t.settings.shortcutListening : formatShortcut(shortcuts[action])}`}
                     className={`min-w-[96px] px-2.5 py-1 rounded-lg border font-mono text-[11px] text-center transition-colors cursor-pointer ${
                       active
                         ? 'border-[#007AFF] text-[#007AFF] bg-[#007AFF]/10 animate-pulse'
                         : 'border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 hover:border-zinc-400 dark:hover:border-zinc-600'
                     }`}
                   >
-                    {active ? t.settings.shortcutListening : shortcuts[action]}
+                    {active ? t.settings.shortcutListening : formatShortcut(shortcuts[action])}
                   </button>
                   <Button
                     type="button"

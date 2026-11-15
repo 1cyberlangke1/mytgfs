@@ -43,7 +43,12 @@ import {
   volumeDisplayName,
   sortFileItems,
 } from '../utils/fsLogic';
-import { matchesShortcut, SHORTCUT_ACTIONS, type ShortcutMap } from '../utils/shortcuts';
+import {
+  matchesShortcut,
+  matchesShortcutWithShift,
+  SHORTCUT_ACTIONS,
+  type ShortcutMap,
+} from '../utils/shortcuts';
 import {
   Translations,
   formatDateTime,
@@ -241,6 +246,10 @@ export const FilesView: React.FC<FilesViewProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
+  // 搜索框引用：页面级「聚焦搜索」快捷键用
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // 列表容器引用：Esc 离开搜索框后把焦点还给列表
+  const listRef = useRef<HTMLDivElement | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
@@ -406,9 +415,19 @@ export const FilesView: React.FC<FilesViewProps> = ({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !matchesShortcut(e, shortcuts.clearOrUp)) return;
-      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (document.querySelector('dialog[open]')) return;
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        // 搜索框里按取消键：清空搜索并把焦点还给列表，键盘操作可以接着走
+        if (searchInputRef.current && e.target === searchInputRef.current) {
+          e.preventDefault();
+          setSearchQuery('');
+          setCurrentPage(1);
+          searchInputRef.current.blur();
+          listRef.current?.focus();
+        }
+        return;
+      }
       if (selectedIds.size > 0 || cursorId) {
         setSelectedIds(new Set());
         setCursorId(null);
@@ -423,6 +442,42 @@ export const FilesView: React.FC<FilesViewProps> = ({
     // handleUpOneLevel 依赖 files/currentFolderId，直接把这些放进依赖里重新绑定
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIds, cursorId, currentFolderId, files, shortcuts]);
+
+  // 聚焦搜索：页面级快捷键，只在文件页挂载时生效。
+  //
+  // 输入：document keydown
+  // 输出：焦点移到搜索框并全选
+  // 预期：已经在输入框里时不抢；弹窗打开时不抢
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !matchesShortcut(e, shortcuts.focusSearch)) return;
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [shortcuts]);
+
+  // 键盘移动游标时把目标行滚进视口，避免光标跑到屏幕外
+  useEffect(() => {
+    if (!cursorId) return;
+    const el = document.querySelector(`[data-file-id="${CSS.escape(cursorId)}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [cursorId]);
+
+  // 进入文件页时把焦点交给列表：纯键盘用户切过来就能直接按方向键/F2，
+  // 不必先 Tab 一大圈。输入控件里或弹窗打开时不抢焦点。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const active = document.activeElement as HTMLElement | null;
+    const outsideMain = !active || active === document.body || !active.closest('#main');
+    if (outsideMain && !document.querySelector('dialog[open]')) el.focus({ preventScroll: true });
+  }, []);
 
   const toggleSelectOne = (id: string) => {
     setSelectedIds((prev) => {
@@ -503,8 +558,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   //
   // 输入：键盘事件；焦点在列表容器上
   // 输出：无（改选中集/游标/打开弹窗）
-  // 预期：具体键位来自设置页的 shortcuts；上下移动固定用方向键；
-  //       返回上级由全局 keydown 统一处理
+  // 预期：具体键位来自设置页的 shortcuts；返回上级由全局 keydown 统一处理
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     const items = paginatedItems;
     if (items.length === 0) return;
@@ -513,9 +567,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
       setSelectedIds(new Set(items.map((i) => i.id)));
       return;
     }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (
+      matchesShortcutWithShift(e, shortcuts.moveDown) ||
+      matchesShortcutWithShift(e, shortcuts.moveUp)
+    ) {
       e.preventDefault();
-      const step = e.key === 'ArrowDown' ? 1 : -1;
+      const down = matchesShortcutWithShift(e, shortcuts.moveDown);
+      const step = down ? 1 : -1;
       const at = items.findIndex((i) => i.id === cursorId);
       const next = at < 0 ? (step > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, at + step));
       const target = items[next];
@@ -544,7 +602,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
     }
     if (matchesShortcut(e, shortcuts.delete)) {
       e.preventDefault();
-      setDeleteConfirmIds([current.id]);
+      // 有勾选就删勾选的，没有勾选删游标所在项
+      setDeleteConfirmIds(selectedIds.size > 0 ? [...selectedIds] : [current.id]);
     }
   };
 
@@ -605,12 +664,10 @@ export const FilesView: React.FC<FilesViewProps> = ({
   //
   // 输入：shortcuts 映射
   // 输出：空格分隔的键位串
-  // 预期：Ctrl 写成 ARIA 的 Control；方向键固定参与导航
-  const ariaKeyShortcuts = [
-    'ArrowUp',
-    'ArrowDown',
-    ...SHORTCUT_ACTIONS.map((action) => shortcuts[action].replace(/^Ctrl\+/, 'Control+')),
-  ].join(' ');
+  // 预期：Ctrl 写成 ARIA 的 Control；方向键也在可配置映射里
+  const ariaKeyShortcuts = SHORTCUT_ACTIONS.map((action) =>
+    shortcuts[action].replace(/^Ctrl\+/, 'Control+')
+  ).join(' ');
 
   return (
     <div
@@ -826,6 +883,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <Input
                 id="recursive-file-search"
+                ref={searchInputRef}
                 type="search"
                 value={searchQuery}
                 onChange={(e) => {
@@ -1053,6 +1111,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
         ) : viewMode === 'grid' ? (
           /* GALLERY GRID VIEW */
           <motion.div
+            ref={listRef}
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
@@ -1069,6 +1128,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               return (
                 <div
                   key={item.id}
+                  data-file-id={item.id}
                   draggable
                   onDragStart={(e) => handleItemDragStart(e, item)}
                   onDragOver={item.isDir ? (e) => handleFolderDragOver(e, item.id) : undefined}
@@ -1078,7 +1138,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
                   className={`rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/40 dark:bg-zinc-900/40 overflow-hidden flex flex-col justify-between transition-all ${
                     isSelected ? 'ring-2 ring-blue-500' : ''
                   } ${item.isDir && dropTargetId === item.id ? 'drop-target' : ''} ${
-                    cursorId === item.id ? 'ring-1 ring-blue-400/50' : ''
+                    cursorId === item.id
+                      ? 'ring-2 ring-[#007AFF]/70 dark:ring-[#0A84FF]/70'
+                      : ''
                   }`}
                 >
                   <div>
@@ -1173,6 +1235,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
         ) : (
           /* LIST VIEW */
           <motion.div
+            ref={listRef}
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
@@ -1211,6 +1274,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 return (
                   <div
                     key={item.id}
+                    data-file-id={item.id}
                     draggable
                     onDragStart={(e) => handleItemDragStart(e, item)}
                     onDragOver={item.isDir ? (e) => handleFolderDragOver(e, item.id) : undefined}
@@ -1222,7 +1286,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
                         ? 'bg-blue-500/[0.06] dark:bg-blue-500/[0.09]'
                         : 'hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]'
                     } ${item.isDir && dropTargetId === item.id ? 'drop-target' : ''} ${
-                      cursorId === item.id ? 'ring-1 ring-inset ring-blue-400/50' : ''
+                      cursorId === item.id
+                        ? 'ring-2 ring-inset ring-[#007AFF]/70 dark:ring-[#0A84FF]/70'
+                        : ''
                     } ${paginatedItems.length > 120 ? 'row-cv' : ''}`}
                   >
                     {/* Name & Checkbox */}
@@ -1599,6 +1665,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
               <Button
                 type="button"
                 variant="outline"
+                autoFocus
                 onClick={() => setDeleteConfirmIds(null)}
               >
                 {t.files.cancel}

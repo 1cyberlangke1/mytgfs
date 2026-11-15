@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SHORTCUTS,
+  formatShortcut,
   loadShortcuts,
   matchesShortcut,
+  matchesShortcutWithShift,
   sanitizeShortcuts,
   saveShortcuts,
   shortcutConflict,
@@ -50,6 +52,23 @@ describe('matchesShortcut', () => {
   it('大小写与空键位不命中', () => {
     expect(matchesShortcut(ev('f'), 'F')).toBe(true);
     expect(matchesShortcut(ev('F2'), '')).toBe(false);
+  });
+});
+
+describe('matchesShortcutWithShift', () => {
+  it('多按 Shift 也算命中，除非 spec 自己带 Shift', () => {
+    expect(matchesShortcutWithShift(ev('ArrowDown', { shiftKey: true }), 'ArrowDown')).toBe(true);
+    expect(matchesShortcutWithShift(ev('ArrowDown'), 'ArrowDown')).toBe(true);
+    expect(matchesShortcutWithShift(ev('j', { shiftKey: true }), 'Shift+J')).toBe(true);
+    expect(matchesShortcutWithShift(ev('j'), 'Shift+J')).toBe(false);
+  });
+});
+
+describe('formatShortcut', () => {
+  it('方向键显示成箭头，其余原样', () => {
+    expect(formatShortcut('ArrowUp')).toBe('↑');
+    expect(formatShortcut('ArrowDown')).toBe('↓');
+    expect(formatShortcut('Ctrl+A')).toBe('Ctrl+A');
   });
 });
 

@@ -13,6 +13,17 @@
     color-scheme: dark;
   }
 
+  /* 纯键盘操作时焦点必须看得见：统一焦点环，鼠标点击不出现 */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid #007aff;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  .dark :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: #0a84ff;
+  }
+
   /* Completely hide ugly native OS/browser scrollbars while keeping full scroll functionality */
   *,
   *::before,
@@ -106,17 +117,14 @@ textarea:user-invalid {
   justify-content: center;
 }
 
-.modal-shell::backdrop {
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-}
-
 /* 滚动手势在内层消化，不要串到背景页 */
 .modal-shell:modal {
   overscroll-behavior: contain;
 }
 
 .modal-shell::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
   overflow: hidden;
   overscroll-behavior: contain;
 }

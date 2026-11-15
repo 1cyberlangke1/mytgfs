@@ -5,12 +5,32 @@
 // 预期：键位串存 localStorage；缺失/损坏时回落到默认值，不影响列表可用
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-export type ShortcutAction = 'rename' | 'delete' | 'selectAll' | 'toggleSelect' | 'open' | 'clearOrUp';
+export type ShortcutAction =
+  | 'tabOverview'
+  | 'tabFiles'
+  | 'tabSettings'
+  | 'tabDownloads'
+  | 'focusSearch'
+  | 'moveUp'
+  | 'moveDown'
+  | 'rename'
+  | 'delete'
+  | 'selectAll'
+  | 'toggleSelect'
+  | 'open'
+  | 'clearOrUp';
 
 export type ShortcutMap = Record<ShortcutAction, string>;
 
-// SHORTCUT_ACTIONS 是设置页展示顺序
+// SHORTCUT_ACTIONS 是设置页展示顺序：页面级在前，文件操作在后
 export const SHORTCUT_ACTIONS: ShortcutAction[] = [
+  'tabOverview',
+  'tabFiles',
+  'tabSettings',
+  'tabDownloads',
+  'focusSearch',
+  'moveUp',
+  'moveDown',
   'clearOrUp',
   'open',
   'toggleSelect',
@@ -20,6 +40,13 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
 ];
 
 export const DEFAULT_SHORTCUTS: ShortcutMap = {
+  tabOverview: 'Alt+1',
+  tabFiles: 'Alt+2',
+  tabSettings: 'Alt+3',
+  tabDownloads: 'Alt+4',
+  focusSearch: '/',
+  moveUp: 'ArrowUp',
+  moveDown: 'ArrowDown',
   rename: 'F2',
   delete: 'Delete',
   selectAll: 'Ctrl+A',
@@ -75,6 +102,32 @@ export function matchesShortcut(e: KeyLike, spec: string): boolean {
   if (e.altKey !== mods.has('Alt')) return false;
   if (e.shiftKey !== mods.has('Shift')) return false;
   return normalizeKey(e.key) === key;
+}
+
+// matchesShortcutWithShift 允许 Shift 作为额外修饰键。
+//
+// 输入：键盘事件；spec 形如 "ArrowDown"
+// 输出：命中为 true
+// 预期：spec 没写 Shift 时，多按 Shift 也算命中（用于 Shift+方向键扩展选择）；
+//       spec 自己带 Shift 时按精确匹配
+export function matchesShortcutWithShift(e: KeyLike, spec: string): boolean {
+  if (matchesShortcut(e, spec)) return true;
+  if (!e.shiftKey) return false;
+  if (spec.split('+').includes('Shift')) return false;
+  return matchesShortcut({ ...e, shiftKey: false }, spec);
+}
+
+// formatShortcut 把键位转成显示用的短写法。
+//
+// 输入：spec 如 "ArrowUp"、"Ctrl+A"
+// 输出：方向键显示成箭头，其余原样
+// 预期：只影响展示，不参与匹配
+export function formatShortcut(spec: string): string {
+  return spec
+    .replace(/\bArrowUp\b/g, '↑')
+    .replace(/\bArrowDown\b/g, '↓')
+    .replace(/\bArrowLeft\b/g, '←')
+    .replace(/\bArrowRight\b/g, '→');
 }
 
 // shortcutConflict 找与 spec 重复的其他动作。

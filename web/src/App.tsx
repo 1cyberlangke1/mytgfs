@@ -38,7 +38,7 @@ import {
   validateAndPlanUpload,
   volumeDisplayName,
 } from './utils/fsLogic';
-import { loadShortcuts, saveShortcuts, type ShortcutMap } from './utils/shortcuts';
+import { loadShortcuts, matchesShortcut, saveShortcuts, type ShortcutMap } from './utils/shortcuts';
 import { runViewTransition } from './utils/viewTransition';
 import { subscribePush } from './events';
 import {
@@ -255,6 +255,34 @@ export default function App() {
     saveShortcuts(next);
     setShortcuts(next);
   };
+
+  // 页面级快捷键：Alt+1..4 切页签。
+  //
+  // 输入：document keydown
+  // 输出：切换 activeTab
+  // 预期：输入框内、已打开弹窗时不抢；命中后阻止默认行为
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (document.querySelector('dialog[open]')) return;
+      const tabs: { id: NavTab; spec: string }[] = [
+        { id: 'overview', spec: shortcuts.tabOverview },
+        { id: 'files', spec: shortcuts.tabFiles },
+        { id: 'settings', spec: shortcuts.tabSettings },
+        { id: 'downloads', spec: shortcuts.tabDownloads },
+      ];
+      for (const item of tabs) {
+        if (!matchesShortcut(e, item.spec)) continue;
+        e.preventDefault();
+        if (item.id !== activeTab) runViewTransition(() => setActiveTab(item.id));
+        return;
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [shortcuts, activeTab]);
 
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -1261,6 +1289,13 @@ export default function App() {
       dir={localeMeta.dir}
       className="min-h-screen flex flex-col bg-[#F5F5F7] dark:bg-[#090A0F] text-zinc-900 dark:text-zinc-100"
     >
+      {/* 纯键盘用户按 Tab 第一下就跳到正文，跳过整排导航 */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:start-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-lg focus:bg-white dark:focus:bg-zinc-900 focus:text-xs focus:font-medium focus:shadow-lg"
+      >
+        {t.header.skipToContent}
+      </a>
       {/* Global Hidden File Input for Quick Upload */}
       <input
         ref={globalUploadRef}
@@ -1615,7 +1650,11 @@ export default function App() {
         <WindowCustomScrollbar />
 
         {/* Main Content Viewport: Persistent, velocity-preserving iOS spring (zero unmount flash, 100% mid-flight interruptible) */}
-        <main className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full overflow-x-hidden">
+        <main
+          id="main"
+          tabIndex={-1}
+          className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full overflow-x-hidden outline-none"
+        >
           {/* 常驻错误横幅：后台加载失败与实时连接断开必须一直可见，直到恢复或手动关闭 */}
           <AnimatePresence initial={false}>
             {problemList.length > 0 && (
