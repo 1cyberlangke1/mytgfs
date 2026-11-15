@@ -69,7 +69,9 @@ const (
 	// DefaultSyncSeconds 是自动增量同步的默认间隔秒数。
 	DefaultSyncSeconds = 15
 	// DefaultDownloadParallel 是下载并发连接数的默认值。
-	DefaultDownloadParallel = 4
+	// 单条 MTProto 连接吃不满带宽：第三方客户端对大文件会开到 8 条以上，
+	// 上传分片与下载共用这个池子，8 是吞吐与占用的平衡点
+	DefaultDownloadParallel = 8
 	// DefaultReadChunkMB 是每次向上游取数的分片大小默认值（MB）。
 	DefaultReadChunkMB = 8
 	// DefaultUploadParallel 是上传并发分片数的默认值。
@@ -137,15 +139,15 @@ func (c Mount) ReadChunk() int64 {
 // DownloadConnections 返回下载连接数。
 //
 // 输入：无
-// 输出：连接数，默认 DefaultDownloadParallel，夹在 1..8
+// 输出：连接数，默认 DefaultDownloadParallel，夹在 1..16
 // 预期：单条 MTProto 连接吃不满带宽，多条才有效；过多会互相挤占
 func (m Mount) DownloadConnections() int {
 	n := m.DownloadParallel
 	if n <= 0 {
 		return DefaultDownloadParallel
 	}
-	if n > 8 {
-		return 8
+	if n > 16 {
+		return 16
 	}
 	return n
 }

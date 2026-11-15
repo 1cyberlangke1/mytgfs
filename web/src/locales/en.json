@@ -232,7 +232,7 @@
     "web.port": "0 uses default 8720; falls back to a random port if busy",
     "mount.auto_sync": "When off, channel changes are not pulled; local actions still persist immediately",
     "mount.sync_seconds": "0 means 15s default, negative disables auto sync",
-    "mount.download_parallel": "One MTProto connection cannot saturate; about 4 is best",
+    "mount.download_parallel": "One MTProto connection cannot saturate the link; uploads and downloads share the pool, around 8 works best",
     "mount.upload_parallel": "Lower it on slow links to avoid FLOOD_WAIT",
     "mount.read_chunk_mb": "Larger means fewer requests but worse on slow links",
     "log.level": "debug logs every remote fetch; enable only while diagnosing",

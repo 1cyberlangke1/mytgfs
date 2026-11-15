@@ -166,8 +166,10 @@ func TestUploadResumableRetriesWhenStateInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("sendMedia 持续失败时应返回错误")
 	}
-	if len(api.savedParts) != 4 {
-		t.Fatalf("应重传全部分片，实际发送 %v", api.savedParts)
+	// 首次尝试 + 状态失效后的整份重传，各发 total 片
+	total := partsOf(size, uploadPartSizeFor(size))
+	if len(api.savedParts) != total*2 {
+		t.Fatalf("应重传全部分片共 %d 次，实际发送 %v", total*2, api.savedParts)
 	}
 }
 

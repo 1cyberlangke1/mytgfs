@@ -491,27 +491,20 @@ func runWeb(args []string) {
 				logging.Warn("log.volume_warn", err)
 				return
 			}
-			want := make(map[string]bool, len(cur.Volumes))
-			for _, v := range cur.Volumes {
-				if v.Enabled {
-					want[strings.ToLower(v.Name)] = true
-				}
+			mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
+			for _, v := range mount {
+				mountRuntime(v.Name, v.ChatID)
 			}
-			for _, v := range cur.Volumes {
-				if v.Enabled {
-					if _, ok := reg.Get(v.Name); !ok {
-						mountRuntime(v.Name, v.ChatID)
-					}
+			for _, name := range unmount {
+				wv, ok := reg.Get(name)
+				if !ok {
+					continue
 				}
-			}
-			for _, wv := range reg.Snapshot() {
-				if !want[strings.ToLower(wv.vf.Volume.Name)] {
-					if wv.stop != nil {
-						wv.stop() // 先停自动同步，避免并发使用已关闭的索引
-					}
-					_ = wv.vf.Close() // 关队列与索引
-					reg.Delete(wv.vf.Volume.Name)
+				if wv.stop != nil {
+					wv.stop() // 先停自动同步，避免并发使用已关闭的索引
 				}
+				_ = wv.vf.Close() // 关队列与索引
+				reg.Delete(name)
 			}
 			// 全部对齐完再推：面板一次刷新就能看到最终卷列表
 			pushHub.Publish(push.TopicStatus)

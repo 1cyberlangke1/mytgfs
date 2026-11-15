@@ -79,7 +79,7 @@ func DefaultValue(name string) string { return settingDefaults[name] }
 var settingLimits = map[string]struct{ min, max int }{
 	"web.port":                {0, 65535},
 	"mount.sync_seconds":      {-1, 86400},
-	"mount.download_parallel": {0, 8},
+	"mount.download_parallel": {0, 16},
 	"mount.upload_parallel":   {0, 16},
 	"mount.read_chunk_mb":     {0, 64},
 }

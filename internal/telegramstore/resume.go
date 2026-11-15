@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	// uploadMinPartSize 是协议允许的最小小片（也是 gotd 的默认值）。
-	uploadMinPartSize = 128 * 1024
 	// uploadMaxPartSize 是协议允许的最大片大小。
+	// 512KB × 4000 片恰好覆盖 2GB 上限，任何尺寸都不需要更小的片：
+	// 小片只会让中等文件多发几倍的 RPC（第三方客户端同样固定 512KB）。
 	uploadMaxPartSize = 512 * 1024
 	// uploadMaxParts 是 upload.saveFilePart 的分片数上限（0..3999）。
 	uploadMaxParts = 4000
@@ -166,17 +166,13 @@ func (s *Store) newResume(partSize, total int) (*UploadResume, map[int]bool) {
 	return &UploadResume{FileID: id, PartSize: partSize, TotalParts: total}, make(map[int]bool)
 }
 
-// uploadPartSizeFor 按文件大小推导分片大小。
+// uploadPartSizeFor 返回上传分片大小。
 //
-// 输入：size 文件字节数
-// 输出：128KB..512KB 之间的值，且总分片数不超过 4000
-// 预期：从协议允许的最小片起步，装不下再翻倍；结果只由 size 决定，续传能复现
-func uploadPartSizeFor(size int64) int {
-	part := uploadMinPartSize
-	for part < uploadMaxPartSize && partsOf(size, part) > uploadMaxParts {
-		part *= 2
-	}
-	return part
+// 输入：size 文件字节数（保留参数以匹配断点记录的推导语义）
+// 输出：恒为协议上限 512KB；512KB × 4000 片恰好覆盖 2GB，任何尺寸都不需要更小的片
+// 预期：结果只与协议常量有关，续传按 PartSize 记录校验，旧断点分片不符时自动整份重传
+func uploadPartSizeFor(int64) int {
+	return uploadMaxPartSize
 }
 
 // partsOf 计算分片数。

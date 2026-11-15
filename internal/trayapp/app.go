@@ -710,24 +710,17 @@ func Run(opts Options) error {
 			logging.Warn("log.volume_warn", err)
 			return
 		}
-		want := make(map[string]bool, len(cur.Volumes))
-		for _, v := range cur.Volumes {
-			if v.Enabled {
-				want[strings.ToLower(v.Name)] = true
-			}
+		mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
+		for _, v := range mount {
+			mountOne(v.Name, v.ChatID)
 		}
-		for _, v := range cur.Volumes {
-			if v.Enabled {
-				if _, mounted := reg.Get(v.Name); !mounted {
-					mountOne(v.Name, v.ChatID)
-				}
+		for _, name := range unmount {
+			tv, ok := reg.Get(name)
+			if !ok {
+				continue
 			}
-		}
-		for _, tv := range reg.Snapshot() {
-			if !want[strings.ToLower(tv.name)] {
-				tv.cancel() // 生命周期协程负责关索引、摘注册表、close(done)
-				<-tv.done
-			}
+			tv.cancel() // 生命周期协程负责关索引、摘注册表、close(done)
+			<-tv.done
 		}
 		pushHub.Publish(push.TopicStatus)
 	}
