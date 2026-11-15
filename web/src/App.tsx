@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FolderTree,
-  Globe,
   HardDriveDownload,
   LayoutDashboard,
   Moon,
@@ -9,7 +8,7 @@ import {
   Sliders,
   Sun,
 } from 'lucide-react';
-import { LayoutGroup, motion } from 'motion/react';
+import { motion } from 'motion/react';
 import {
   AppSettings,
   ConnectionStatus,
@@ -25,7 +24,6 @@ import {
 } from './types';
 import {
   computeOverviewSummary,
-  formatBytes,
   inferFileCategory,
   pickActiveVolume,
   validateAndPlanUpload,
@@ -39,13 +37,11 @@ import {
   scrollActiveByPage,
   scrollActiveToEdge,
 } from './utils/keynav';
-import { runViewTransition } from './utils/viewTransition';
 import { subscribePush } from './events';
 import {
   DICTIONARY,
   LOCALE_OPTIONS,
   Translations,
-  formatNumber,
   getLocaleMeta,
   i18next,
   interpolate,
@@ -91,16 +87,12 @@ import { DownloadsView } from './components/DownloadsView';
 import { ProblemBanner } from './components/ProblemBanner';
 import { ToastStack, type ToastMessage } from './components/ToastStack';
 import { FilePreviewModal } from './components/FilePreviewModal';
-import { BrandEmblemSvg } from './components/VisualAssets';
 import {
-  Button,
-  IOS_BOUNCE_SPRING,
-  IOS_SPRING,
-  Select,
   useInterruptibleViewSpring,
 } from './components/ui';
 import { WindowCustomScrollbar } from './components/CustomScrollbar';
 import { AppSidebar } from './components/AppSidebar';
+import { PhoneTabBar, PhoneTopBar } from './components/PhoneChrome';
 import { makeVideoPoster } from './utils/poster';
 
 const STORAGE_KEYS = {
@@ -1489,63 +1481,19 @@ export default function App() {
         aria-label={t.header.quickUpload}
       />
 
-      {/* Phone Top Status Bar (Only visible on <768px phones; Tablet & Desktop have NO top bar) */}
-      <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 py-2">
-        <div className="flex items-center justify-between gap-2">
-          <motion.a
-            href="#overview"
-            whileTap={{ scale: 0.92 }}
-            transition={IOS_BOUNCE_SPRING}
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('overview');
-            }}
-            className="flex items-center gap-2 min-w-0 shrink-0"
-          >
-            <BrandEmblemSvg className="w-7 h-7 shrink-0" />
-            <div className="min-w-0">
-              <div dir="ltr" className="text-sm font-bold tracking-tight text-zinc-950 dark:text-white leading-tight">
-                {t.appName}
-              </div>
-              <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate leading-tight">
-                {formatBytes(summary.totalBytes, 1, locale)}
-              </div>
-            </div>
-          </motion.a>
+      <PhoneTopBar
+        t={t}
+        locale={locale}
+        setLocale={setLocale}
+        totalBytes={summary.totalBytes}
+        setActiveTab={setActiveTab}
+        themeNext={themeNext}
+        themeNextLabel={themeNextLabel}
+        themeIconClass={themeIconClass}
+        ThemeNextIcon={ThemeNextIcon}
+        setTheme={setTheme}
+      />
 
-          <div className="flex items-center gap-1.5 min-w-0">
-            <div className="relative flex items-center">
-              <Globe className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 absolute start-2.5 pointer-events-none" />
-              <Select
-                aria-label={t.sidebar.languageLabel}
-                value={locale}
-                onChange={(e) => setLocale(e.target.value as Locale)}
-                className="h-8 ps-7 pe-2 text-xs max-w-[116px] truncate"
-              >
-                {LOCALE_OPTIONS.map((opt) => (
-                  <option
-                    key={opt.id}
-                    value={opt.id}
-                    className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-                  >
-                    {opt.label}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => setTheme(themeNext)}
-              aria-label={themeNextLabel}
-            >
-              <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
-            </Button>
-          </div>
-        </div>
-      </header>
 
       {/* Main Workspace Canvas: Collapsible iOS/iPadOS/macOS Spring Sidebar (md+) + Main Content Viewport */}
       <div className="flex-1 flex min-w-0">
@@ -1690,60 +1638,16 @@ export default function App() {
         </main>
       </div>
 
-      {/* Phone Native iOS Frosted Bottom Tab Bar (<768px) */}
-      <LayoutGroup id="phone-bottom-dock">
-        <nav
-          aria-label={t.a11y.primaryNav}
-          className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white/88 dark:bg-[#0C0E14]/92 backdrop-blur-2xl px-2 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
-        >
-          <div className="flex gap-1 max-w-md mx-auto">
-            {navItems.map((item) => {
-              const isActive = activeTab === item.id;
-              const badgeCount =
-                item.id === 'files'
-                  ? summary.totalFiles
-                  : item.id === 'downloads'
-                  ? downloads.length
-                  : null;
-              return (
-                <motion.a
-                  key={item.id}
-                  href={`#${item.id}`}
-                  whileTap={{ scale: 0.86 }}
-                  transition={IOS_BOUNCE_SPRING}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    runViewTransition(() => setActiveTab(item.id));
-                  }}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${
-                    isActive
-                      ? 'text-[#007AFF] dark:text-[#0A84FF] font-semibold'
-                      : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
-                  }`}
-                >
-                  {isActive && (
-                    <motion.span
-                      layoutId="phone-bottom-tab-pill"
-                      transition={IOS_SPRING}
-                      className="absolute inset-0 rounded-xl bg-[#007AFF]/12 dark:bg-[#0A84FF]/18 -z-10"
-                    />
-                  )}
-                  <div className="relative flex items-center justify-center">
-                    {item.icon}
-                    {badgeCount !== null && badgeCount > 0 && (
-                      <span className="absolute -top-1.5 -end-3 min-w-[15px] h-[15px] px-1 rounded-full bg-[#007AFF] text-white text-[9px] font-mono font-bold inline-flex items-center justify-center leading-none">
-                        {formatNumber(badgeCount, locale)}
-                      </span>
-                    )}
-                  </div>
-                  <span className="mt-1 truncate max-w-full leading-none">{item.label}</span>
-                </motion.a>
-              );
-            })}
-          </div>
-        </nav>
-      </LayoutGroup>
+      <PhoneTabBar
+        t={t}
+        locale={locale}
+        navItems={navItems}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        totalFiles={summary.totalFiles}
+        downloadsCount={downloads.length}
+      />
+
 
       {/* File Details & Media Preview Modal */}
       <FilePreviewModal
