@@ -349,7 +349,7 @@ func Run(opts Options) error {
 	onRuntimeReady = func() { pushHub.Publish(push.TopicStatus) }
 
 	// 装配根复用：开卷与写频道头像都走同一套配置/会话
-	appRoot := app.New(cfg, app.Options{Push: pushHub})
+	appRoot := app.New(cfg, app.Options{Push: pushHub, ConfigPath: cfgPath})
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
@@ -436,7 +436,7 @@ func Run(opts Options) error {
 			},
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
 				// 重名在建频道之前挡掉，避免建出孤儿频道
-				if config.VolumeNameExists(cfgPath, name) {
+				if _, _, exists := appRoot.Volume(name); exists {
 					return nil, config.ErrVolumeExists
 				}
 				bn := getBotUsername()
@@ -469,7 +469,9 @@ func Run(opts Options) error {
 					ChatID:  res.ChannelID,
 					Enabled: true,
 				}
-				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
+				if aerr := appRoot.MutateConfig(func(p string) error {
+					return config.AppendVolume(p, vol)
+				}); aerr != nil {
 					return nil, aerr
 				}
 				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
@@ -487,13 +489,9 @@ func Run(opts Options) error {
 			},
 			// 删卷：删 Telegram 频道 → 移出配置 → 删本地索引
 			DeleteVolume: func(ctx context.Context, name string) error {
-				cur, cerr := config.Load(cfgPath)
-				if cerr != nil {
-					return cerr
-				}
 				var target config.Volume
 				found := false
-				for _, v := range cur.Volumes {
+				for _, v := range appRoot.Config().Volumes {
 					if strings.EqualFold(v.Name, name) {
 						target, found = v, true
 						break
@@ -515,30 +513,28 @@ func Run(opts Options) error {
 				if rerr != nil {
 					return rerr
 				}
-				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
+				if rerr := appRoot.MutateConfig(func(p string) error {
+					return config.RemoveVolume(p, name)
+				}); rerr != nil {
 					return rerr
 				}
-				// 两份账合一：配置文件已删，运行时列表必须同步摘除，
-				// 否则面板列卷（读列表）与文件操作（读配置）各说各话
-				tv, mounted := reg.TakeFunc(func(n string) bool { return strings.EqualFold(n, name) })
-				if mounted {
-					tv.cancel() // 停自动同步
-					<-tv.done   // 等索引与连接池关闭完成
-				}
+				// 运行时对齐配置：停同步、关索引、摘注册表，一次完成（内部会等卸载完再推送）
+				reconcileVolumes()
 				for _, suffix := range []string{"", "-wal", "-shm"} {
 					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
 				}
-				rebuildMenu()
-				pushHub.Publish(push.TopicStatus)
 				return nil
 			},
 			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
-				if config.VolumeNameExists(cfgPath, name) {
+				if _, _, exists := appRoot.Volume(name); exists {
 					return nil, config.ErrVolumeExists
 				}
-				if config.VolumeChatExists(cfgPath, volume.NormalizeChatID(chatID)) {
-					return nil, config.ErrChannelAttached
+				norm := volume.NormalizeChatID(chatID)
+				for _, v := range appRoot.Config().Volumes {
+					if v.ChatID == norm {
+						return nil, config.ErrChannelAttached
+					}
 				}
 				res, aerr := volume.Attach(ctx, client.API(), volume.AttachRequest{Name: name, ChatID: chatID})
 				if aerr != nil {
@@ -549,10 +545,12 @@ func Run(opts Options) error {
 					ChatID:  res.ChannelID,
 					Enabled: true,
 				}
-				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
+				// attach 唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
+				if werr := appRoot.MutateConfig(func(p string) error {
+					return config.AppendVolume(p, vol)
+				}); werr != nil {
 					return nil, werr
 				}
-				// attach 完立即挂载并推送：与建卷同一条对齐路径
 				reconcileVolumes()
 				return map[string]any{
 					"name":       res.Name,
@@ -701,16 +699,11 @@ func Run(opts Options) error {
 		})
 	}
 
-	// reconcileVolumes 把运行时卷表对齐到配置文件：
+	// reconcileVolumes 把运行时卷表对齐到配置：
 	// 配置里启用而未挂载的 → mountOne 挂载；挂载了而配置里没有/停用的 → 停掉。
 	// 建卷/attach/删卷等一切配置变更都以调用它收尾，两端耦合，用户不需要重启
 	reconcileVolumes = func() {
-		cur, err := config.Load(cfgPath)
-		if err != nil {
-			logging.Warn("log.volume_warn", err)
-			return
-		}
-		mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
+		mount, unmount := app.VolumeSync(appRoot.Config().Volumes, reg.Names())
 		for _, v := range mount {
 			mountOne(v.Name, v.ChatID)
 		}

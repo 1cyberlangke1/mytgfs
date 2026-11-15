@@ -452,7 +452,7 @@ func runWeb(args []string) {
 			return perr
 		}
 		defer closePool()
-		appRoot := app.New(cfg, app.Options{Push: pushHub})
+		appRoot := app.New(cfg, app.Options{Push: pushHub, ConfigPath: cfgPath})
 		reg := app.NewVolumeRegistry[*webVolume]()
 		vsync, vstop := context.WithCancel(ctx)
 		var vwg sync.WaitGroup
@@ -482,16 +482,11 @@ func runWeb(args []string) {
 			reg.Put(name, wv)
 		}
 
-		// reconcile 让运行时卷表与配置文件强制一致：
+		// reconcile 让运行时卷表与配置强制一致：
 		// 配置里启用而未挂载的 → 挂载；挂载了而配置里没有/停用的 → 停掉并关闭。
 		// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
 		reconcile := func() {
-			cur, err := config.Load(cfgPath)
-			if err != nil {
-				logging.Warn("log.volume_warn", err)
-				return
-			}
-			mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
+			mount, unmount := app.VolumeSync(appRoot.Config().Volumes, reg.Names())
 			for _, v := range mount {
 				mountRuntime(v.Name, v.ChatID)
 			}
@@ -535,7 +530,7 @@ func runWeb(args []string) {
 			// 建卷需要 user 会话：临时开一条，建完就关
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
 				// 重名在建频道之前挡掉，避免建出孤儿频道
-				if config.VolumeNameExists(cfgPath, name) {
+				if _, _, exists := appRoot.Volume(name); exists {
 					return nil, config.ErrVolumeExists
 				}
 				bn := readBotUsername(ctx, cfg, cfg.APIHash(), key)
@@ -563,10 +558,12 @@ func runWeb(args []string) {
 					ChatID:  res.ChannelID,
 					Enabled: true,
 				}
-				if aerr := config.AppendVolume(cfgPath, vol); aerr != nil {
+				// 建卷唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
+				if aerr := appRoot.MutateConfig(func(p string) error {
+					return config.AppendVolume(p, vol)
+				}); aerr != nil {
 					return nil, aerr
 				}
-				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
 				reconcile()
 				return map[string]any{
 					"name":       res.Name,
@@ -577,13 +574,9 @@ func runWeb(args []string) {
 			},
 			// 删卷：删频道 → 移出配置 → 删索引
 			DeleteVolume: func(ctx context.Context, name string) error {
-				cur, cerr := config.Load(cfgPath)
-				if cerr != nil {
-					return cerr
-				}
 				var target config.Volume
 				found := false
-				for _, v := range cur.Volumes {
+				for _, v := range appRoot.Config().Volumes {
 					if strings.EqualFold(v.Name, name) {
 						target, found = v, true
 						break
@@ -604,7 +597,10 @@ func runWeb(args []string) {
 				if rerr != nil {
 					return rerr
 				}
-				if rerr := config.RemoveVolume(cfgPath, name); rerr != nil {
+				// 删卷唯一写入口：写盘与内存副本一步完成
+				if rerr := appRoot.MutateConfig(func(p string) error {
+					return config.RemoveVolume(p, name)
+				}); rerr != nil {
 					return rerr
 				}
 				// 运行时账本对齐配置：停同步、关队列与索引、从注册表摘除，一次完成
@@ -616,21 +612,26 @@ func runWeb(args []string) {
 			},
 			// 添加已有频道：用 bot 会话校验频道可见性与发言权
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
-				if config.VolumeNameExists(cfgPath, name) {
+				if _, _, exists := appRoot.Volume(name); exists {
 					return nil, config.ErrVolumeExists
 				}
-				if config.VolumeChatExists(cfgPath, volume.NormalizeChatID(chatID)) {
-					return nil, config.ErrChannelAttached
+				norm := volume.NormalizeChatID(chatID)
+				for _, v := range appRoot.Config().Volumes {
+					if v.ChatID == norm {
+						return nil, config.ErrChannelAttached
+					}
 				}
 				res, aerr := volume.Attach(ctx, api, volume.AttachRequest{Name: name, ChatID: chatID})
 				if aerr != nil {
 					return nil, aerr
 				}
 				vol := config.Volume{Name: res.Name, ChatID: res.ChannelID, Enabled: true}
-				if werr := config.AppendVolume(cfgPath, vol); werr != nil {
+				// attach 唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
+				if werr := appRoot.MutateConfig(func(p string) error {
+					return config.AppendVolume(p, vol)
+				}); werr != nil {
 					return nil, werr
 				}
-				// attach 完立即挂载并推送：与建卷同一条对齐路径
 				reconcile()
 				return map[string]any{
 					"name":       res.Name,

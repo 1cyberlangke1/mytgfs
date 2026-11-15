@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/gotd/td/tg"
 
@@ -71,8 +72,13 @@ func (errUserSessionMissing) Error() string { return i18n.T("err.user_session_mi
 
 var ErrUserSessionMissing error = errUserSessionMissing{}
 
-// App 持有已读取的配置，后续所有装配都基于它。
+// App 持有配置，后续所有装配都基于它。
+//
+// cfg 是配置文件的内存副本；写入口只有 MutateConfig（改盘+换内存一步完成），
+// 读出口只有 Config/Volume——任何其它代码不得绕过这两个门直改直读，
+// 否则就会回到「文件与内存各说各话」的脱节状态
 type App struct {
+	mu   sync.RWMutex
 	cfg  config.Config
 	opts Options
 }
@@ -90,8 +96,37 @@ func Load(opts Options) (*App, error) {
 	return &App{cfg: cfg, opts: opts}, nil
 }
 
-// Config 返回底层配置，供调用方读取并发数、端口等只读字段。
-func (a *App) Config() config.Config { return a.cfg }
+// Config 返回底层配置快照，供调用方读取并发数、端口等只读字段。
+func (a *App) Config() config.Config {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.cfg
+}
+
+// SetConfig 用新配置替换内存副本；一般不直接调，走 MutateConfig 自动同步文件与内存。
+func (a *App) SetConfig(cfg config.Config) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg = cfg
+}
+
+// MutateConfig 在配置文件上执行一次变更，并把结果同步进内存副本。
+//
+// 输入：mutate 收到配置文件路径，在其上做任意写操作（加卷/删卷/改键）
+// 输出：写盘或重新加载失败时返回错误；此时内存副本保持原样
+// 预期：建卷/attach/删卷/设置变更全部经由本方法收尾，文件与内存永远一致
+func (a *App) MutateConfig(mutate func(path string) error) error {
+	path := cmp.Or(a.opts.ConfigPath, DefaultConfigPath)
+	if err := mutate(path); err != nil {
+		return err
+	}
+	cur, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	a.SetConfig(cur)
+	return nil
+}
 
 // Bus 返回推送分发点；未注入时为 nil。
 //
@@ -107,21 +142,22 @@ func (a *App) Bus() *push.Hub { return a.opts.Push }
 // 输出：卷定义、解析后的卷名；ok=false 表示配置里没有这个卷
 // 预期：无 [[volumes]] 段时退化为单卷 mytgfs（chat_id 取 [telegram].channel_id）
 func (a *App) Volume(name string) (config.Volume, string, bool) {
+	cfg := a.Config()
 	resolved := name
 	if resolved == "" {
-		if len(a.cfg.Volumes) > 0 {
-			resolved = a.cfg.Volumes[0].Name
+		if len(cfg.Volumes) > 0 {
+			resolved = cfg.Volumes[0].Name
 		} else {
 			resolved = DefaultVolumeName
 		}
 	}
-	if len(a.cfg.Volumes) == 0 {
+	if len(cfg.Volumes) == 0 {
 		if resolved != DefaultVolumeName {
 			return config.Volume{}, resolved, false
 		}
-		return config.Volume{Name: resolved, ChatID: a.cfg.Telegram.ChannelID}, resolved, true
+		return config.Volume{Name: resolved, ChatID: cfg.Telegram.ChannelID}, resolved, true
 	}
-	for _, v := range a.cfg.Volumes {
+	for _, v := range cfg.Volumes {
 		if v.Name == resolved {
 			return v, resolved, true
 		}
@@ -208,7 +244,8 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 	if !ok {
 		return ErrVolumeNotFound{Name: volName}
 	}
-	apiHash := a.cfg.APIHash()
+	cfg := a.Config()
+	apiHash := cfg.APIHash()
 	if apiHash == "" {
 		return ErrMissingAPIHash
 	}
@@ -222,12 +259,12 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 	}
 	defer idx.Close()
 
-	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
+	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: cmp.Or(a.opts.SessionPath, DefaultSessionPath), Key: key},
 		tgclient.Options{})
 
 	return client.Run(ctx, func(ctx context.Context) error {
-		api, closePool, perr := client.PooledAPI(a.cfg.Mount.DownloadConnections())
+		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
 			return perr
 		}
@@ -241,9 +278,10 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 
 // newStore 按配置造一个已就绪的 store。
 func (a *App) newStore(api telegramstore.API, chatID int64) *telegramstore.Store {
+	cfg := a.Config()
 	st := telegramstore.New(api, chatID)
-	st.SetParallel(a.cfg.Mount.DownloadConnections())
-	st.SetUploadParallel(a.cfg.Mount.UploadParallelism())
+	st.SetParallel(cfg.Mount.DownloadConnections())
+	st.SetUploadParallel(cfg.Mount.UploadParallelism())
 	st.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
 	return st
 }

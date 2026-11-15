@@ -64,7 +64,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		logging.Warn("log.volume_warn", rerr, volName)
 	}
 
-	fsys := vfs.New(ctx, idx, store, a.cfg.Mount.ReadChunk(), a.Events())
+	fsys := vfs.New(ctx, idx, store, a.Config().Mount.ReadChunk(), a.Events())
 	fsys.SetVolume(volName)
 	// 所有改动频道的操作先落库再执行：断电/断网后重启继续
 	if _, qerr := fsys.AttachQueue(ctx); qerr != nil {

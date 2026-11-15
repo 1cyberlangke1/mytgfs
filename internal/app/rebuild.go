@@ -39,7 +39,8 @@ func (a *App) AllNodes(ctx context.Context, channelID int64) ([]telegramstore.No
 	if _, err := os.Stat(a.userSessionPath()); err != nil {
 		return nil, nil
 	}
-	apiHash := a.cfg.APIHash()
+	cfg := a.Config()
+	apiHash := cfg.APIHash()
 	if apiHash == "" {
 		return nil, ErrMissingAPIHash
 	}
@@ -47,7 +48,7 @@ func (a *App) AllNodes(ctx context.Context, channelID int64) ([]telegramstore.No
 	if err != nil {
 		return nil, err
 	}
-	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
+	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: a.userSessionPath(), Key: key},
 		tgclient.Options{})
 
