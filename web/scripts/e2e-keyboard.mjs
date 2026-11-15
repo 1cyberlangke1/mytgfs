@@ -296,7 +296,12 @@ async function snapshotState() {
         active: el.tagName + ':' + label,
         rows: rows.length,
         cursor: rows.findIndex((r) => String(r.className).includes('ring-[#007AFF]')),
+        cursorRow: rows.find((r) => String(r.className).includes('ring-[#007AFF]'))?.getAttribute('data-file-id') || '',
         dialogs: document.querySelectorAll('dialog[open]').length,
+        toasts: [...document.querySelectorAll('[role="status"],[role="alert"]')]
+          .map((e) => (e.textContent || '').trim())
+          .filter(Boolean)
+          .slice(-3),
       };
     })()`);
   } catch {
@@ -505,6 +510,36 @@ async function clearCursor() {
   );
 }
 
+// cursorRowId 读出当前游标所在行的 data-file-id。
+//
+// 输入：无
+// 输出：条目 id 字符串；没有游标时返回空串
+// 预期：删除前后要按 id 确认那一行真的从 DOM 消失，不能只看接口数据
+const cursorRowId = () =>
+  evaluate(`(() => {
+    const row = [...document.querySelectorAll('[data-file-id]')].find((r) =>
+      String(r.className).includes('ring-[#007AFF]')
+    );
+    return row ? row.getAttribute('data-file-id') || '' : '';
+  })()`);
+
+// selectLiveFirstRow 选中第一行，并确认这一行在服务端数据里仍然存在。
+//
+// 输入：无
+// 输出：选中的条目 id
+// 预期：删除/改名刚结束时 DOM 可能还停在旧列表，
+//       只按 DOM 选中会把已经不存在的行带进后续操作，请求对空路径等于静默空转
+async function selectLiveFirstRow() {
+  for (let i = 0; i < 20; i += 1) {
+    await selectFirstRow();
+    const id = await cursorRowId();
+    if (!id) continue;
+    const files = await listFiles();
+    if (files.some((f) => f.id === id)) return id;
+  }
+  throw new Error('选不到与服务端数据一致的行');
+}
+
 // selectFirstRow 从「没有游标」的状态选中第一行。
 //
 // 输入：无
@@ -652,6 +687,8 @@ try {
   check('取消删除不改数据', (await listFiles()).length === countAfterDialog);
 
   await selectFirstRow();
+  const doomedId = await cursorRowId();
+  if (!doomedId) throw new Error('删除前拿不到游标行的 id');
   await key('Delete');
   await waitFor('删除确认框再次打开', () => evaluate(`!!document.querySelector('dialog[open]')`));
   const confirmed = await evaluate(`(() => {
@@ -668,10 +705,15 @@ try {
   });
   check('确认删除后文件树变小', afterDelete.length < countAfterDialog, String(afterDelete.length));
   await waitFor('删除确认框消失', () => evaluate(`!document.querySelector('dialog[open]')`));
+  // 接口变了不等于界面变了：等被删那一行真的从 DOM 消失，否则下一步会选中陈旧行
+  const doomedSelector = `[data-file-id="${doomedId}"]`;
+  await waitFor('列表已刷新到删除后', () =>
+    evaluate(`!document.querySelector(${JSON.stringify(doomedSelector)})`)
+  );
 
   // ---- 4. 改名：F2 打开弹窗，提交后落到数据里 ----
   await waitFor('列表恢复', focusList);
-  await selectFirstRow();
+  const renameTargetId = await selectLiveFirstRow();
   await key('F2');
   await waitFor('改名弹窗打开', () => evaluate(`!!document.querySelector('dialog[open] input')`));
   const renamed = await evaluate(`(() => {
@@ -687,10 +729,20 @@ try {
     if (form) form.requestSubmit();
     return !!form;
   })()`);
-  const renamedInTree = await waitFor('改名落到数据里', async () => {
+  let renamedInTree;
+  try {
+    renamedInTree = await waitFor('改名落到数据里', async () => {
+      const files = await listFiles();
+      return files.some((f) => f.name === 'e2e-renamed.txt') ? 'e2e-renamed.txt' : false;
+    });
+  } catch (err) {
+    // 超时要把改名目标与服务端现状一起打出来，否则只看到「false→false」无从判断
     const files = await listFiles();
-    return files.some((f) => f.name === 'e2e-renamed.txt') ? 'e2e-renamed.txt' : false;
-  });
+    throw new Error(
+      String(err) +
+        ` | 改名目标=${renameTargetId} 服务端仍存在=${files.some((f) => f.id === renameTargetId)}`
+    );
+  }
   check('F2 改名生效', renamedInTree === 'e2e-renamed.txt', renamedInTree);
 
   // ---- 5. 连续键盘：列表 → 工具栏 → 搜索框 → 下拉 → 回到列表 ----
@@ -714,6 +766,13 @@ try {
 
   // 5.3 Enter 进入编辑，同一个键位立刻变成可输入
   await key('Enter');
+  // 进入编辑的判据是 readOnly 翻掉：只等「已经能输入」这个状态，不等固定时间
+  await waitFor('搜索框进入编辑', () =>
+    evaluate(`(() => {
+      const el = document.querySelector('input[type="search"]');
+      return !!el && el.readOnly === false;
+    })()`)
+  );
   for (const ch of 'clip') await rawKey(ch);
   const filtered = await waitFor('搜索过滤生效', () =>
     evaluate(`(() => {

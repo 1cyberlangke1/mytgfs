@@ -181,6 +181,7 @@
     "folderCreatedToast": "已创建文件夹：{name}",
     "itemMovedRenamedToast": "修改已保存",
     "deletedToast": "已删除所选项目",
+    "itemMissingToast": "该条目已不在列表里，已刷新",
     "modalNewFolderTitle": "新建文件夹",
     "modalNewFolderLabel": "名称",
     "modalNewFolderPlaceholder": "输入文件夹名称",

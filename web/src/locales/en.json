@@ -181,6 +181,7 @@
     "folderCreatedToast": "Created folder: {name}",
     "itemMovedRenamedToast": "Changes saved",
     "deletedToast": "Selected items deleted",
+    "itemMissingToast": "That item is no longer in the list; list refreshed",
     "modalNewFolderTitle": "New Folder",
     "modalNewFolderLabel": "Name",
     "modalNewFolderPlaceholder": "Folder name",

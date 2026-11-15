@@ -129,6 +129,17 @@ function urlParam(name: string): string {
   return new URLSearchParams(window.location.search).get(name) ?? '';
 }
 
+// markEditable 把「正在编辑」映射到 readOnly，让键盘用户与读屏都知道此刻能不能输入。
+//
+// 输入：元素（可能是 null）；editing 是否已进入编辑态
+// 输出：无
+// 预期：只有文本框/多行文本参与；未进入编辑时保持 readOnly，字符不会落进框里
+function markEditable(el: Element | null, editing: boolean) {
+  if (!el) return;
+  if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') return;
+  (el as HTMLInputElement | HTMLTextAreaElement).readOnly = !editing;
+}
+
 // isTextField 判断控件是否是「接受文字」的输入框。
 //
 // 输入：任意元素（可为 null）
@@ -277,14 +288,25 @@ export default function App() {
       const hit =
         (e.target as HTMLElement | null)?.closest<HTMLElement>('input, textarea, select') ?? null;
       editingControl.current = isTextField(hit) || hit?.tagName === 'SELECT' ? hit : null;
+      markEditable(hit, editingControl.current !== null);
+    };
+    // 键盘走到输入框时先只读：字符要等 Enter 才进来，读屏也能据此播报
+    const onFocusIn = (e: FocusEvent) => {
+      const el = e.target as Element | null;
+      if (!isTextField(el as HTMLElement | null)) return;
+      if (el?.closest('dialog[open]')) return;
+      markEditable(el, el === editingControl.current);
     };
     const onFocusOut = (e: FocusEvent) => {
       if (e.target === editingControl.current) editingControl.current = null;
+      markEditable(e.target as Element | null, false);
     };
     document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('focusout', onFocusOut, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('focusin', onFocusIn, true);
       document.removeEventListener('focusout', onFocusOut, true);
     };
   }, []);
@@ -327,6 +349,7 @@ export default function App() {
           if (matchesShortcut(e, shortcuts.confirm)) {
             e.preventDefault();
             editingControl.current = target;
+            markEditable(target, true);
             return;
           }
           if (matchesShortcut(e, shortcuts.back)) {
@@ -340,6 +363,7 @@ export default function App() {
         if (matchesShortcut(e, shortcuts.back)) {
           // 退出编辑但保留焦点：再按一次 Esc 才离开这个框
           editingControl.current = null;
+          markEditable(target, false);
         }
         return;
       }
@@ -1199,7 +1223,12 @@ export default function App() {
   // 改名/移动：同一父目录只改末段，跨目录用目标目录 + 原名
   const handleRenameMoveItem = (itemId: string, newName: string, targetParentId: string | null) => {
     const item = files.find((f) => f.id === itemId);
-    if (!item) return;
+    // 列表已经刷新掉这一行时不能静默返回：用户点了保存却什么都不发生等于假按钮
+    if (!item) {
+      void reloadFiles();
+      pushToast(t.files.itemMissingToast, 'error');
+      return;
+    }
     const targetDir = targetParentId || '/';
     const dest = targetDir === '/' ? `/${newName}` : `${targetDir}/${newName}`;
     moveItems(item.volumeId, [itemId], targetDir, dest)
@@ -1210,7 +1239,11 @@ export default function App() {
 
   const handleBatchMoveItems = (itemIds: string[], targetParentId: string | null) => {
     const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
-    if (!vol || itemIds.length === 0) return;
+    if (!vol || itemIds.length === 0) {
+      void reloadFiles();
+      pushToast(t.files.itemMissingToast, 'error');
+      return;
+    }
     moveItems(vol, itemIds, targetParentId || '/')
       .then(() => reloadFiles([vol]))
       .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
@@ -1219,7 +1252,11 @@ export default function App() {
 
   const handleDeleteItems = (itemIds: string[]) => {
     const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
-    if (!vol || itemIds.length === 0) return;
+    if (!vol || itemIds.length === 0) {
+      void reloadFiles();
+      pushToast(t.files.itemMissingToast, 'error');
+      return;
+    }
     removeItems(vol, itemIds)
       .then(() => reloadFiles([vol]))
       .then(() => pushToast(t.files.deletedToast, 'success'))
