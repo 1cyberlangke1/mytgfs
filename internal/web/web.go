@@ -100,7 +100,7 @@ type Options struct {
 // 输出：http.Handler
 // 预期：与 ServeWith 使用同一套路由，不监听任何端口
 func NewHandler(configPath string, opts Options) http.Handler {
-	return newMux(configPath, opts)
+	return wrapE2E(newMux(configPath, opts))
 }
 
 // ServeWith 在 addr 上提供面板，ctx 取消时优雅关闭。
@@ -109,7 +109,7 @@ func NewHandler(configPath string, opts Options) http.Handler {
 // 输出：error
 // 预期：ctx 取消时优雅关闭；未就绪的 handler 返回空状态而不是报错
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
-	srv := &http.Server{Addr: addr, Handler: newMux(configPath, opts)}
+	srv := &http.Server{Addr: addr, Handler: NewHandler(configPath, opts)}
 	context.AfterFunc(ctx, func() {
 		_ = srv.Shutdown(context.Background())
 	})

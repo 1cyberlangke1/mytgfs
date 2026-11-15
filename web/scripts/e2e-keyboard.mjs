@@ -11,13 +11,29 @@ import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 
-const exe = path.resolve(
-  process.env.MYTGFS_E2E_EXE ||
-    (process.platform === 'win32' ? 'build/mytgfs-tray-e2e.exe' : 'build/mytgfs-tray-e2e')
-);
+const argTarget = (process.argv.find((a) => a.startsWith('--target=')) || '').split('=')[1];
+const target = argTarget || process.env.MYTGFS_E2E_TARGET || 'shell';
+if (target !== 'shell' && target !== 'web') {
+  console.error('未知 --target：' + target + '（可选 shell / web）');
+  process.exit(2);
+}
+// shell=真实 Wails 桌面壳（CDP 只有 Windows 的 WebView2 能开）
+// web=网页版面板 + 系统自带 Chromium（三平台都能跑）
+const exeDefault =
+  target === 'web'
+    ? process.platform === 'win32'
+      ? 'build/mytgfs-e2e.exe'
+      : 'build/mytgfs-e2e'
+    : process.platform === 'win32'
+      ? 'build/mytgfs-tray-e2e.exe'
+      : 'build/mytgfs-tray-e2e';
+// 可执行文件路径按仓库根算：npm 脚本的工作目录是 web/，相对路径会找错地方
+const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+const exe = path.resolve(process.env.MYTGFS_E2E_EXE || path.join(repoRoot, exeDefault));
 const port = Number(process.env.MYTGFS_E2E_PORT || 9339);
+const webPort = Number(process.env.MYTGFS_E2E_WEB_PORT || port + 1);
 if (!existsSync(exe)) {
-  console.error('缺少可执行文件：' + exe + '（先 go build -tags e2e ./cmd/mytray）');
+  console.error('缺少可执行文件：' + exe + '（先 go build -tags e2e ./cmd/mytray 或 ./cmd/mytgfs）');
   process.exit(1);
 }
 
@@ -51,10 +67,126 @@ const logPath = path.join(workDir, 'shell.log');
 // spawn 只接受已打开的 fd（WriteStream 在 fs.open 完成前 fd 为 null），
 // 所以先用 openSync 拿到句柄，stdout/stderr 都指过去
 const logFd = openSync(logPath, 'a');
-const child = spawn(exe, ['--config', cfgPath], {
-  env: { ...process.env, MYTGFS_DEBUG_SHOW: '', MYTGFS_E2E_PORT: String(port), MYTGFS_E2E_MOCK: '1' },
-  stdio: ['ignore', logFd, logFd],
-});
+
+// 子进程：shell 是桌面壳，web 是 `mytgfs web` 起的面板服务
+const child =
+  target === 'web'
+    ? spawn(exe, ['web', '--port', String(webPort)], {
+        cwd: workDir,
+        env: { ...process.env, MYTGFS_E2E_MOCK: '1' },
+        stdio: ['ignore', logFd, logFd],
+      })
+    : spawn(exe, ['--config', cfgPath], {
+        env: { ...process.env, MYTGFS_DEBUG_SHOW: '', MYTGFS_E2E_PORT: String(port), MYTGFS_E2E_MOCK: '1' },
+        stdio: ['ignore', logFd, logFd],
+      });
+
+// 网页版需要另起一个浏览器；shell 目标没有这一层
+let browser;
+
+// chromiumCandidates 按平台列出可能的 Chromium 可执行文件。
+//
+// 输入：无
+// 输出：候选路径/命令名数组（CHROME_PATH 优先）
+// 预期：找不到任何一个时明确失败并打印尝试过的路径，不静默跳过用例
+function chromiumCandidates() {
+  const fromEnv = process.env.CHROME_PATH ? [process.env.CHROME_PATH] : [];
+  if (process.platform === 'win32') {
+    return [
+      ...fromEnv,
+      'C:/Program Files/Google/Chrome/Application/chrome.exe',
+      'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    ];
+  }
+  if (process.platform === 'darwin') {
+    return [
+      ...fromEnv,
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    ];
+  }
+  return [...fromEnv, 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge'];
+}
+
+// launchBrowser 起一个 headless 浏览器并等调试端口可用。
+//
+// 输入：url 要打开的页面
+// 输出：浏览器子进程
+// 预期：逐个候选尝试；命令不存在或端口起不来就换下一个，全失败才抛错
+async function launchBrowser(url) {
+  const tried = [];
+  for (const bin of chromiumCandidates()) {
+    const args = [
+      '--headless=new',
+      '--remote-debugging-port=' + port,
+      '--user-data-dir=' + path.join(workDir, 'chrome'),
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--window-size=1120,760',
+      '--force-device-scale-factor=1',
+    ];
+    if (process.platform === 'linux') args.push('--no-sandbox');
+    args.push(url);
+    const proc = spawn(bin, args, { stdio: ['ignore', logFd, logFd] });
+    let spawnErr = '';
+    proc.on('error', (err) => {
+      spawnErr = err.message;
+    });
+    for (let i = 0; i < 100; i += 1) {
+      if (spawnErr || proc.exitCode !== null) break;
+      try {
+        const res = await fetch('http://127.0.0.1:' + port + '/json/version');
+        if (res.ok) return proc;
+      } catch {
+        /* 还没监听 */
+      }
+      await sleep(200);
+    }
+    tried.push(bin + (spawnErr ? '（' + spawnErr + '）' : '（端口未就绪）'));
+    try {
+      proc.kill();
+    } catch {
+      /* 已退出 */
+    }
+  }
+  throw new Error('找不到可用的 Chrome/Chromium：' + tried.join('; '));
+}
+
+// waitPanel 等 `mytgfs web` 真的开始监听。
+//
+// 输入：无
+// 输出：无（起不来就抛错并贴日志）
+// 预期：先等面板再开浏览器，否则浏览器只会停在错误页不重试
+async function waitPanel() {
+  for (let i = 0; i < 300; i += 1) {
+    if (child.exitCode !== null) {
+      throw new Error('面板进程提前退出（code=' + child.exitCode + '）：' + shellLog());
+    }
+    try {
+      const res = await fetch('http://127.0.0.1:' + webPort + '/api/state');
+      if (res.ok) return;
+    } catch {
+      /* 还没监听 */
+    }
+    await sleep(200);
+  }
+  throw new Error('面板端口没起来：' + shellLog());
+}
+
+if (target === 'web') {
+  try {
+    await waitPanel();
+    browser = await launchBrowser('http://127.0.0.1:' + webPort + '/');
+  } catch (err) {
+    console.error('ERROR ' + (err?.message || err));
+    process.exit(1);
+  }
+}
 
 // shellLog 读子进程日志尾部，失败时贴进错误信息。
 //
@@ -73,6 +205,8 @@ function shellLog(max = 1200) {
 let ws;
 let nextId = 1;
 const pending = new Map();
+// 页面侧异常/console.error 收集起来，失败时一起打印
+const pageErrors = [];
 
 function rpc(method, params) {
   const id = nextId++;
@@ -91,27 +225,33 @@ async function evaluate(expression) {
   return res.result?.value;
 }
 
-// findTarget 等 WebView2 的调试目标出现。
+// findTarget 等调试目标出现。
 //
 // 输入：无
 // 输出：可连的 page 目标
-// 预期：CI 首次启动 WebView2 比本机慢得多，所以给足 180s（条件轮询，不是睡觉）；
-//       子进程提前退出就立刻失败并贴日志，不让它白等三分钟
+// 预期：CI 首次启动比本机慢得多，所以给足 180s（条件轮询，不是睡觉）；
+//       进程提前退出就立刻失败并贴日志，不让它白等三分钟；
+//       web 目标只认面板地址那一页，避免连到浏览器的空白页
 async function findTarget() {
   for (let i = 0; i < 360; i += 1) {
     if (child.exitCode !== null) {
-      throw new Error('桌面壳提前退出（code=' + child.exitCode + '）：' + shellLog());
+      throw new Error('面板进程提前退出（code=' + child.exitCode + '）：' + shellLog());
     }
     try {
       const list = await fetch('http://127.0.0.1:' + port + '/json/list').then((r) => r.json());
-      const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      const page = list.find(
+        (t) =>
+          t.type === 'page' &&
+          t.webSocketDebuggerUrl &&
+          (target === 'web' ? t.url.startsWith('http://127.0.0.1:' + webPort) : true)
+      );
       if (page) return page;
     } catch {
       /* 窗口还没起来 */
     }
     await sleep(500);
   }
-  throw new Error('等不到 WebView2 调试目标：' + shellLog());
+  throw new Error('等不到调试目标：' + shellLog());
 }
 
 function check(label, ok, detail = '') {
@@ -399,12 +539,15 @@ const clickNav = (hash) =>
   })()`);
 
 // listFiles 取假后端整棵树；e2e 的断言都基于它的内容。
+//
+// 用相对路径：桌面壳的 origin 是 wails.localhost，网页版是 127.0.0.1，同一份断言两边都能跑
 const listFiles = () =>
-  evaluate(`fetch('http://wails.localhost/api/files?vol=demo&all=1').then((r) => r.json()).then((d) => d.files || [])`);
+  evaluate(`fetch('/api/files?vol=demo&all=1').then((r) => r.json()).then((d) => d.files || [])`);
 
 try {
-  const target = await findTarget();
-  ws = new WebSocket(target.webSocketDebuggerUrl);
+  // 变量名不能叫 target：会遮蔽上面的 target（shell/web），下面 host 校验就判断错
+  const page = await findTarget();
+  ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;
     ws.onerror = () => reject(new Error('CDP 连接失败'));
@@ -415,13 +558,22 @@ try {
       const { resolve, reject } = pending.get(msg.id);
       pending.delete(msg.id);
       msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result);
+      return;
+    }
+    // 页面里的异常必须出现在 CI 日志里：否则只剩「等不到弹窗」这种没信息量的失败
+    if (msg.method === 'Runtime.exceptionThrown') {
+      const d = msg.params.exceptionDetails;
+      pageErrors.push(d.exception?.description || d.text || 'exception');
+    }
+    if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
+      pageErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
     }
   };
   await rpc('Runtime.enable');
 
   await waitFor('页面加载完成', async () => {
     const ready = await evaluate(`({ready: document.readyState === 'complete', host: location.host})`);
-    return ready?.ready && ready.host === 'wails.localhost';
+    return ready?.ready && ready.host === (target === 'web' ? '127.0.0.1:' + webPort : 'wails.localhost');
   });
   await waitFor('导航渲染', () => evaluate(`document.querySelectorAll('nav[aria-label] a').length > 0`));
   // 首屏数据到位再测键盘：否则徽标数字会在按键之间变化
@@ -457,7 +609,7 @@ try {
   await waitFor('切到文件页', async () => (await tabHash()) === '#files');
   check('进入文件页', true, await tabHash());
 
-  const state = await evaluate(`fetch('http://wails.localhost/api/state').then((r) => r.json())`);
+  const state = await evaluate(`fetch('/api/state').then((r) => r.json())`);
   check(
     '假数据卷可用',
     state?.volumes?.length === 1 && state.volumes[0].name === 'demo' && state.status?.state_code === 'online',
@@ -494,11 +646,8 @@ try {
   check('Delete 打开删除确认框', true);
 
   const countAfterDialog = (await listFiles()).length;
-  await evaluate(`(() => {
-    const dlg = document.querySelector('dialog[open]');
-    if (dlg) dlg.close();
-    return true;
-  })()`);
+  // 用 Esc 取消：这就是用户真实的取消手势，别用 dialog.close()（脚本关窗不等 React 收尾）
+  await key('Escape');
   await waitFor('删除确认框关闭', () => evaluate(`!document.querySelector('dialog[open]')`));
   check('取消删除不改数据', (await listFiles()).length === countAfterDialog);
 
@@ -713,6 +862,10 @@ try {
   check('Esc 从下载页回到导航', reachedNav === true);
 } catch (err) {
   console.error('ERROR ' + (err?.message || err));
+  if (pageErrors.length > 0) {
+    console.error('页面异常：');
+    for (const line of pageErrors.slice(0, 20)) console.error('  ' + line);
+  }
   process.exitCode = 1;
 } finally {
   try {
@@ -722,6 +875,11 @@ try {
   }
   try {
     child.kill();
+  } catch {
+    /* 已退出 */
+  }
+  try {
+    browser?.kill();
   } catch {
     /* 已退出 */
   }

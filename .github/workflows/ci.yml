@@ -55,23 +55,26 @@ jobs:
       - name: 测试
         if: runner.os != 'Linux'
         run: go test -count=1 ./... -cover
-      # 桌面壳键盘 e2e：用 CDP 往真实窗口注入按键，窗口保持隐藏，假数据不连 Telegram 账号。
-      # CDP 是 Chromium 协议，只有 Windows 的 WebView2 支持；Linux/macOS 只验证 e2e 标签能编译。
-      - name: 安装 Node（桌面 e2e 驱动）
+      # 端到端：全部平台跑「网页版面板 + 系统 Chrome」这一路（headless CDP，三平台都能跑）。
+      # Windows 另外跑一遍真实 Wails 桌面壳：CDP 是 Chromium 协议，只有 WebView2 能开调试端口。
+      - name: 安装 Node（e2e 驱动）
         uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: 构建桌面 e2e 二进制（Windows）
+      - name: 构建网页版 e2e 二进制
+        shell: bash
+        run: |
+          exe=build/mytgfs-e2e
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=$exe.exe; fi
+          go build -tags e2e -o "$exe" ./cmd/mytgfs
+      - name: 网页版键盘 e2e
+        run: node web/scripts/e2e-keyboard.mjs --target=web
+      - name: 构建桌面壳 e2e 二进制
         if: runner.os == 'Windows'
         run: go build -tags e2e -ldflags "-H=windowsgui" -o build/mytgfs-tray-e2e.exe ./cmd/mytray
-      - name: 构建桌面 e2e 二进制
-        if: runner.os != 'Windows'
-        run: go build -tags e2e -o build/mytgfs-tray-e2e ./cmd/mytray
-      - name: 桌面键盘 e2e
+      - name: 桌面壳键盘 e2e
         if: runner.os == 'Windows'
-        run: |
-          $env:MYTGFS_E2E_EXE = "$PWD/build/mytgfs-tray-e2e.exe"
-          node web/scripts/e2e-keyboard.mjs
+        run: node web/scripts/e2e-keyboard.mjs --target=shell
       - name: 覆盖率摘要
         if: runner.os == 'Linux'
         run: go tool cover -func=coverage.out | tail -n 1

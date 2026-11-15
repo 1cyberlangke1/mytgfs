@@ -190,23 +190,28 @@ go test ./... -cover
 cd web && npm ci && npm run lint && npm test
 ```
 
-桌面端键盘端到端（真实 Wails 窗口 + 假数据，不需要 Telegram 账号）：
+键盘端到端有两路，断言完全相同，用假数据，不需要 Telegram 账号：
 
 ```sh
-cd web && npm run build            # 必须先构建：产物为空时二进制里嵌的是占位页
-cd .. && go build -tags e2e -o build/mytgfs-tray-e2e.exe ./cmd/mytray
-cd web && npm run e2e:keyboard
+cd web && npm run build && cd ..   # 产物不入库；空的会嵌成占位页
+
+go build -tags e2e -o build/mytgfs-e2e.exe ./cmd/mytgfs
+go build -tags e2e -ldflags "-H=windowsgui" -o build/mytgfs-tray-e2e.exe ./cmd/mytray  # 桌面壳，仅 Windows 可测
+
+cd web && npm run e2e:keyboard:web   # 三平台：面板 + 系统 Chrome headless
+cd web && npm run e2e:keyboard       # 真实 Wails 窗口（CDP 只有 Windows 的 WebView2 能开）
 ```
 
-脚本通过 WebView2 远程调试向真实窗口注入按键（CDP 输入管线，`preventDefault` 会真的拦住输入），
+脚本用 CDP 输入管线注入真实按键（`preventDefault` 会真的拦住输入），
 覆盖方向键导航、进出目录、删除确认与取消、F2 改名、搜索过滤、输入框/下拉的两段式编辑、
 设置写盘与超范围拒绝、下载页渲染、`Esc` 逐层退回；每条断言都轮询真实条件，不用固定 sleep，
-超时会连同现场（焦点、行数、游标、打开弹窗）一起打印。
+超时会连同现场（焦点、行数、游标、打开弹窗）和页面异常一起打印。
+网页版那一路找 Chrome/Chromium：`CHROME_PATH` 优先，其次系统默认安装位置。
 另有只读的 `npm run e2e:desktop` 核对面板状态与缩略图。
 
 `e2e` 构建标签只用于打开调试端口与假数据层，正式二进制没有这些开关；假数据只覆盖卷/文件/下载接口。
-远程调试协议（CDP）是 Chromium 专有，只有 Windows 的 WebView2 能直接开，Linux/macOS 上只验证 `-tags e2e` 能编译。
-CI 会跑 `go build/vet/test`、前端 `npm run lint`、`npm test`，以及 Windows 上的这轮键盘 e2e。
+CI 会跑 `go build/vet/test`、前端 `npm run lint`、`npm test`，三平台各跑一遍网页版键盘 e2e，
+Windows 再加跑真实桌面壳那一路。
 
 ## 元数据格式（贡献者向）
 

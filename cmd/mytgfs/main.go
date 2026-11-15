@@ -434,6 +434,13 @@ func runWeb(args []string) {
 	}
 
 	pushHub := push.NewHub(ctx)
+	if e2eMockRequested() {
+		// e2e：不连 Telegram，只起面板与假数据层（假数据由 -tags e2e 的包装器挂上）
+		if err := serve(web.Options{Push: pushHub}); err != nil {
+			fatal(err.Error())
+		}
+		return
+	}
 	if err != nil || cfg.APIHash() == "" {
 		// 没配置也能开面板：只有配置编辑
 		if err := serve(web.Options{Push: pushHub, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); err != nil {

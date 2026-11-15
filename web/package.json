@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit && node scripts/check-push-contract.mjs",
     "test": "vitest run",
     "e2e:desktop": "node scripts/e2e-desktop.mjs",
-    "e2e:keyboard": "node scripts/e2e-keyboard.mjs"
+    "e2e:keyboard": "node scripts/e2e-keyboard.mjs",
+    "e2e:keyboard:web": "node scripts/e2e-keyboard.mjs --target=web"
   },
   "dependencies": {
     "@fontsource/bricolage-grotesque": "^5.3.0",
