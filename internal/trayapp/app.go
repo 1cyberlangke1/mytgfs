@@ -950,7 +950,7 @@ func Run(opts Options) error {
 	})
 
 	// 面板路由直接挂到 webview：不监听端口、不开浏览器
-	setHandler(buildPanel())
+	setHandler(e2eWrap(buildPanel()))
 
 	// 桌面传输通道：Hub 统一扇出，这里只把主题翻成 Wails 原生事件名。
 	// 网页版在同一个 Hub 上注册 SSE 订阅者，两端共用一份契约。

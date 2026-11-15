@@ -414,7 +414,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   //       输入框/下拉里的同键（清搜索）与已打开的 dialog 不抢
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !matchesShortcut(e, shortcuts.clearOrUp)) return;
+      if (e.defaultPrevented || !matchesShortcut(e, shortcuts.back)) return;
       if (document.querySelector('dialog[open]')) return;
       const tag = (e.target as HTMLElement | null)?.tagName ?? '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
@@ -429,6 +429,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
         return;
       }
       if (selectedIds.size > 0 || cursorId) {
+        // 自己处理了 Esc，避免全局再兜底把焦点送去导航
+        e.preventDefault();
         setSelectedIds(new Set());
         setCursorId(null);
         return;
@@ -570,7 +572,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
       toggleSelectOne(current.id);
       return;
     }
-    if (matchesShortcut(e, shortcuts.open)) {
+    if (matchesShortcut(e, shortcuts.confirm)) {
       e.preventDefault();
       if (current.isDir) handleFolderClick(current.id);
       else onPreviewFile(current);

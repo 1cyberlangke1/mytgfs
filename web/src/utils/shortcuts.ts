@@ -8,8 +8,14 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 export type ShortcutAction =
   | 'moveUp'
   | 'moveDown'
-  | 'clearOrUp'
-  | 'open'
+  | 'moveLeft'
+  | 'moveRight'
+  | 'confirm'
+  | 'back'
+  | 'prevPage'
+  | 'nextPage'
+  | 'home'
+  | 'end'
   | 'toggleSelect'
   | 'selectAll'
   | 'rename'
@@ -18,12 +24,17 @@ export type ShortcutAction =
 export type ShortcutMap = Record<ShortcutAction, string>;
 
 // SHORTCUT_ACTIONS 是设置页展示顺序，也是配置校验白名单。
-// 只放文件操作：切页面这类全局跳转不占用可配置键位。
 export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   'moveUp',
   'moveDown',
-  'clearOrUp',
-  'open',
+  'moveLeft',
+  'moveRight',
+  'confirm',
+  'back',
+  'prevPage',
+  'nextPage',
+  'home',
+  'end',
   'toggleSelect',
   'selectAll',
   'rename',
@@ -33,12 +44,18 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
 export const DEFAULT_SHORTCUTS: ShortcutMap = {
   moveUp: 'ArrowUp',
   moveDown: 'ArrowDown',
+  moveLeft: 'ArrowLeft',
+  moveRight: 'ArrowRight',
+  confirm: 'Enter',
+  back: 'Escape',
+  prevPage: 'PageUp',
+  nextPage: 'PageDown',
+  home: 'Home',
+  end: 'End',
+  toggleSelect: 'Space',
+  selectAll: 'Ctrl+A',
   rename: 'F2',
   delete: 'Delete',
-  selectAll: 'Ctrl+A',
-  toggleSelect: 'Space',
-  open: 'Enter',
-  clearOrUp: 'Escape',
 };
 
 const STORAGE_KEY = 'mytgfs_shortcuts_v1';

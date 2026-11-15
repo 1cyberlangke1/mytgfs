@@ -32,7 +32,6 @@ import {
 import { BrandEmblemSvg, RichFileTypeEmblem } from './VisualAssets';
 import { Button, IOS_SOFT_SPRING, IOS_SPRING } from './ui';
 import { CoverDialog } from './CoverDialog';
-import { arrowStep, moveFocusBy } from '../utils/keynav';
 
 interface OverviewViewProps {
   t: Translations;
@@ -206,17 +205,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </div>
           </div>
         ) : (
-          <div
-            className="grid grid-cols-1 min-[520px]:grid-cols-2 xl:grid-cols-3 gap-4"
-            onKeyDown={(e) => {
-              if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
-              const step = arrowStep(e.key, true);
-              if (!step) return;
-              if (moveFocusBy(e.currentTarget, document.activeElement, 'button[data-vol-open]', step)) {
-                e.preventDefault();
-              }
-            }}
-          >
+          <div className="grid grid-cols-1 min-[520px]:grid-cols-2 xl:grid-cols-3 gap-4">
             {summary.perVolume.map(({ volume, fileCount, folderCount, totalBytes, sharePct = 0 }) => {
               const isSelected = volume.id === activeVolumeId;
 
@@ -320,7 +309,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                       type="button"
                       variant="secondary"
                       size="sm"
-                      data-vol-open={volume.id}
                       onClick={() => onSelectVolumeAndBrowse(volume.id)}
                     >
                       <span>{t.overview.browseVolumeBtn}</span>

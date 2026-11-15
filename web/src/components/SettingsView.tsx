@@ -26,17 +26,29 @@ interface SettingsViewProps {
   onNotifyError: (msg: string) => void;
 }
 
-// shortcutLabel 取动作的中文/英文说明，与文件页的快捷键一致。
+// shortcutLabel 取动作的中文/英文说明，与全局键盘模型一致。
 function shortcutLabel(t: Translations, action: ShortcutAction): string {
   switch (action) {
     case 'moveUp':
       return t.files.shortcutMoveUp;
     case 'moveDown':
       return t.files.shortcutMoveDown;
-    case 'clearOrUp':
-      return t.files.shortcutClose;
-    case 'open':
-      return t.files.shortcutOpen;
+    case 'moveLeft':
+      return t.files.shortcutMoveLeft;
+    case 'moveRight':
+      return t.files.shortcutMoveRight;
+    case 'confirm':
+      return t.files.shortcutConfirm;
+    case 'back':
+      return t.files.shortcutBack;
+    case 'prevPage':
+      return t.files.shortcutPrevPage;
+    case 'nextPage':
+      return t.files.shortcutNextPage;
+    case 'home':
+      return t.files.shortcutHome;
+    case 'end':
+      return t.files.shortcutEnd;
     case 'toggleSelect':
       return t.files.shortcutSelect;
     case 'selectAll':
