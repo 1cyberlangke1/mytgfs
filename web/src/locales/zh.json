@@ -164,7 +164,6 @@
     "batchDeleteBtn": "删除",
     "clearSelectionBtn": "取消选择",
     "emptyDirTitle": "文件夹为空",
-    "emptyDirDesc": "可将文件拖拽到此处上传，或点击右上角新建文件夹。",
     "emptySearchTitle": "无匹配结果",
     "emptySearchDesc": "未找到包含该关键词的文件或目录。",
     "connErrorEmptyTitle": "无法连接存储卷",

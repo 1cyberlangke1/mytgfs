@@ -328,6 +328,13 @@ export default function App() {
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [filesLoading, setFilesLoading] = useState(true);
+  // filesLoadedRef 记录「首屏文件是否已拿到」。
+  //
+  // 输入：无
+  // 输出：无
+  // 预期：只有首次加载为 false，之后的事件驱动刷新都为 true；
+  //       骨架屏只服务首次加载，刷新时不再插进来闪一下
+  const filesLoadedRef = useRef(false);
   const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
   const [serverQueue, setServerQueue] = useState<TransferTask[]>([]);
@@ -574,9 +581,11 @@ export default function App() {
       setFilesLoading(false);
       return;
     }
-    setFilesLoading(true);
-    const lists = await Promise.all(
-      targets.map(async (name) => {
+    // 刷新不该重放骨架：骨架只在首次加载时占位，
+    // 空卷每次收到推送都重插骨架会变成不停闪的条形占位
+    if (!filesLoadedRef.current) setFilesLoading(true);
+    const results = await Promise.all(
+      targets.map(async (name): Promise<ApiFile[] | null> => {
         try {
           const list = await listFiles(name, true);
           clearProblem(`files:${name}`);
@@ -591,11 +600,31 @@ export default function App() {
               localeRef.current
             )
           );
-          return [] as ApiFile[];
+          return null;
         }
       })
     );
-    setFiles(lists.flat().map(toFileItem));
+    // 只替换本次真正读到的卷，其余卷保留旧条目：
+    // 单卷刷新（新建/改名/删除后）若整体替换，空卷会让 files 变空，
+    // 与全量刷新交替时界面就在骨架和列表之间闪
+    const fresh = new Map<string, ApiFile[]>();
+    const failed = new Set<string>();
+    targets.forEach((name, i) => {
+      const list = results[i];
+      if (list) fresh.set(name, list);
+      else failed.add(name);
+    });
+    const keepOld = (vol: string) => {
+      if (fresh.has(vol)) return false;
+      // 单卷刷新时其它卷不在本次范围，原样保留；
+      // 全量刷新时只保留本次读取失败的卷，已删卷随之消失
+      return names ? true : failed.has(vol);
+    };
+    setFiles((prev) => [
+      ...prev.filter((f) => keepOld(f.volumeId)),
+      ...Array.from(fresh.values()).flat().map(toFileItem),
+    ]);
+    filesLoadedRef.current = true;
     setFilesLoading(false);
   }, [setProblem, clearProblem]);
 

@@ -10,6 +10,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -20,6 +21,12 @@ import (
 
 // mockVolume 是假卷名；面板侧栏与文件接口都用它。
 const mockVolume = "demo"
+
+// mockEmpty 报告是否用「空卷」跑 e2e：state 报 0 条、/api/files 一律返回空树，
+// 用于复现空卷下的界面行为（骨架屏不应在刷新时重放）。
+func mockEmpty() bool {
+	return os.Getenv("MYTGFS_E2E_EMPTY") == "1"
+}
 
 // mockEntry 是假文件树里的一个节点。
 type mockEntry struct {
@@ -93,6 +100,9 @@ func mockRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		count := files
 		mockState.Unlock()
+		if mockEmpty() {
+			count, used = 0, 0
+		}
 		replyJSON(w, http.StatusOK, map[string]any{
 			"volumes": []volumeState{{
 				ID:      mockVolume,
@@ -120,8 +130,12 @@ func mockRoute(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		q := r.URL.Query()
+		items := mockList(q.Get("dir"), q.Get("all") == "1")
+		if mockEmpty() {
+			items = nil
+		}
 		replyJSON(w, http.StatusOK, map[string]any{
-			"files": mockList(q.Get("dir"), q.Get("all") == "1"),
+			"files": items,
 			"dir":   normalizeDir(q.Get("dir")),
 		})
 		return true

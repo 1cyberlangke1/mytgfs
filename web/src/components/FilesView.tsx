@@ -1087,9 +1087,11 @@ export const FilesView: React.FC<FilesViewProps> = ({
             <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
               {searchTerm.trim() ? t.files.emptySearchTitle : t.files.emptyDirTitle}
             </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
-              {searchTerm.trim() ? t.files.emptySearchDesc : t.files.emptyDirDesc}
-            </p>
+            {searchTerm.trim() && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+                {t.files.emptySearchDesc}
+              </p>
+            )}
           </div>
         ) : viewMode === 'grid' ? (
           /* GALLERY GRID VIEW */

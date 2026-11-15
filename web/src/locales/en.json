@@ -164,7 +164,6 @@
     "batchDeleteBtn": "Delete",
     "clearSelectionBtn": "Clear",
     "emptyDirTitle": "Folder is Empty",
-    "emptyDirDesc": "Drop files here to upload or create a new folder.",
     "emptySearchTitle": "No Results Found",
     "emptySearchDesc": "No files matched your search query.",
     "connErrorEmptyTitle": "Volume Unavailable",
