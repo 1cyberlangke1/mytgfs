@@ -9,13 +9,14 @@
 文件内容存频道，每个节点（文件/目录）是一条消息，消息里自述名字与父节点消息号，
 本地 SQLite 只是可重建的索引缓存。改名/移动只编辑节点自己那一条消息，与子树大小无关。
 
-提供三种使用方式：
+提供两种使用方式：
 
 - **Web 面板**（`mytgfs web`）：浏览器里增删改查、拖拽/目录上传、搜索排序、在线播放、下载到本地目录。
 - **系统托盘**（`mytgfs tray`）：常驻后台、自动增量同步，按需打开面板。
 
-> 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己格式的消息**（正文含 `v`/`t`/`n`/`p` 字段），
-> 不会扫描、删除频道里任何其它消息。删文件只删自己记下的那条消息。
+> 频道不是专属文件仓库，里面可能有聊天消息。程序**只处理自己格式的消息**（正文含 `v`/`t` 字段的 JSON），
+> 不会扫描、删除频道里任何其它消息。删除自己的文件也只是把那一条消息改写成删除标记，
+> 不调用任何批量删除。
 
 ## 环境要求
 
@@ -45,7 +46,7 @@ go build -o mytgfs ./cmd/mytgfs
    （默认装到 `%LOCALAPPDATA%\mytgfs`，并创建开始菜单快捷方式）。
 2. 把 `config.toml`、`secrets/` 配好；登录 bot / user 需要各跑一次 `mytgfs auth`，这两步要用命令行。
 3. 之后从开始菜单点 **mytgfs**：启动的是 `mytgfs-tray.exe`（GUI 子系统），
-   **不会出现命令行窗口**。右键托盘图标可以打开面板、勾选开机自启。
+   **不会出现命令行窗口**。右键托盘图标可以打开面板。
 
 `mytgfs.exe` 是命令行版（控制台子系统），适合脚本和首次登录；双击它只会停在控制台里等命令。
 日常使用请走 `mytgfs-tray.exe` 或开始菜单快捷方式，托盘与面板全程无控制台窗口。
@@ -73,10 +74,10 @@ go build -o mytgfs ./cmd/mytgfs
    mytgfs auth user
    ```
 
-4. 建卷（建私有频道、把 bot 拉进频道并提权、关通知）：
+4. 建卷（建私有频道、把 bot 拉进频道并提权、关通知、设频道头像）：
 
    ```sh
-   mytgfs volume create --name demo --point Y:
+   mytgfs volume create --name demo
    ```
 
 5. 打开面板：
@@ -94,7 +95,7 @@ go build -o mytgfs ./cmd/mytgfs
 | `mytgfs version` | 版本与构建信息（支持 `--json`） |
 | `mytgfs auth bot` / `auth user` | bot token / 手机号登录 |
 | `mytgfs channel init --bot <username>` | 建私有频道并给 bot 提权 |
-| `mytgfs volume create --name <n> --point Y:` | 建卷 |
+| `mytgfs volume create --name <n>` | 建卷 |
 | `mytgfs volume delete --name <n>` | 删卷：删频道、移除配置、删本地索引 |
 | `mytgfs volume check` | 检查每个卷的频道是否仍可读写 |
 | `mytgfs web [--port N]` | 启动本地 Web 面板（端口默认取 `[web].port`，传 0 用随机端口） |
@@ -172,6 +173,12 @@ sha256 登记索引，成功后清账。临时文件已被清扫或大小对不�
 重新对账（`reconcileNode`），不会出现「远端叫新名、本地还叫旧名」的分叉视图。
 删除时若远端已删、本地清库失败，对账会按「读不到」把本地节点清掉。
 
+**删除是 O(1) 打标记**：删除文件或目录时，程序只把被删节点自己那条消息改写成
+`{"v":2,"t":"x"}`（删除标记），本地索引整棵子树一起清掉；子节点的消息原样保留在频道里。
+增量同步与全量重建遇到标记时按「该节点及其整棵子树已删除」处理，不会挂回卷根，
+之后新建同名文件/目录也不受影响。bot 会话有「消息创建超过 48 小时不能删」的平台限制，
+打标记走的是消息编辑，不受该限制影响。
+
 **边界**：这套机制只依据本程序自己记下的 `pending` 记录和节点正文工作，
 不会因为「频道里有不在索引里的消息」就去删任何东西，聊天消息始终不受影响。
 
@@ -216,7 +223,7 @@ internal/
   web/          内嵌面板、文件管理、下载目录、缩略图、分片上传
   trayapp/      托盘 + 自动同步 + 按需面板
   ...           auth/channel/config/crypto/fm/queue/uploadcache/...
-web/            TypeScript 前端源码（tsc 检查，产物内嵌进 internal/web/dist）
+web/            TypeScript 前端源码（tsc 检查；产物不入库，构建时现做并嵌入）
 packaging/      安装/卸载脚本
 ```
 
