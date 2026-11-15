@@ -6,7 +6,7 @@
 // 预期：不连 Telegram、不用真实账号；每条断言都等真实条件出现，
 //       不用固定 sleep 猜时间，避免 CI 偶发失败
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
@@ -46,10 +46,29 @@ writeFileSync(
   'utf8'
 );
 
+// 子进程日志落到文件：CI 上起不来时能直接看到原因，而不是只剩一句「等不到调试目标」。
+const logPath = path.join(workDir, 'shell.log');
+// spawn 只接受已打开的 fd（WriteStream 在 fs.open 完成前 fd 为 null），
+// 所以先用 openSync 拿到句柄，stdout/stderr 都指过去
+const logFd = openSync(logPath, 'a');
 const child = spawn(exe, ['--config', cfgPath], {
   env: { ...process.env, MYTGFS_DEBUG_SHOW: '', MYTGFS_E2E_PORT: String(port), MYTGFS_E2E_MOCK: '1' },
-  stdio: 'ignore',
+  stdio: ['ignore', logFd, logFd],
 });
+
+// shellLog 读子进程日志尾部，失败时贴进错误信息。
+//
+// 输入：最多取多少字符
+// 输出：日志尾部字符串（读不到时返回空）
+// 预期：只在失败路径调用，正常跑不产生额外 IO
+function shellLog(max = 1200) {
+  try {
+    const text = readFileSync(logPath, 'utf8');
+    return text.slice(-max);
+  } catch {
+    return '';
+  }
+}
 
 let ws;
 let nextId = 1;
@@ -72,8 +91,17 @@ async function evaluate(expression) {
   return res.result?.value;
 }
 
+// findTarget 等 WebView2 的调试目标出现。
+//
+// 输入：无
+// 输出：可连的 page 目标
+// 预期：CI 首次启动 WebView2 比本机慢得多，所以给足 180s（条件轮询，不是睡觉）；
+//       子进程提前退出就立刻失败并贴日志，不让它白等三分钟
 async function findTarget() {
-  for (let i = 0; i < 120; i += 1) {
+  for (let i = 0; i < 360; i += 1) {
+    if (child.exitCode !== null) {
+      throw new Error('桌面壳提前退出（code=' + child.exitCode + '）：' + shellLog());
+    }
     try {
       const list = await fetch('http://127.0.0.1:' + port + '/json/list').then((r) => r.json());
       const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
@@ -83,7 +111,7 @@ async function findTarget() {
     }
     await sleep(500);
   }
-  throw new Error('等不到 WebView2 调试目标');
+  throw new Error('等不到 WebView2 调试目标：' + shellLog());
 }
 
 function check(label, ok, detail = '') {
@@ -96,7 +124,7 @@ function check(label, ok, detail = '') {
 // 输入：说明；返回真值/假值的异步函数；超时毫秒
 // 输出：首个真值
 // 预期：不靠 sleep 猜时长，CI 慢机器也不会误判
-async function waitFor(label, fn, timeout = 20000) {
+async function waitFor(label, fn, timeout = 30000) {
   const started = Date.now();
   let last;
   while (Date.now() - started < timeout) {
@@ -635,6 +663,11 @@ try {
     child.kill();
   } catch {
     /* 已退出 */
+  }
+  try {
+    closeSync(logFd);
+  } catch {
+    /* 已关闭 */
   }
   try {
     rmSync(workDir, { recursive: true, force: true });
