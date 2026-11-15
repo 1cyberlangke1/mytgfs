@@ -38,6 +38,7 @@ import {
   validateAndPlanUpload,
   volumeDisplayName,
 } from './utils/fsLogic';
+import { loadShortcuts, saveShortcuts, type ShortcutMap } from './utils/shortcuts';
 import { runViewTransition } from './utils/viewTransition';
 import { subscribePush } from './events';
 import {
@@ -248,6 +249,12 @@ export default function App() {
     return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
   });
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  // 键盘快捷键：设置页可改，存 localStorage，文件页读同一份映射
+  const [shortcuts, setShortcuts] = useState<ShortcutMap>(() => loadShortcuts());
+  const handleChangeShortcuts = (next: ShortcutMap) => {
+    saveShortcuts(next);
+    setShortcuts(next);
+  };
 
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -1715,6 +1722,7 @@ export default function App() {
                 onDeleteVolume={handleDeleteVolume}
                 onRefresh={handleRefresh}
                 onRebuildVolume={caps.rebuild ? handleRebuildVolume : undefined}
+                shortcuts={shortcuts}
               />
             )}
 
@@ -1725,6 +1733,8 @@ export default function App() {
                   locale={locale}
                   settings={settings}
                   canAutostart={caps.autostart}
+                  shortcuts={shortcuts}
+                  onChangeShortcuts={handleChangeShortcuts}
                   onSaveSettings={handleSaveSettings}
                   onNotifyError={(msg) => pushToast(msg, 'error')}
                 />

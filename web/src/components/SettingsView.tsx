@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Loader2, Save } from 'lucide-react';
+import { Check, Loader2, RotateCcw, Save } from 'lucide-react';
 import { getAutostart, setAutostart } from '../api';
 import { AppSettingDef, AppSettings, Locale } from '../types';
-import { Translations, formatNumber } from '../utils/i18n';
+import { Translations, formatNumber, interpolate } from '../utils/i18n';
+import {
+  DEFAULT_SHORTCUTS,
+  SHORTCUT_ACTIONS,
+  shortcutConflict,
+  shortcutFromEvent,
+  type ShortcutAction,
+  type ShortcutMap,
+} from '../utils/shortcuts';
 import { Button, Input, IOS_SOFT_SPRING, Switch } from './ui';
 import { motion } from 'motion/react';
 
@@ -11,8 +19,28 @@ interface SettingsViewProps {
   locale: Locale;
   settings: AppSettings;
   canAutostart: boolean;
+  shortcuts: ShortcutMap;
+  onChangeShortcuts: (next: ShortcutMap) => void;
   onSaveSettings: (values: Record<string, string>) => Promise<void>;
   onNotifyError: (msg: string) => void;
+}
+
+// shortcutLabel 取动作的中文/英文说明，与文件页的快捷键一致。
+function shortcutLabel(t: Translations, action: ShortcutAction): string {
+  switch (action) {
+    case 'clearOrUp':
+      return t.files.shortcutClose;
+    case 'open':
+      return t.files.shortcutOpen;
+    case 'toggleSelect':
+      return t.files.shortcutSelect;
+    case 'selectAll':
+      return t.files.shortcutSelectAll;
+    case 'rename':
+      return t.files.shortcutRename;
+    case 'delete':
+      return t.files.shortcutDelete;
+  }
 }
 
 // SECTION_ORDER 控制分组顺序：与 config.toml 的段落顺序一致。
@@ -78,6 +106,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   locale,
   settings,
   canAutostart,
+  shortcuts,
+  onChangeShortcuts,
   onSaveSettings,
   onNotifyError,
 }) => {
@@ -93,6 +123,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [savedSection, setSavedSection] = useState('');
   const [autoOn, setAutoOn] = useState<boolean | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
+  // listening 是正在录制键位的动作；shortcutError 显示重复占用
+  const [listening, setListening] = useState<ShortcutAction | null>(null);
+  const [shortcutError, setShortcutError] = useState('');
 
   // 自启状态读的是系统注册项，进页面时取一次
   useEffect(() => {
@@ -121,6 +154,55 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const savedRef = useRef(saved);
   savedRef.current = saved;
+
+  // 录制键位：点某一行后监听下一次按键。
+  //
+  // 输入：window keydown（捕获阶段，避免被页面其它处理器吞掉）
+  // 输出：更新 shortcuts 或显示冲突原因
+  // 预期：Esc 用于取消录制，不写入键位；重复键位直接拒绝，不覆盖旧动作
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setListening(null);
+        setShortcutError('');
+        return;
+      }
+      const spec = shortcutFromEvent(e);
+      if (!spec) return;
+      const conflict = shortcutConflict(shortcuts, listening, spec);
+      if (conflict) {
+        setShortcutError(
+          interpolate(
+            t.settings.shortcutConflict,
+            { key: spec, action: shortcutLabel(t, conflict) },
+            locale
+          )
+        );
+        return;
+      }
+      setShortcutError('');
+      onChangeShortcuts({ ...shortcuts, [listening]: spec });
+      setListening(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [listening, shortcuts, t, locale, onChangeShortcuts]);
+
+  // resetShortcut 把单个动作恢复默认；resetAllShortcuts 恢复整张表。
+  const resetShortcut = (action: ShortcutAction) => {
+    onChangeShortcuts({ ...shortcuts, [action]: DEFAULT_SHORTCUTS[action] });
+    setShortcutError('');
+    setListening(null);
+  };
+
+  const resetAllShortcuts = () => {
+    onChangeShortcuts({ ...DEFAULT_SHORTCUTS });
+    setShortcutError('');
+    setListening(null);
+  };
 
   // 外部改了配置（SSE）时才同步；正在编辑的字段保留用户输入
   useEffect(() => {
@@ -334,6 +416,77 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </section>
         );
       })}
+
+      <section className="surface-card rounded-2xl p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
+              {t.settings.shortcutsTitle}
+            </h2>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.settings.shortcutsHint}</p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={resetAllShortcuts}>
+            {t.settings.shortcutResetAll}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-zinc-700 dark:text-zinc-300">
+              {t.files.shortcutNavigate}
+            </span>
+            <kbd
+              dir="ltr"
+              className="px-2 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 font-mono text-[11px] text-zinc-800 dark:text-zinc-200"
+            >
+              ↑ / ↓
+            </kbd>
+          </div>
+          {SHORTCUT_ACTIONS.map((action) => {
+            const active = listening === action;
+            return (
+              <div key={action} className="flex items-center justify-between gap-3">
+                <span className="text-xs text-zinc-700 dark:text-zinc-300">
+                  {shortcutLabel(t, action)}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setListening(active ? null : action);
+                      setShortcutError('');
+                    }}
+                    aria-label={`${shortcutLabel(t, action)}: ${active ? t.settings.shortcutListening : shortcuts[action]}`}
+                    className={`min-w-[96px] px-2.5 py-1 rounded-lg border font-mono text-[11px] text-center transition-colors cursor-pointer ${
+                      active
+                        ? 'border-[#007AFF] text-[#007AFF] bg-[#007AFF]/10 animate-pulse'
+                        : 'border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 hover:border-zinc-400 dark:hover:border-zinc-600'
+                    }`}
+                  >
+                    {active ? t.settings.shortcutListening : shortcuts[action]}
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => resetShortcut(action)}
+                    aria-label={t.settings.shortcutReset}
+                    title={t.settings.shortcutReset}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {shortcutError && (
+          <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+            {shortcutError}
+          </p>
+        )}
+      </section>
     </motion.div>
   );
 };

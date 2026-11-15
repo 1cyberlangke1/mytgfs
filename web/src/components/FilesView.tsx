@@ -14,7 +14,6 @@ import {
   HardDrive,
   LayoutGrid,
   Link2,
-  Keyboard,
   List,
   Loader2,
   Pencil,
@@ -44,6 +43,7 @@ import {
   volumeDisplayName,
   sortFileItems,
 } from '../utils/fsLogic';
+import { matchesShortcut, SHORTCUT_ACTIONS, type ShortcutMap } from '../utils/shortcuts';
 import {
   Translations,
   formatDateTime,
@@ -120,6 +120,8 @@ interface FilesViewProps {
   onRefresh: () => Promise<void>;
   /** 按频道历史重建索引；nil 表示服务端不支持 */
   onRebuildVolume?: (volumeId: string) => Promise<void>;
+  /** 键盘快捷键映射（设置页可改） */
+  shortcuts: ShortcutMap;
 }
 
 // suggestVolumeName 按频道标题猜一个合法卷名。
@@ -235,6 +237,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onDeleteVolume,
   onRefresh,
   onRebuildVolume,
+  shortcuts,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dirInputRef = useRef<HTMLInputElement | null>(null);
@@ -250,8 +253,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
   const [showAttachVolume, setShowAttachVolume] = useState(false);
   const [attachForm, setAttachForm] = useState({ name: '', chatId: '' });
   const [attachFormError, setAttachFormError] = useState('');
-  // 快捷键说明弹窗
-  const [showShortcuts, setShowShortcuts] = useState(false);
   // 频道列表按需加载：只有打开弹窗并点「载入」时才连 Telegram
   const [channels, setChannels] = useState<
     { id: number; chat_id: number; title: string; username: string; creator: boolean; admin: boolean }[]
@@ -395,15 +396,16 @@ export const FilesView: React.FC<FilesViewProps> = ({
     handleFolderClick(currentDir?.parentId ?? null);
   };
 
-  // Esc 统一在 document 上监听：空目录里列表容器不渲染，挂在容器上就按不到。
+  // Esc（或用户自定义键）统一在 document 上监听：
+  // 空目录里列表容器不渲染，挂在容器上就按不到。
   //
   // 输入：键盘事件
   // 输出：无
   // 预期：先清选择，没有选择时返回上级目录；
-  //       输入框/下拉里的 Esc（清搜索）与已打开的 dialog 不抢
+  //       输入框/下拉里的同键（清搜索）与已打开的 dialog 不抢
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.defaultPrevented || !matchesShortcut(e, shortcuts.clearOrUp)) return;
       const tag = (e.target as HTMLElement | null)?.tagName ?? '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (document.querySelector('dialog[open]')) return;
@@ -420,7 +422,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
     return () => document.removeEventListener('keydown', onKey);
     // handleUpOneLevel 依赖 files/currentFolderId，直接把这些放进依赖里重新绑定
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, cursorId, currentFolderId, files]);
+  }, [selectedIds, cursorId, currentFolderId, files, shortcuts]);
 
   const toggleSelectOne = (id: string) => {
     setSelectedIds((prev) => {
@@ -497,15 +499,16 @@ export const FilesView: React.FC<FilesViewProps> = ({
     onMoveItems(ids, folderId);
   };
 
-  // handleListKeyDown 提供列表键盘操作：↑↓ 移动、空格勾选、Enter 打开、F2 改名、Delete 删除。
+  // handleListKeyDown 提供列表键盘操作：↑↓ 移动、勾选、打开、改名、删除。
   //
   // 输入：键盘事件；焦点在列表容器上
   // 输出：无（改选中集/游标/打开弹窗）
-  // 预期：Esc 由全局 keydown 统一处理；滚轮与鼠标操作不受影响
+  // 预期：具体键位来自设置页的 shortcuts；上下移动固定用方向键；
+  //       返回上级由全局 keydown 统一处理
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     const items = paginatedItems;
     if (items.length === 0) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    if (matchesShortcut(e, shortcuts.selectAll)) {
       e.preventDefault();
       setSelectedIds(new Set(items.map((i) => i.id)));
       return;
@@ -523,23 +526,23 @@ export const FilesView: React.FC<FilesViewProps> = ({
     }
     const current = items.find((i) => i.id === cursorId);
     if (!current) return;
-    if (e.key === ' ') {
+    if (matchesShortcut(e, shortcuts.toggleSelect)) {
       e.preventDefault();
       toggleSelectOne(current.id);
       return;
     }
-    if (e.key === 'Enter') {
+    if (matchesShortcut(e, shortcuts.open)) {
       e.preventDefault();
       if (current.isDir) handleFolderClick(current.id);
       else onPreviewFile(current);
       return;
     }
-    if (e.key === 'F2') {
+    if (matchesShortcut(e, shortcuts.rename)) {
       e.preventDefault();
       openEditModal(current);
       return;
     }
-    if (e.key === 'Delete') {
+    if (matchesShortcut(e, shortcuts.delete)) {
       e.preventDefault();
       setDeleteConfirmIds([current.id]);
     }
@@ -597,6 +600,17 @@ export const FilesView: React.FC<FilesViewProps> = ({
     }
     return <RichFileTypeEmblem category={item.category} size="sm" />;
   };
+
+  // ariaKeyShortcuts 把用户键位转成 aria-keyshortcuts 语法。
+  //
+  // 输入：shortcuts 映射
+  // 输出：空格分隔的键位串
+  // 预期：Ctrl 写成 ARIA 的 Control；方向键固定参与导航
+  const ariaKeyShortcuts = [
+    'ArrowUp',
+    'ArrowDown',
+    ...SHORTCUT_ACTIONS.map((action) => shortcuts[action].replace(/^Ctrl\+/, 'Control+')),
+  ].join(' ');
 
   return (
     <div
@@ -959,17 +973,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                   <LayoutGrid className="w-3.5 h-3.5" />
                 </motion.button>
               </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => setShowShortcuts(true)}
-                aria-label={t.files.shortcutsBtn}
-                title={t.files.shortcutsBtn}
-              >
-                <Keyboard className="w-4 h-4" />
-              </Button>
             </div>
           </div>
         </div>
@@ -1053,7 +1056,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
-            aria-keyshortcuts="ArrowUp ArrowDown Space Control+A Enter F2 Delete Escape"
+            aria-keyshortcuts={ariaKeyShortcuts}
             aria-label={t.files.colName}
             className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
           >
@@ -1173,7 +1176,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
             style={fileListSpringStyle}
             tabIndex={0}
             onKeyDown={handleListKeyDown}
-            aria-keyshortcuts="ArrowUp ArrowDown Space Control+A Enter F2 Delete Escape"
+            aria-keyshortcuts={ariaKeyShortcuts}
             aria-label={t.files.colName}
             className="will-change-transform outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-lg"
           >
@@ -1957,52 +1960,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 }}
               >
                 {t.files.rebuildConfirm}
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal 10: Keyboard Shortcuts */}
-      {showShortcuts && (
-        <Modal
-          onClose={() => setShowShortcuts(false)}
-          labelledBy="modal-shortcuts-title"
-          panelClassName="w-full max-w-md"
-        >
-          <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
-            <h3
-              id="modal-shortcuts-title"
-              className="text-base font-semibold text-zinc-950 dark:text-white"
-            >
-              {t.files.shortcutsTitle}
-            </h3>
-            <dl className="space-y-2">
-              {[
-                ['↑ / ↓', t.files.shortcutNavigate],
-                ['Space', t.files.shortcutSelect],
-                ['Ctrl+A', t.files.shortcutSelectAll],
-                ['Enter', t.files.shortcutOpen],
-                ['F2', t.files.shortcutRename],
-                ['Delete', t.files.shortcutDelete],
-                ['Esc', t.files.shortcutClose],
-              ].map(([keys, desc]) => (
-                <div key={keys} className="flex items-center justify-between gap-4 text-xs">
-                  <dt className="text-zinc-600 dark:text-zinc-400">{desc}</dt>
-                  <dd>
-                    <kbd
-                      dir="ltr"
-                      className="px-2 py-0.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 font-mono text-[11px] text-zinc-800 dark:text-zinc-200"
-                    >
-                      {keys}
-                    </kbd>
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <div className="flex items-center justify-end pt-2">
-              <Button type="button" variant="outline" onClick={() => setShowShortcuts(false)}>
-                {t.files.closeShortcuts}
               </Button>
             </div>
           </div>

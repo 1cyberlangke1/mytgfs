@@ -123,8 +123,6 @@
     "clearSearch": "Clear",
     "sortByLabel": "Sort",
     "pageSize": "Per page",
-    "shortcutsBtn": "Keyboard shortcuts",
-    "shortcutsTitle": "Keyboard shortcuts",
     "shortcutNavigate": "Move the cursor up or down",
     "shortcutSelect": "Toggle selection",
     "shortcutSelectAll": "Select every item on this page",
@@ -132,7 +130,6 @@
     "shortcutRename": "Rename",
     "shortcutDelete": "Delete selected items",
     "shortcutClose": "Clear selection / go up one folder",
-    "closeShortcuts": "Got it",
     "sortName": "Name",
     "sortSize": "Size",
     "sortTime": "Modified",
@@ -224,7 +221,13 @@
     "savedCard": "Saved",
     "autostartTitle": "Startup",
     "autostartLabel": "Start on login",
-    "autostartHint": "Runs in the tray right after you log in; turn it off to start it manually"
+    "autostartHint": "Runs in the tray right after you log in; turn it off to start it manually",
+    "shortcutsTitle": "Keyboard shortcuts",
+    "shortcutsHint": "Click a key, then press the new combo. Esc cancels; use the reset button to get Esc back",
+    "shortcutListening": "Press keys…",
+    "shortcutReset": "Reset",
+    "shortcutResetAll": "Reset all",
+    "shortcutConflict": "\"{key}\" is already used by {action}"
   },
   "settingSections": {
     "web": "Panel",
