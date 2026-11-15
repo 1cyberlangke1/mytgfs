@@ -76,9 +76,7 @@
     "connected": "Connected",
     "connecting": "Connecting",
     "reconnecting": "Reconnecting",
-    "invalid_credentials": "Auth Expired",
-    "simulateState": "State",
-    "retryNow": "Reconnect"
+    "invalid_credentials": "Auth Expired"
   },
   "indexState": {
     "normal": "Index Ready"
@@ -201,16 +199,7 @@
   },
   "settings": {
     "title": "Settings",
-    "panelPortLabel": "Port",
-    "syncIntervalLabel": "Auto Sync Interval (s)",
-    "downloadConnLabel": "Download Connections",
-    "uploadConcLabel": "Upload Concurrency",
-    "readChunkLabel": "Read Chunk Size",
-    "saveSettingsBtn": "Save Changes",
     "savingBtn": "Saving...",
-    "resetDefaultsBtn": "Reset",
-    "saveSuccessToast": "Settings saved",
-    "saveErrorPrefix": "Failed to save: ",
     "boolOn": "On",
     "boolOff": "Off",
     "invalidNumber": "{field} must be an integer",
@@ -281,10 +270,8 @@
     "chatIdInvalid": "Invalid channel id",
     "pickChannel": "Pick from your channels",
     "loadChannels": "Load channels",
-    "channelsLoading": "Reading channels…",
     "channelsEmpty": "No manageable channels found. Create one and add the bot as admin first.",
-    "channelsFailed": "Failed to read channels",
-    "chatIdFilled": "Filled channel {title}"
+    "channelsFailed": "Failed to read channels"
   },
   "account": {
     "title": "Account & sign-in",

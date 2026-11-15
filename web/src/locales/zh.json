@@ -76,9 +76,7 @@
     "connected": "已连接",
     "connecting": "连接中",
     "reconnecting": "重连中",
-    "invalid_credentials": "凭据失效",
-    "simulateState": "状态切换",
-    "retryNow": "立即重连"
+    "invalid_credentials": "凭据失效"
   },
   "indexState": {
     "normal": "索引正常"
@@ -201,16 +199,7 @@
   },
   "settings": {
     "title": "设置",
-    "panelPortLabel": "服务端口",
-    "syncIntervalLabel": "自动同步间隔 (秒)",
-    "downloadConnLabel": "下载连接数",
-    "uploadConcLabel": "上传并发数",
-    "readChunkLabel": "读取分块大小",
-    "saveSettingsBtn": "保存设置",
     "savingBtn": "保存中...",
-    "resetDefaultsBtn": "恢复默认",
-    "saveSuccessToast": "设置已保存",
-    "saveErrorPrefix": "保存失败：",
     "boolOn": "已开启",
     "boolOff": "已关闭",
     "invalidNumber": "{field} 必须是整数",
@@ -281,10 +270,8 @@
     "chatIdInvalid": "频道 id 不合法",
     "pickChannel": "从账号频道里选",
     "loadChannels": "载入频道列表",
-    "channelsLoading": "正在读取频道…",
     "channelsEmpty": "没有可管理的频道，先建好频道并把 bot 设为管理员",
-    "channelsFailed": "读取频道失败",
-    "chatIdFilled": "已填入频道 {title}"
+    "channelsFailed": "读取频道失败"
   },
   "account": {
     "title": "账号与登录",
