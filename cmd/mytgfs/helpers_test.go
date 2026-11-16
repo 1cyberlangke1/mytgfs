@@ -44,21 +44,6 @@ func TestVolPath(t *testing.T) {
 	}
 }
 
-// TestRemoteDir 远程目录与命令行路径同样的规范化规则。
-func TestRemoteDir(t *testing.T) {
-	cases := map[string]string{
-		"":           "/",
-		"batch":      "/batch",
-		`batch\sub`:  "/batch/sub",
-		"/batch/./x": "/batch/x",
-	}
-	for in, want := range cases {
-		if got := remoteDir(in); got != want {
-			t.Errorf("remoteDir(%q) = %q，期望 %q", in, got, want)
-		}
-	}
-}
-
 // TestVolumeByName 有 volumes 时按名字查，没有时退化成默认频道。
 func TestVolumeByName(t *testing.T) {
 	withVols := config.Config{Volumes: []config.Volume{

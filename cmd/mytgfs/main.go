@@ -30,6 +30,8 @@ func main() {
 		tgclient.SetDefaultProxy(cfg.Telegram.Proxy)
 	}
 	os.Args = append([]string{os.Args[0]}, stripJSONFlag(os.Args[1:])...)
+	// 相对路径的基准目录：--dir / MYTGFS_DIR，必须在子命令解析之前取走
+	os.Args = append([]string{os.Args[0]}, extractDirFlag(os.Args[1:])...)
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

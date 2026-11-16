@@ -93,7 +93,7 @@ func lsEntries(dir string, entries []fm.Entry) []lsEntry {
 
 // runLs 列出目录内容。
 //
-// 输入：--name 卷名；可选位置参数目录（默认 /）
+// 输入：--name 卷名；可选位置参数目录（默认 --dir / MYTGFS_DIR，再退到 /）
 // 输出：每行「类型 大小 修改时间 路径」；--json 输出 entries 数组（含 path）
 // 预期：目录不存在时报错退出 1
 func runLs(args []string) {
@@ -101,7 +101,7 @@ func runLs(args []string) {
 	name := fset.String("name", "", "volume name (default: first volume)")
 	_ = fset.Parse(args)
 
-	dir := "/"
+	dir := baseDir()
 	if fset.NArg() > 0 {
 		dir = volPath(fset.Arg(0))
 	}
@@ -255,13 +255,12 @@ func runGet(args []string) {
 
 // runSearch 按文件名递归搜索。
 //
-// 输入：--name 卷名；--dir 起始目录（默认 /）；--limit 上限（默认 100）；查询词
+// 输入：--name 卷名；--limit 上限（默认 100）；查询词；起始目录取 --dir / MYTGFS_DIR
 // 输出：每行「类型 大小 路径」；--json 输出 hits 数组
 // 预期：只匹配文件名子串，不读 Telegram，直接查本地索引
 func runSearch(args []string) {
 	fset := flag.NewFlagSet("search", flag.ExitOnError)
 	name := fset.String("name", "", "volume name (default: first volume)")
-	dir := fset.String("dir", "/", "start directory")
 	limit := fset.Int("limit", 100, "max hits")
 	_ = fset.Parse(args)
 	if fset.NArg() < 1 {
@@ -269,7 +268,7 @@ func runSearch(args []string) {
 		os.Exit(2)
 	}
 	query := fset.Arg(0)
-	start := volPath(*dir)
+	start := baseDir()
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
 		hits, err := f.Search(ctx, start, query, *limit)
 		if err != nil {

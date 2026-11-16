@@ -235,12 +235,3 @@ func collectPutItems(args []string, remoteBase string) ([]putItem, error) {
 	slices.SortFunc(items, func(a, b putItem) int { return cmp.Compare(a.remote, b.remote) })
 	return items, nil
 }
-
-// remoteDir 规范化远程目录，保证以 / 开头。
-func remoteDir(p string) string {
-	p = strings.ReplaceAll(p, `\`, "/")
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return path.Clean(p)
-}

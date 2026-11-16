@@ -176,18 +176,7 @@ func sameContent(dst, src index.Node) bool {
 	return src.Sha256 != "" && dst.Sha256 == src.Sha256 && dst.Size == src.Size
 }
 
-// volPath 把命令行路径规范成卷内绝对路径。
-//
-// 输入：用户写的路径（可带 Windows 分隔符）
-// 输出：以 / 开头的路径
-// 预期：反斜杠统一成正斜杠；相对写法补上前导 /
-func volPath(p string) string {
-	p = strings.ReplaceAll(p, `\`, "/")
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return path.Clean(p)
-}
+// volPath 见 pathbase.go：相对路径按 --dir / MYTGFS_DIR 拼接。
 
 // volumeByName 按卷名取频道 ID。
 //
