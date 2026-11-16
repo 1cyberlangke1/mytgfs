@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -114,11 +115,23 @@ func (c *thumbCache) load(vol, p, key string) []byte {
 
 // save 原子写入缓存；失败只影响下次重新生成。
 // 同路径的旧键文件顺手清掉：覆盖写不会留孤儿。
+//
+// 输入：vol 卷名；p 卷内路径；key 版本键；data JPEG 字节
+// 输出：无
+// 预期：目录创建或写盘失败时记 slog 告警后返回（下次请求重新生成即可）；
+//
+//	成功写入后清理同路径其它版本文件
 func (c *thumbCache) save(vol, p, key string, data []byte) {
 	volDir := c.volDir(vol)
-	_ = os.MkdirAll(volDir, 0o755)
+	if err := os.MkdirAll(volDir, 0o755); err != nil {
+		slog.Warn(i18n.T("log.thumb_cache_failed"), "vol", vol, "path", p, "err", err)
+		return
+	}
 	target := filepath.Join(volDir, pathHash(vol, p)+"-"+key+".jpg")
-	_ = atomic.WriteFile(target, bytes.NewReader(data))
+	if err := atomic.WriteFile(target, bytes.NewReader(data)); err != nil {
+		slog.Warn(i18n.T("log.thumb_cache_failed"), "vol", vol, "path", p, "err", err)
+		return
+	}
 	stale, _ := filepath.Glob(filepath.Join(volDir, pathHash(vol, p)+"-*.jpg"))
 	for _, f := range stale {
 		if f != target {

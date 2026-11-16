@@ -17,15 +17,29 @@ import (
 	"mytgfs/internal/vfs"
 )
 
-// fakeFiles 是只实现 List/Info/Open 的 fm.Files 假实现。
+// fakeFiles 是只实现必要方法的 fm.Files 假实现。
 //
-// 输入：tree 字段里的「目录路径 → 目录项」；info/data 用于单文件读取
-// 输出：List/Info/Open 按路径返回数据
-// 预期：其余方法不会被这些测试调用，直接 panic 暴露意外依赖
+// 输入：tree/info/data 提供读数据；mkdirs/removes/moves 记录写操作；
+// searchHits 作为 Search 返回值；failOn 按路径注入错误
+// 输出：读方法按路径返回数据；写方法把参数追加进记录切片
+// 预期：未被测试使用的方法仍然 panic，暴露意外依赖
 type fakeFiles struct {
-	tree map[string][]fm.Entry
-	info map[string]fm.Entry
-	data map[string][]byte
+	tree       map[string][]fm.Entry
+	info       map[string]fm.Entry
+	data       map[string][]byte
+	mkdirs     []string
+	removes    []string
+	moves      [][2]string
+	searchHits []fm.SearchHit
+	failOn     map[string]error
+}
+
+// errFor 返回某路径注入的错误；未配置时返回 nil。
+func (f *fakeFiles) errFor(p string) error {
+	if f.failOn == nil {
+		return nil
+	}
+	return f.failOn[p]
 }
 
 func (f *fakeFiles) List(_ context.Context, dir string) ([]fm.Entry, error) {
@@ -33,10 +47,13 @@ func (f *fakeFiles) List(_ context.Context, dir string) ([]fm.Entry, error) {
 }
 
 func (f *fakeFiles) Search(context.Context, string, string, int) ([]fm.SearchHit, error) {
-	panic("unexpected Search")
+	return f.searchHits, nil
 }
 
 func (f *fakeFiles) Info(_ context.Context, p string) (fm.Entry, error) {
+	if err := f.errFor(p); err != nil {
+		return fm.Entry{}, err
+	}
 	e, ok := f.info[p]
 	if !ok {
 		return fm.Entry{}, os.ErrNotExist
@@ -44,7 +61,13 @@ func (f *fakeFiles) Info(_ context.Context, p string) (fm.Entry, error) {
 	return e, nil
 }
 
-func (f *fakeFiles) Mkdir(context.Context, string) error { panic("unexpected Mkdir") }
+func (f *fakeFiles) Mkdir(_ context.Context, p string) error {
+	if err := f.errFor(p); err != nil {
+		return err
+	}
+	f.mkdirs = append(f.mkdirs, p)
+	return nil
+}
 
 func (f *fakeFiles) Upload(context.Context, string, io.Reader) error { panic("unexpected Upload") }
 
@@ -52,9 +75,24 @@ func (f *fakeFiles) AdoptUpload(context.Context, string, string, int64, string) 
 	panic("unexpected AdoptUpload")
 }
 
-func (f *fakeFiles) Remove(context.Context, string) error { panic("unexpected Remove") }
+func (f *fakeFiles) Remove(_ context.Context, p string) error {
+	if err := f.errFor(p); err != nil {
+		return err
+	}
+	f.removes = append(f.removes, p)
+	return nil
+}
 
-func (f *fakeFiles) Move(context.Context, string, string) error { panic("unexpected Move") }
+func (f *fakeFiles) Move(_ context.Context, from, to string) error {
+	if err := f.errFor(from); err != nil {
+		return err
+	}
+	if err := f.errFor(to); err != nil {
+		return err
+	}
+	f.moves = append(f.moves, [2]string{from, to})
+	return nil
+}
 
 func (f *fakeFiles) Open(_ context.Context, p string) (vfs.File, error) {
 	b, ok := f.data[p]

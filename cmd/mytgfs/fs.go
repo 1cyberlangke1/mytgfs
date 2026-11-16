@@ -194,15 +194,45 @@ func runRm(args []string) {
 		targets = append(targets, volPath(a))
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
-		for _, target := range targets {
-			if err := f.Remove(ctx, target); err != nil {
-				return err
-			}
+		removed, err := removeTargets(ctx, f, targets)
+		for _, target := range removed {
 			ui.Printf("RM %s:%s\n", vol, target)
 		}
-		ui.Print(map[string]any{"volume": vol, "removed": targets})
+		if err != nil {
+			return err
+		}
+		ui.Print(map[string]any{"volume": vol, "removed": removed})
 		return nil
 	})
+}
+
+// removeTargets 依次删除远端路径，返回已成功删除的部分。
+//
+// 输入：ctx；f 文件接口；targets 卷内路径
+// 输出：成功删除的路径（保持输入顺序）；首个失败的错误
+// 预期：遇错立刻停止，已删项留在返回列表里，调用方可如实上报
+func removeTargets(ctx context.Context, f fm.Files, targets []string) ([]string, error) {
+	removed := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if err := f.Remove(ctx, target); err != nil {
+			return removed, err
+		}
+		removed = append(removed, target)
+	}
+	return removed, nil
+}
+
+// moveTarget 解析 mv 的目标路径。
+//
+// 输入：arg 用户输入的目标参数；from 已规范化的源路径
+// 输出：卷内目标路径
+// 预期：尾随 / 或 \ 时按目录处理，补上源文件名；只做词法拼接，不访问远端
+func moveTarget(arg, from string) string {
+	to := volPath(arg)
+	if strings.HasSuffix(arg, "/") || strings.HasSuffix(arg, `\`) {
+		return path.Join(to, path.Base(from))
+	}
+	return to
 }
 
 // runMv 移动或改名。
@@ -219,11 +249,7 @@ func runMv(args []string) {
 		os.Exit(2)
 	}
 	from := volPath(fset.Arg(0))
-	to := volPath(fset.Arg(1))
-	// 目标以 / 结尾时按目录理解，补上源文件名
-	if strings.HasSuffix(fset.Arg(1), "/") || strings.HasSuffix(fset.Arg(1), `\`) {
-		to = path.Join(to, path.Base(from))
-	}
+	to := moveTarget(fset.Arg(1), from)
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
 		if err := f.Move(ctx, from, to); err != nil {
 			return err

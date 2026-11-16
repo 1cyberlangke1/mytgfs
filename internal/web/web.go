@@ -8,6 +8,7 @@ package web
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/fm"
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/push"
 )
 
@@ -111,7 +113,9 @@ func NewHandler(configPath string, opts Options) http.Handler {
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
 	srv := &http.Server{Addr: addr, Handler: NewHandler(configPath, opts)}
 	context.AfterFunc(ctx, func() {
-		_ = srv.Shutdown(context.Background())
+		if err := srv.Shutdown(context.Background()); err != nil {
+			slog.Warn(i18n.T("log.web_shutdown_failed"), "err", err)
+		}
 	})
 	err := srv.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {

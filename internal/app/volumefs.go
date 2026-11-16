@@ -4,12 +4,14 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"strconv"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/fm"
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/push"
@@ -164,7 +166,9 @@ func (v *VolumeFS) VideoThumb(ctx context.Context, path string) ([]byte, string,
 	if terr == nil && len(data) > 0 {
 		// 回源成功顺手入库：下次也零请求
 		n.Thumb = data
-		_ = v.Index.PutNode(ctx, n)
+		if err := v.Index.PutNode(ctx, n); err != nil {
+			slog.Warn(i18n.T("log.thumb_index_failed"), "path", path, "err", err)
+		}
 	}
 	return data, strconv.Itoa(n.ID), terr
 }

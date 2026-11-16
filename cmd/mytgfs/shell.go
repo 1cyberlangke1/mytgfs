@@ -330,7 +330,7 @@ func (sh *shell) cat(args []string) error {
 		return usageErr("cat <路径...>")
 	}
 	for _, a := range args {
-		if err := catOne(sh.ctx, sh.f, sh.resolve(a)); err != nil {
+		if err := catOne(sh.ctx, sh.f, sh.resolve(a), sh.out); err != nil {
 			return err
 		}
 	}

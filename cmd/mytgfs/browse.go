@@ -218,26 +218,35 @@ func runCat(args []string) {
 		targets = append(targets, volPath(a))
 	}
 	withFiles(*name, func(ctx context.Context, _ string, f fm.Files) error {
-		for _, p := range targets {
-			if err := catOne(ctx, f, p); err != nil {
-				return err
-			}
-		}
-		return nil
+		return catAll(ctx, f, targets, os.Stdout)
 	})
+}
+
+// catAll 按参数顺序把多个远端文件写到 w。
+//
+// 输入：ctx；f 文件接口；targets 卷内路径；w 输出目标
+// 输出：首个失败的错误
+// 预期：遇错立即停止；已写出的内容保持原样，不做回滚
+func catAll(ctx context.Context, f fm.Files, targets []string, w io.Writer) error {
+	for _, p := range targets {
+		if err := catOne(ctx, f, p, w); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // catOne 输出单个文件内容。
 //
-// 输入：ctx；f 文件接口；p 远端路径
-// 输出：内容写到标准输出
+// 输入：ctx；f 文件接口；p 远端路径；w 输出目标
+// 输出：内容写到 w
 // 预期：复制或关闭失败都上报；不缓冲整份内容
-func catOne(ctx context.Context, f fm.Files, p string) error {
+func catOne(ctx context.Context, f fm.Files, p string, w io.Writer) error {
 	rf, err := f.Open(ctx, p)
 	if err != nil {
 		return err
 	}
-	_, cerr := io.Copy(os.Stdout, rf)
+	_, cerr := io.Copy(w, rf)
 	if err := rf.Close(); err != nil && cerr == nil {
 		return err
 	}
