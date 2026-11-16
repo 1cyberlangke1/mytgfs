@@ -28,6 +28,8 @@ type fakeAPI struct {
 	getMessages  []*tg.ChannelsGetMessagesRequest
 	editTitles   []*tg.ChannelsEditTitleRequest
 	editTitleErr error
+	// sendErrs 按调用顺序消费 sendMedia 的错误，用完后回落到 sendErr
+	sendErrs []error
 
 	// texts 保存当前「频道」里的文本消息正文，供节点用例读写回放。
 	texts map[int]string
@@ -96,6 +98,13 @@ func (f *fakeAPI) docMessage(id int, size int64) tg.UpdatesClass {
 
 func (f *fakeAPI) MessagesSendMedia(_ context.Context, req *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 	f.sendMedia = append(f.sendMedia, req)
+	if len(f.sendErrs) > 0 {
+		e := f.sendErrs[0]
+		f.sendErrs = f.sendErrs[1:]
+		if e != nil {
+			return nil, e
+		}
+	}
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}

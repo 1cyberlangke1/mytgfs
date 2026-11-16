@@ -116,6 +116,26 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 	if err != nil {
 		return nil, err
 	}
+	part, err := s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
+	if err == nil || !IsChannelUnavailable(err) {
+		return part, err
+	}
+	// 本地缓存的 access_hash 可能过期（频道迁移、换 bot 账号）：
+	// 清缓存重新解析后重试一次，第二次仍失败再把错误交给上层
+	s.dropChannel()
+	ch, rerr := s.resolve(ctx)
+	if rerr != nil {
+		return nil, err
+	}
+	return s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
+}
+
+// uploadOnce 用给定的频道信息跑一次完整上传。
+//
+// 输入：ch 已解析的频道；r/size/key/name/mime/caption 文件与断点信息；o 上传选项
+// 输出：上传好的 Part；失败返回原始错误
+// 预期：分片走断点续传；服务端临时区失效时清断点整份重传一次
+func (s *Store) uploadOnce(ctx context.Context, ch *tg.Channel, r io.ReaderAt, size int64, key, name, mime, caption string, o uploadOpts) (*Part, error) {
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
 
 	partSize := uploadPartSizeFor(size)

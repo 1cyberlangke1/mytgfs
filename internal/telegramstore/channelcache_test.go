@@ -3,8 +3,11 @@ package telegramstore
 // 频道 access_hash 缓存：命中不发 RPC、未命中写回、失效清掉、标题仍回源。
 
 import (
+	"bytes"
 	"context"
 	"testing"
+
+	"github.com/gotd/td/tgerr"
 )
 
 // fakeChannelCache 记录读写删，供用例断言。
@@ -96,5 +99,34 @@ func TestTitleRefetchesWhenOnlyHashCached(t *testing.T) {
 	}
 	if api.channelCalls != 1 {
 		t.Fatalf("getChannels 调用 %d 次，期望 1", api.channelCalls)
+	}
+}
+
+// TestUploadRetriesAfterChannelInvalid access_hash 失效时清缓存重解析并重试一次。
+//
+// 输入：sendMedia 第一次返回 CHANNEL_INVALID，第二次成功
+// 输出：上传成功；getChannels 被重新调用一次
+// 预期：只重试一次，不会无限循环
+func TestUploadRetriesAfterChannelInvalid(t *testing.T) {
+	api := &fakeAPI{
+		channelTitle: "盘",
+		uploadSize:   4,
+		sendErrs:     []error{tgerr.New(400, "CHANNEL_INVALID")},
+	}
+	st := New(api, 42)
+	data := []byte("abcd")
+	part, err := st.UploadResumable(t.Context(), bytes.NewReader(data), int64(len(data)),
+		"k", "a.bin", "application/octet-stream", "")
+	if err != nil {
+		t.Fatalf("重试后应成功，实际 %v", err)
+	}
+	if part == nil {
+		t.Fatal("part 为空")
+	}
+	if len(api.sendMedia) != 2 {
+		t.Fatalf("sendMedia 调用 %d 次，期望 2", len(api.sendMedia))
+	}
+	if api.channelCalls < 2 {
+		t.Fatalf("getChannels 调用 %d 次，期望失效后重新解析", api.channelCalls)
 	}
 }
