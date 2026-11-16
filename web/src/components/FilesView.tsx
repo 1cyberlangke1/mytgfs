@@ -10,8 +10,6 @@ import {
   Download,
   Eye,
   FolderPlus,
-  FolderUp,
-  FileText,
   HardDrive,
   LayoutGrid,
   Link2,
@@ -21,7 +19,6 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -51,6 +48,7 @@ import {
 } from '../utils/shortcuts';
 import { collectDroppedFiles } from '../utils/dropEntries';
 import { sourcesFromFiles, type UploadSource } from '../utils/uploadPlan';
+import { UploadMenu } from './UploadMenu';
 import {
   Translations,
   formatDateTime,
@@ -110,6 +108,8 @@ interface FilesViewProps {
   onUploadSources: (sources: UploadSource[], volumeId: string, parentId: string | null) => void;
   /** 打开「新建文本」弹窗 */
   onNewTextFile: () => void;
+  /** 读取系统剪贴板并上传（图片/文件）或预填文本 */
+  onPasteClipboard: () => void;
   /** 非阻塞错误提示（拖拽读取失败等），由 App 转成 toast */
   onNotifyError: (msg: string) => void;
   onCreateFolder: (volumeId: string, parentId: string | null, name: string) => void;
@@ -195,6 +195,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
   connectionStatus,
   onUploadSources,
   onNewTextFile,
+  onPasteClipboard,
   onNotifyError,
   onCreateFolder,
   onRenameMoveItem,
@@ -911,36 +912,13 @@ export const FilesView: React.FC<FilesViewProps> = ({
               </Button>
 
             <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                variant="accent"
-                size="icon"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label={t.files.uploadFileHint}
-                title={t.files.uploadFileHint}
-              >
-                <Upload className="w-4 h-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => dirInputRef.current?.click()}
-                aria-label={t.files.uploadDirBtn}
-                title={t.files.uploadDirBtn}
-              >
-                <FolderUp className="w-4 h-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={onNewTextFile}
-                aria-label={t.files.newTextBtn}
-                title={t.files.newTextBtn}
-              >
-                <FileText className="w-4 h-4" />
-              </Button>
+              <UploadMenu
+                t={t}
+                onPickFile={() => fileInputRef.current?.click()}
+                onPickFolder={() => dirInputRef.current?.click()}
+                onNewText={onNewTextFile}
+                onPasteClipboard={onPasteClipboard}
+              />
               <Button
                 type="button"
                 variant="outline"

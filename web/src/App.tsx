@@ -93,7 +93,7 @@ import { AppSidebar } from './components/AppSidebar';
 import { PhoneTabBar, PhoneTopBar } from './components/PhoneChrome';
 import { makeVideoPoster } from './utils/poster';
 import { sourcesFromFiles, stageSources, toTransferTasks, type StagedUpload, type UploadSource } from './utils/uploadPlan';
-import { extractPasteContent, isEditableTarget } from './utils/paste';
+import { extractPasteContent, isEditableTarget, readClipboardContent } from './utils/paste';
 
 // 按页签懒加载：首屏只带壳与概览之外的公共部分，切换页签时再取对应 chunk。
 // 输入：无；输出：React.lazy 组件；预期：vite 按动态 import 自动分包，首包体积下降。
@@ -1206,6 +1206,32 @@ export default function App() {
     handleUploadSources([{ file, rel: '' }], activeVolumeId, currentFolderId);
   };
 
+  // handleClipboardUpload 直接读系统剪贴板，不要求用户先点中页面再按 Ctrl+V。
+  //
+  // 输入：无
+  // 输出：无
+  // 预期：图片/文件进上传清单，纯文本打开新建文本并预填；
+  //       浏览器不支持或用户拒绝授权时提示改用 Ctrl+V，剪贴板为空也不静默
+  const handleClipboardUpload = async () => {
+    try {
+      const { files, text, blockedFileList } = await readClipboardContent();
+      if (files.length > 0) {
+        handleUploadSources(files, activeVolumeId, currentFolderId);
+        return;
+      }
+      if (text.trim().length > 0) {
+        setTextDraft({ initial: text });
+        return;
+      }
+      pushToast(
+        blockedFileList ? tRef.current.files.clipboardFileList : tRef.current.files.clipboardEmpty,
+        'error'
+      );
+    } catch {
+      pushToast(tRef.current.files.clipboardDenied, 'error');
+    }
+  };
+
   // 文件页的粘贴入口：文件进上传清单，纯文本开「新建文本」预填。
   // 焦点在输入控件里时放行原生粘贴，不抢用户正在输入的内容。
   useEffect(() => {
@@ -1712,6 +1738,7 @@ export default function App() {
                 connectionStatus={connectionStatus}
                 onUploadSources={handleUploadSources}
                 onNewTextFile={() => setTextDraft({ initial: '' })}
+                onPasteClipboard={() => void handleClipboardUpload()}
                 onNotifyError={(msg) => pushToast(msg, 'error')}
                 onCreateFolder={handleCreateFolder}
                 onRenameMoveItem={handleRenameMoveItem}

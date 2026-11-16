@@ -188,3 +188,42 @@ mark.hit {
   content-visibility: auto;
   contain-intrinsic-size: auto 64px;
 }
+
+/* 上传菜单：原生 popover 承载，位置由脚本算好后写入 left/top */
+.upload-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+/* 定位完成前不渲染，避免出现一帧停在默认位置的菜单 */
+.upload-menu[data-placed='false'] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .upload-menu {
+    opacity: 0;
+    translate: 0 -0.25rem;
+    transition: opacity, translate, display, overlay;
+    transition-duration: 0.15s;
+    transition-behavior: allow-discrete;
+  }
+
+  .upload-menu:popover-open {
+    opacity: 1;
+    translate: 0 0;
+    transition-duration: 0.1s;
+  }
+}
+
+@starting-style {
+  .upload-menu:popover-open {
+    opacity: 0;
+    translate: 0 -0.25rem;
+  }
+}

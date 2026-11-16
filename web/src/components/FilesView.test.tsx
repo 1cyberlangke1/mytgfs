@@ -108,6 +108,7 @@ function renderView(): Handlers {
       connectionStatus="connected"
       onUploadSources={vi.fn()}
       onNewTextFile={vi.fn()}
+      onPasteClipboard={vi.fn()}
       onNotifyError={vi.fn()}
       onCreateFolder={vi.fn()}
       onRenameMoveItem={onRenameMoveItem}

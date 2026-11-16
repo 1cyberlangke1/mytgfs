@@ -1,7 +1,7 @@
-import React, { useId, useState } from 'react';
-import { X } from 'lucide-react';
+import React, { useEffect, useId, useState } from 'react';
+import { File as FileIcon, X } from 'lucide-react';
 import type { Locale } from '../types';
-import { formatBytes } from '../utils/fsLogic';
+import { formatBytes, inferFileCategory } from '../utils/fsLogic';
 import { Translations, interpolate } from '../utils/i18n';
 import {
   keptStaged,
@@ -25,6 +25,39 @@ export interface UploadPlanDialogProps {
   items: StagedUpload[];
   onConfirm: (kept: StagedUpload[]) => void;
   onCancel: () => void;
+}
+
+/**
+ * PlanThumb 渲染清单左侧的预览格。
+ *
+ * 输入：file 待上传文件
+ * 输出：图片显示缩略图，其它类型显示通用文件图标
+ * 预期：剪贴板粘贴进来的图片名字是 pasted-<时间戳>.png，光看名字认不出，
+ *       缩略图让用户确认要传的到底是哪张图；对象 URL 随卸载释放
+ */
+function PlanThumb({ file }: { file: File }) {
+  const isImage = inferFileCategory(file.name, false) === 'image';
+  const [url, setUrl] = useState('');
+
+  useEffect(() => {
+    if (!isImage) {
+      setUrl('');
+      return;
+    }
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file, isImage]);
+
+  return (
+    <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-zinc-100 dark:bg-zinc-800">
+      {url ? (
+        <img src={url} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <FileIcon className="h-4 w-4 text-zinc-400 dark:text-zinc-500" aria-hidden="true" />
+      )}
+    </span>
+  );
 }
 
 /**
@@ -87,6 +120,7 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
               const path = stagedDisplayPath(item);
               return (
                 <li key={item.id} className="flex items-center gap-3 py-2">
+                  <PlanThumb file={item.file} />
                   <div className="min-w-0 flex-1">
                     <p
                       className="truncate text-sm text-zinc-900 dark:text-zinc-100"
