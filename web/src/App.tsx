@@ -81,6 +81,8 @@ import {
   uploadPoster,
 } from './api';
 import { AccountCard } from './components/AccountCard';
+import { TextFileDialog } from './components/TextFileDialog';
+import { UploadPlanDialog } from './components/UploadPlanDialog';
 import { ProblemBanner } from './components/ProblemBanner';
 import { ToastStack, type ToastMessage } from './components/ToastStack';
 import {
@@ -90,6 +92,8 @@ import { WindowCustomScrollbar } from './components/CustomScrollbar';
 import { AppSidebar } from './components/AppSidebar';
 import { PhoneTabBar, PhoneTopBar } from './components/PhoneChrome';
 import { makeVideoPoster } from './utils/poster';
+import { sourcesFromFiles, stageSources, toTransferTasks, type StagedUpload, type UploadSource } from './utils/uploadPlan';
+import { extractPasteContent, isEditableTarget } from './utils/paste';
 
 // 按页签懒加载：首屏只带壳与概览之外的公共部分，切换页签时再取对应 chunk。
 // 输入：无；输出：React.lazy 组件；预期：vite 按动态 import 自动分包，首包体积下降。
@@ -446,6 +450,10 @@ export default function App() {
   //       骨架屏只服务首次加载，刷新时不再插进来闪一下
   const filesLoadedRef = useRef(false);
   const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
+  // stagedUploads 是「已选好、还没开始传」的清单：确认前不发任何请求
+  const [stagedUploads, setStagedUploads] = useState<StagedUpload[]>([]);
+  // textDraft 非空时打开「新建文本」弹窗，initial 可来自剪贴板的纯文本
+  const [textDraft, setTextDraft] = useState<{ initial: string } | null>(null);
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
   const [serverQueue, setServerQueue] = useState<TransferTask[]>([]);
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
@@ -1113,12 +1121,22 @@ export default function App() {
     }
   };
 
-  const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
-    const incoming = Array.from(fileList);
-    if (incoming.length === 0) return;
-    // 上传前预检：单个文件不合格只跳过它，其余照常上传，
+  // handleUploadSources 把一批来源放进「上传前清单」，不立刻开始传。
+  //
+  // 输入：sources 文件与相对路径；volumeId 目标卷；parentId 目标目录
+  // 输出：无
+  // 预期：
+  //   - 预检不通过的文件单独提示并跳过，其余照常进清单
+  //   - 确认前不发 /api/upload/init，用户移除的文件不会留下任何痕迹
+  //   - 清单已打开时继续追加（再拖一批/再粘一张），不重开弹窗
+  const handleUploadSources = (
+    sources: UploadSource[],
+    volumeId: string,
+    parentId: string | null
+  ) => {
+    // 上传前预检：单个文件不合格只跳过它，其余照常进清单，
     // 不因为一个超大文件把整批都丢掉（跳过哪些要明说）
-    const accepted = incoming.filter((file) => {
+    const accepted = sources.filter(({ file }) => {
       const verdict = validateAndPlanUpload(file.name, file.size);
       if (verdict.valid) return true;
       pushToast(
@@ -1130,41 +1148,39 @@ export default function App() {
       return false;
     });
     if (accepted.length === 0) return;
-    // 文件夹上传由 input[webkitdirectory] 提供相对路径；普通选择时为空
-    const rels = accepted.map(
-      (file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
-    );
-    // 同一次选择上传的文件共享批次号，概览页据此显示整批总进度
+    setStagedUploads((prev) => [...prev, ...stageSources(accepted, volumeId, parentId)]);
+  };
+
+  // handleUploadFiles 是 input[file] / input[webkitdirectory] 的入口。
+  //
+  // 输入：浏览器给的文件列表
+  // 输出：无
+  // 预期：目录选择时把 webkitRelativePath 原样带进清单
+  const handleUploadFiles = (fileList: FileList, volumeId: string, parentId: string | null) => {
+    handleUploadSources(sourcesFromFiles(fileList), volumeId, parentId);
+  };
+
+  // handleConfirmUpload 把确认后的草稿转成真正的上传任务。
+  //
+  // 输入：kept 清单里留下的草稿项
+  // 输出：无
+  // 预期：先清空清单再入队；与旧实现共用 uploadInputs / uploadQueue，
+  //       并发上限、批次号与断点续传行为完全不变
+  const handleConfirmUpload = (kept: StagedUpload[]) => {
+    setStagedUploads([]);
+    if (kept.length === 0) return;
+    // 同一次确认的文件共享批次号，概览页据此显示整批总进度
     const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const plan = accepted.map((file, index) => {
-      const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const task: TransferTask = {
-        id,
-        fileName: file.name,
-        volumeId,
-        targetParentId: parentId,
-        direction: 'upload',
-        size: file.size,
-        transferredBytes: 0,
-        state: 'queued',
-        speedBps: 0,
-        isChunkedResume: false,
-        chunkSize: 0,
-        currentChunk: 0,
-        totalChunks: 1,
-        createdAt: new Date().toISOString(),
-        category: inferFileCategory(file.name, false),
-        opKind: 'upload',
-        batchId,
-      };
-      uploadInputs.current.set(id, {
-        file,
-        volumeId,
-        parentId,
-        rel: rels[index] ?? '',
+    const plan = toTransferTasks(kept, batchId);
+    kept.forEach((item, index) => {
+      const task = plan[index]!;
+      uploadInputs.current.set(task.id, {
+        file: item.file,
+        volumeId: item.volumeId,
+        parentId: item.parentId,
+        rel: item.rel,
         task,
       });
-      return task;
     });
     // 最新的任务排在最上面，与操作队列显示顺序一致
     setUploadTasks((prev) => [...plan, ...prev]);
@@ -1175,6 +1191,39 @@ export default function App() {
     uploadQueue.current.push(...plan.map((task) => task.id));
     pumpUploads();
   };
+
+  // handleCancelUploadPlan 放弃整批草稿：清单清空，服务端什么都不知道。
+  const handleCancelUploadPlan = () => setStagedUploads([]);
+
+  // handleTextFileSave 把新建文本包成普通 File，走同一条上传清单。
+  //
+  // 输入：name 文件名；text 正文
+  // 输出：无
+  // 预期：正文为空时按钮已被弹窗拦住，后端不会收到 size=0 的会话
+  const handleTextFileSave = (name: string, text: string) => {
+    setTextDraft(null);
+    const file = new File([text], name, { type: 'text/plain;charset=utf-8' });
+    handleUploadSources([{ file, rel: '' }], activeVolumeId, currentFolderId);
+  };
+
+  // 文件页的粘贴入口：文件进上传清单，纯文本开「新建文本」预填。
+  // 焦点在输入控件里时放行原生粘贴，不抢用户正在输入的内容。
+  useEffect(() => {
+    if (activeTab !== 'files') return;
+    const onPaste = (e: ClipboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      const { files, text } = extractPasteContent(e.clipboardData);
+      if (files.length === 0 && !text) return;
+      e.preventDefault();
+      if (files.length > 0) {
+        handleUploadSources(files, activeVolumeId, currentFolderId);
+        return;
+      }
+      setTextDraft({ initial: text });
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [activeTab, activeVolumeId, currentFolderId]);
 
   const handleToggleTransferPause = (taskId: string) => {
     const task = uploadTasks.find((tr) => tr.id === taskId);
@@ -1661,7 +1710,9 @@ export default function App() {
                 files={files}
                 loading={filesLoading}
                 connectionStatus={connectionStatus}
-                onUploadFiles={handleUploadFiles}
+                onUploadSources={handleUploadSources}
+                onNewTextFile={() => setTextDraft({ initial: '' })}
+                onNotifyError={(msg) => pushToast(msg, 'error')}
                 onCreateFolder={handleCreateFolder}
                 onRenameMoveItem={handleRenameMoveItem}
                 onBatchMoveItems={handleBatchMoveItems}
@@ -1751,6 +1802,27 @@ export default function App() {
         actionLabel={t.downloads.openBtn}
       />
       </Suspense>
+
+      {/* 上传前清单：确认之前不发任何请求，移除的文件直接作废 */}
+      {stagedUploads.length > 0 && (
+        <UploadPlanDialog
+          t={t}
+          locale={locale}
+          items={stagedUploads}
+          onConfirm={handleConfirmUpload}
+          onCancel={handleCancelUploadPlan}
+        />
+      )}
+
+      {/* 新建文本：保存后走普通上传清单 */}
+      {textDraft !== null && (
+        <TextFileDialog
+          t={t}
+          initialText={textDraft.initial}
+          onSave={handleTextFileSave}
+          onClose={() => setTextDraft(null)}
+        />
+      )}
 
       {/* iOS Dynamic Toast Notification Stack */}
       <ToastStack

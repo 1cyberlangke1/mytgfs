@@ -106,7 +106,9 @@ function renderView(): Handlers {
       files={FILES}
       loading={false}
       connectionStatus="connected"
-      onUploadFiles={vi.fn()}
+      onUploadSources={vi.fn()}
+      onNewTextFile={vi.fn()}
+      onNotifyError={vi.fn()}
       onCreateFolder={vi.fn()}
       onRenameMoveItem={onRenameMoveItem}
       onBatchMoveItems={onBatchMoveItems}

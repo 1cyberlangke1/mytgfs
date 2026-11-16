@@ -11,6 +11,7 @@ import {
   Eye,
   FolderPlus,
   FolderUp,
+  FileText,
   HardDrive,
   LayoutGrid,
   Link2,
@@ -48,6 +49,8 @@ import {
   SHORTCUT_ACTIONS,
   type ShortcutMap,
 } from '../utils/shortcuts';
+import { collectDroppedFiles } from '../utils/dropEntries';
+import { sourcesFromFiles, type UploadSource } from '../utils/uploadPlan';
 import {
   Translations,
   formatDateTime,
@@ -103,7 +106,12 @@ interface FilesViewProps {
   /** 首次加载中：目录为空时显示骨架而不是「空目录」 */
   loading?: boolean;
   connectionStatus: ConnectionStatus;
-  onUploadFiles: (fileList: FileList, volumeId: string, parentId: string | null) => void;
+  /** 统一入口：文件/文件夹/拖拽/剪贴板/新建文本都进同一份上传清单 */
+  onUploadSources: (sources: UploadSource[], volumeId: string, parentId: string | null) => void;
+  /** 打开「新建文本」弹窗 */
+  onNewTextFile: () => void;
+  /** 非阻塞错误提示（拖拽读取失败等），由 App 转成 toast */
+  onNotifyError: (msg: string) => void;
   onCreateFolder: (volumeId: string, parentId: string | null, name: string) => void;
   onRenameMoveItem: (itemId: string, newName: string, targetParentId: string | null) => void;
   onBatchMoveItems: (itemIds: string[], targetParentId: string | null) => void;
@@ -185,7 +193,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
   files,
   loading,
   connectionStatus,
-  onUploadFiles,
+  onUploadSources,
+  onNewTextFile,
+  onNotifyError,
   onCreateFolder,
   onRenameMoveItem,
   onBatchMoveItems,
@@ -447,16 +457,26 @@ export const FilesView: React.FC<FilesViewProps> = ({
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onUploadFiles(e.target.files, activeVolumeId, currentFolderId);
+      // 目录选择靠 webkitRelativePath 保留层级；清空 value 以便重复选同一批文件
+      onUploadSources(sourcesFromFiles(e.target.files), activeVolumeId, currentFolderId);
       e.target.value = '';
     }
   };
 
+  // handleDrop 处理从系统拖进来的文件或文件夹。
+  //
+  // 输入：容器 drag/drop 事件
+  // 输出：无
+  // 预期：站内拖拽（带私有 MIME）交给文件夹移动逻辑，不当成上传；
+  //       外部拖入的目录用 webkitGetAsEntry 递归展开后再进上传清单
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer.types.includes(DRAG_MIME)) return;
     e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onUploadFiles(e.dataTransfer.files, activeVolumeId, currentFolderId);
-    }
+    void collectDroppedFiles(e.dataTransfer)
+      .then((sources) => {
+        if (sources.length > 0) onUploadSources(sources, activeVolumeId, currentFolderId);
+      })
+      .catch(() => onNotifyError(t.files.dropReadFailed));
   };
 
   // ---- 站内拖拽移动 ----
@@ -910,6 +930,16 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 title={t.files.uploadDirBtn}
               >
                 <FolderUp className="w-4 h-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={onNewTextFile}
+                aria-label={t.files.newTextBtn}
+                title={t.files.newTextBtn}
+              >
+                <FileText className="w-4 h-4" />
               </Button>
               <Button
                 type="button"
