@@ -218,7 +218,7 @@ export function UploadMenu({
         type="button"
         variant="accent"
         size="icon"
-        className="w-9 gap-0.5"
+        className="h-8 w-12 gap-1.5"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t.files.uploadMenuLabel}
@@ -228,7 +228,7 @@ export function UploadMenu({
         onKeyDown={onTriggerKeyDown}
       >
         <Upload className="h-4 w-4" aria-hidden="true" />
-        <ChevronDown className="h-2.5 w-2.5 opacity-75" aria-hidden="true" />
+        <ChevronDown className="h-3.5 w-3.5 opacity-90" strokeWidth={2.5} aria-hidden="true" />
       </Button>
 
       <div ref={menuRef} id={menuId} popover="auto" className="upload-menu">
@@ -239,6 +239,14 @@ export function UploadMenu({
           onKeyDown={onMenuKeyDown}
           className="w-52 rounded-xl border border-zinc-200/90 bg-white p-1 shadow-xl shadow-zinc-950/10 dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-black/40"
         >
+          {/* 面板顶部先说明单文件上限，不用等提交才报错 */}
+          <p
+            id={hintId}
+            className="px-2.5 pb-1.5 pt-1 text-[11px] leading-tight text-zinc-400 dark:text-zinc-500"
+          >
+            {t.files.uploadMaxHint}
+          </p>
+
           <button
             type="button"
             data-menu-item
@@ -260,14 +268,6 @@ export function UploadMenu({
             <FolderUp className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
             <span className="truncate">{t.files.uploadDirBtn}</span>
           </button>
-
-          {/* 选择前就把单文件上限说清楚，不要等提交才报错 */}
-          <p
-            id={hintId}
-            className="px-2.5 pb-1.5 pt-0.5 text-[11px] leading-tight text-zinc-400 dark:text-zinc-500"
-          >
-            {t.files.uploadMaxHint}
-          </p>
 
           <hr className="my-1 border-zinc-200/70 dark:border-zinc-800" />
 
