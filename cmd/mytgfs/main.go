@@ -75,6 +75,12 @@ func main() {
 		runPut(os.Args[2:])
 	case "ls":
 		runLs(os.Args[2:])
+	case "tree":
+		runTree(os.Args[2:])
+	case "du":
+		runDu(os.Args[2:])
+	case "cat":
+		runCat(os.Args[2:])
 	case "mkdir":
 		runMkdir(os.Args[2:])
 	case "rm":

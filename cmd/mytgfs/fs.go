@@ -225,7 +225,8 @@ func runGet(args []string) {
 	}
 	// --json 下 stdout 只能是 JSON，二进制内容必须写到文件
 	if local == "-" && ui.JSONMode() {
-		fatalCode("usage", i18n.T("err.get_stdout_json"))
+		ui.Error("usage", fmt.Errorf("%s", i18n.T("err.get_stdout_json")))
+		os.Exit(2)
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
 		rf, err := f.Open(ctx, remote)
@@ -280,7 +281,7 @@ func runSearch(args []string) {
 			if h.Dir {
 				kind = "d"
 			}
-			ui.Printf("%s %12d %s\n", kind, h.Size, path.Join(start, h.Path))
+			ui.Printf("%s %12d %s\n", kind, h.Size, h.Path)
 		}
 		return nil
 	})
