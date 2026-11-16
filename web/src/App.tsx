@@ -1511,20 +1511,16 @@ export default function App() {
     { id: 'downloads', label: t.nav.downloads, icon: <HardDriveDownload className="w-4 h-4 shrink-0" /> },
   ];
 
-  // 主题按钮：点一下切到下一档，浅色 → 深色 → 跟随系统 → 浅色
+  // 主题按钮：显示当前档位，点一下切到下一档，浅色 → 深色 → 跟随系统 → 浅色
   //
   // 输入：theme 当前档位
-  // 输出：下一档的图标与文案（按钮显示的是「点了会变成什么」）
-  // 预期：三处主题按钮共用同一套映射，不会各写一遍
+  // 输出：按钮显示的图标与文案取「当前档位」，themeNext 是点击后要切到的档位
+  // 预期：文案反映现状，不会把「跟随系统」误读成当前已经在跟随系统
   const themeNext: ThemeMode = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
-  const ThemeNextIcon = themeNext === 'light' ? Sun : themeNext === 'dark' ? Moon : Monitor;
-  const themeNextLabel =
-    themeNext === 'light'
-      ? t.header.themeLight
-      : themeNext === 'dark'
-        ? t.header.themeDark
-        : t.header.themeSystem;
-  const themeIconClass = `shrink-0 ${themeNext === 'light' ? 'text-amber-400' : 'text-zinc-700 dark:text-zinc-300'}`;
+  const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
+  const themeLabel =
+    theme === 'light' ? t.header.themeLight : theme === 'dark' ? t.header.themeDark : t.header.themeSystem;
+  const themeIconClass = `shrink-0 ${theme === 'light' ? 'text-amber-400' : 'text-zinc-700 dark:text-zinc-300'}`;
 
   return (
     <div
@@ -1565,9 +1561,9 @@ export default function App() {
         totalBytes={summary.totalBytes}
         setActiveTab={setActiveTab}
         themeNext={themeNext}
-        themeNextLabel={themeNextLabel}
+        themeLabel={themeLabel}
         themeIconClass={themeIconClass}
-        ThemeNextIcon={ThemeNextIcon}
+        ThemeIcon={ThemeIcon}
         setTheme={setTheme}
       />
 
@@ -1592,9 +1588,9 @@ export default function App() {
           setCurrentFolderId={setCurrentFolderId}
           connectionStatus={connectionStatus}
           themeNext={themeNext}
-          themeNextLabel={themeNextLabel}
+          themeLabel={themeLabel}
           themeIconClass={themeIconClass}
-          ThemeNextIcon={ThemeNextIcon}
+          ThemeIcon={ThemeIcon}
           setTheme={setTheme}
         />
 

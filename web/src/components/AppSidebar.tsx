@@ -44,9 +44,9 @@ interface AppSidebarProps {
   setCurrentFolderId: (id: string | null) => void;
   connectionStatus: ConnectionStatus;
   themeNext: 'light' | 'dark' | 'system';
-  themeNextLabel: string;
+  themeLabel: string;
   themeIconClass: string;
-  ThemeNextIcon: React.FC<{ className?: string }>;
+  ThemeIcon: React.FC<{ className?: string }>;
   setTheme: (mode: 'light' | 'dark' | 'system') => void;
 }
 
@@ -73,9 +73,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   setCurrentFolderId,
   connectionStatus,
   themeNext,
-  themeNextLabel,
+  themeLabel,
   themeIconClass,
-  ThemeNextIcon,
+  ThemeIcon,
   setTheme,
 }) => (
   <motion.aside
@@ -299,10 +299,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               variant="outline"
               size="sm"
               onClick={() => setTheme(themeNext)}
-              aria-label={themeNextLabel}
+              aria-label={themeLabel}
               className="px-0 justify-center"
             >
-              <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
+              <ThemeIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
             </Button>
           </div>
         ) : (
@@ -332,12 +332,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               variant="outline"
               size="sm"
               onClick={() => setTheme(themeNext)}
-              aria-label={themeNextLabel}
-              title={themeNextLabel}
+              aria-label={themeLabel}
+              title={themeLabel}
               className="px-2.5 shrink-0"
             >
-              <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
-              <span className="truncate max-w-[72px]">{themeNextLabel}</span>
+              <ThemeIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
+              <span className="truncate max-w-[72px]">{themeLabel}</span>
             </Button>
           </div>
         )}

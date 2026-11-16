@@ -17,9 +17,9 @@ interface PhoneTopBarProps {
   totalBytes: number;
   setActiveTab: (tab: NavTab) => void;
   themeNext: 'light' | 'dark' | 'system';
-  themeNextLabel: string;
+  themeLabel: string;
   themeIconClass: string;
-  ThemeNextIcon: React.FC<{ className?: string }>;
+  ThemeIcon: React.FC<{ className?: string }>;
   setTheme: (mode: 'light' | 'dark' | 'system') => void;
 }
 
@@ -35,9 +35,9 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
   totalBytes,
   setActiveTab,
   themeNext,
-  themeNextLabel,
+  themeLabel,
   themeIconClass,
-  ThemeNextIcon,
+  ThemeIcon,
   setTheme,
 }) => (
   <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 py-2">
@@ -92,9 +92,9 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
           variant="outline"
           size="icon"
           onClick={() => setTheme(themeNext)}
-          aria-label={themeNextLabel}
+          aria-label={themeLabel}
         >
-          <ThemeNextIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
+          <ThemeIcon className={`w-3.5 h-3.5 ${themeIconClass}`} />
         </Button>
       </div>
     </div>
