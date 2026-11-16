@@ -84,6 +84,18 @@ type API interface {
 	UploadSaveBigFilePart(ctx context.Context, request *tg.UploadSaveBigFilePartRequest) (bool, error)
 }
 
+// ChannelCache 是频道 access_hash 的跨进程缓存。
+//
+// 输入：chatID 频道号
+// 输出：access_hash 与是否命中；保存/删除返回 error
+// 预期：只缓存 access_hash，不缓存标题（标题随频道更新变化）；
+// 频道不可见时由 dropChannel 一并清掉，下次重新解析
+type ChannelCache interface {
+	LoadAccessHash(ctx context.Context, chatID int64) (int64, bool, error)
+	SaveAccessHash(ctx context.Context, chatID, accessHash int64) error
+	DropAccessHash(ctx context.Context, chatID int64) error
+}
+
 // Store 把文件读写到指定频道。
 type Store struct {
 	api       API
@@ -91,6 +103,8 @@ type Store struct {
 
 	mu      sync.Mutex
 	channel *tg.Channel
+	// cache 把频道 access_hash 存到本地索引，进程重启后省一次 channels.getChannels
+	cache ChannelCache
 
 	sendMu sync.Mutex
 	// limiter 是发消息节流器，x/time/rate 实现，默认每秒 1 条
@@ -178,6 +192,22 @@ func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 	if s.channel != nil {
 		return s.channel, nil
 	}
+	// 本地缓存只存 access_hash：标题会随频道更新变化，不能一起吃缓存
+	if s.cache != nil {
+		if hash, ok, err := s.cache.LoadAccessHash(ctx, s.channelID); err == nil && ok && hash != 0 {
+			s.channel = &tg.Channel{ID: s.channelID, AccessHash: hash}
+			return s.channel, nil
+		}
+	}
+	return s.loadLocked(ctx)
+}
+
+// loadLocked 发 channels.getChannels 并更新内存/本地缓存；调用方必须持有 s.mu。
+//
+// 输入：ctx
+// 输出：频道信息（含标题）
+// 预期：成功后把 access_hash 写进本地缓存；频道不可见时返回翻译后的错误
+func (s *Store) loadLocked(ctx context.Context) (*tg.Channel, error) {
 	res, err := s.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
 		&tg.InputChannel{ChannelID: s.channelID, AccessHash: 0},
 	})
@@ -194,9 +224,24 @@ func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 	for _, c := range chats {
 		if ch, ok := c.(*tg.Channel); ok {
 			s.channel = ch
+			if s.cache != nil {
+				// 写缓存失败不影响本次调用：下次启动再付一次 RPC 而已
+				_ = s.cache.SaveAccessHash(context.WithoutCancel(ctx), s.channelID, ch.AccessHash)
+			}
 			return ch, nil
 		}
 	}
 	// 频道不存在、或被删后重建了同 ID 之外的新频道时都会走到这里
 	return nil, fmt.Errorf("%s", i18n.T("err.channel_not_visible", s.channelID))
+}
+
+// SetChannelCache 注入频道 access_hash 的本地缓存；nil 表示不缓存。
+//
+// 输入：c 实现 ChannelCache 的持久化层
+// 输出：无
+// 预期：装配时调用一次；失败只影响启动时多一次 RPC，不影响正确性
+func (s *Store) SetChannelCache(c ChannelCache) {
+	s.mu.Lock()
+	s.cache = c
+	s.mu.Unlock()
 }

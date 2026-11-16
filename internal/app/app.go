@@ -210,7 +210,7 @@ type Session struct {
 // Store 返回本卷的 store（已配好并发、断点续传）。
 func (s *Session) Store() *telegramstore.Store {
 	if s.own == nil {
-		s.own = s.app.newStore(s.API, s.Volume.ChatID)
+		s.own = s.app.newStore(s.API, s.Volume.ChatID, s.Index)
 	}
 	return s.own
 }
@@ -226,7 +226,7 @@ func (s *Session) StoreFor(chatID int64) *telegramstore.Store {
 	if st, ok := s.extra[chatID]; ok {
 		return st
 	}
-	st := s.app.newStore(s.API, chatID)
+	st := s.app.newStore(s.API, chatID, nil)
 	if s.extra == nil {
 		s.extra = make(map[int64]*telegramstore.Store)
 	}
@@ -282,11 +282,16 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 }
 
 // newStore 按配置造一个已就绪的 store。
-func (a *App) newStore(api telegramstore.API, chatID int64) *telegramstore.Store {
+//
+// 输入：api 会话；chatID 频道号；idx 该卷的本地索引（可为 nil，不做缓存）
+// 输出：已接好并发参数、断点与 access_hash 缓存的 Store
+// 预期：idx 非空时，进程重启后第一次用到频道可直接读缓存的 access_hash
+func (a *App) newStore(api telegramstore.API, chatID int64, idx *index.Index) *telegramstore.Store {
 	cfg := a.Config()
 	st := telegramstore.New(api, chatID)
 	st.SetParallel(cfg.Mount.DownloadConnections())
 	st.SetUploadParallel(cfg.Mount.UploadParallelism())
 	st.SetResumeStore(uploadcache.New(datadir.Path("uploads")))
+	st.SetChannelCache(channelCache{idx: idx})
 	return st
 }

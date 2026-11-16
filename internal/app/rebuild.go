@@ -94,6 +94,8 @@ func (a *App) adoptChannel(ctx context.Context, idx *index.Index, channelID int6
 		if err := idx.PutMeta(ctx, index.MetaKeyChannelPts, 0); err != nil {
 			return err
 		}
+		// 旧频道的 access_hash 缓存一起清掉，避免换回去时用到过期值
+		_ = idx.DeleteMeta(ctx, channelCacheKey(prev))
 	}
 	return idx.PutMeta(ctx, index.MetaKeyChannelID, channelID)
 }

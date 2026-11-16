@@ -8,6 +8,7 @@ package telegramstore
 // 文案全部走 i18n，语言包缺失时回落到 key，不会因为翻译缺失而崩。
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -109,5 +110,10 @@ func (s *Store) noteErr(err error) error {
 func (s *Store) dropChannel() {
 	s.mu.Lock()
 	s.channel = nil
+	c := s.cache
 	s.mu.Unlock()
+	// access_hash 可能随频道迁移/重建失效，本地缓存一起丢掉
+	if c != nil {
+		_ = c.DropAccessHash(context.Background(), s.channelID)
+	}
 }

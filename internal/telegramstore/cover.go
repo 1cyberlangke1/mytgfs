@@ -97,9 +97,20 @@ func (s *Store) coverImage(ctx context.Context, force bool) ([]byte, string, err
 // 输入：ctx
 // 输出：Telegram 侧显示名；频道不可见时返回错误
 // 预期：与头像共用 resolve 的频道缓存，频道更新（pts 变化）后由
-// InvalidateCover 一并失效，下次读取即回源
+// InvalidateCover 一并失效，下次读取即回源；
+// 本地只缓存 access_hash 时，这里补一次 getChannels 拿标题
 func (s *Store) Title(ctx context.Context) (string, error) {
-	ch, err := s.resolve(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.channel != nil && s.channel.Title != "" {
+		return s.channel.Title, nil
+	}
+	if s.channel == nil && s.cache != nil {
+		if hash, ok, err := s.cache.LoadAccessHash(ctx, s.channelID); err == nil && ok && hash != 0 {
+			s.channel = &tg.Channel{ID: s.channelID, AccessHash: hash}
+		}
+	}
+	ch, err := s.loadLocked(ctx)
 	if err != nil {
 		return "", err
 	}

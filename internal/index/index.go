@@ -379,9 +379,20 @@ func (i *Index) GetMeta(ctx context.Context, key string) (int64, bool, error) {
 }
 
 // PutMeta 写入一条持久化的整数状态。
+// PutMeta 写入一个数值键。
 func (i *Index) PutMeta(ctx context.Context, key string, value int64) error {
 	_, err := i.db.ExecContext(ctx, `
 INSERT INTO meta(key, value) VALUES(?, ?)
 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+// DeleteMeta 删除一个键。
+//
+// 输入：key 键名
+// 输出：error
+// 预期：键不存在时也返回 nil，调用方可以幂等清理
+func (i *Index) DeleteMeta(ctx context.Context, key string) error {
+	_, err := i.db.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, key)
 	return err
 }

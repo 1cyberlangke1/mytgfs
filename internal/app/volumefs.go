@@ -58,7 +58,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	if err != nil {
 		return nil, err
 	}
-	store := a.newStore(api, vol.ChatID)
+	store := a.newStore(api, vol.ChatID, idx)
 	// 索引按卷名命名：换过频道的卷必须先丢掉旧频道的数据，再决定是否重建
 	if aerr := a.adoptChannel(ctx, idx, vol.ChatID); aerr != nil {
 		logging.Warn("log.volume_warn", aerr, volName)
@@ -85,7 +85,7 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		}
 		return vfs.Peer{
 			Index:   pidx,
-			Store:   a.newStore(api, pv.ChatID),
+			Store:   a.newStore(api, pv.ChatID, pidx),
 			Release: func() { _ = pidx.Close() },
 		}, nil
 	})
