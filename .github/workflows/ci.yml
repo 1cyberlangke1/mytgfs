@@ -129,3 +129,18 @@ jobs:
           name: web-dist
           path: web/dist
           if-no-files-found: error
+
+  # 漏洞扫描：只对「代码实际调用到」的漏洞报错；标准库漏洞随 go.mod 的 go 版本一起修。
+  # Release 复用本工作流，因此这里失败会挡住发版。
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 安装 govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: 漏洞扫描
+        run: govulncheck ./...
