@@ -27,6 +27,8 @@ type CoverStore interface {
 	InvalidateCover()
 	// Title 返回频道标题，作为面板上的显示名
 	Title(ctx context.Context) (string, error)
+	// SetTitle 改频道标题
+	SetTitle(ctx context.Context, title string) error
 }
 
 // coverVolume 是封面路由需要的最小卷信息。
@@ -49,8 +51,10 @@ type coverEntry struct {
 // 输出：实现 web.CoverSource 的四个方法
 // 预期：卷被删/未挂载时 HasVolume 返回 false，面板显示 404 而不是 500
 type CoverProvider struct {
-	lookup   func(name string) (coverVolume, bool)
-	set      func(ctx context.Context, channelID int64, jpeg []byte) error
+	lookup func(name string) (coverVolume, bool)
+	set    func(ctx context.Context, channelID int64, jpeg []byte) error
+	// setTitle 用带管理权限的会话改频道标题；nil 时回退到 store 的 bot 会话
+	setTitle func(ctx context.Context, channelID int64, title string) error
 	cacheDir string
 	bus      *push.Hub
 
@@ -73,6 +77,10 @@ func NewCoverProvider(a *App, lookup func(name string) (*VolumeFS, bool), cacheD
 		},
 		set: func(ctx context.Context, channelID int64, jpeg []byte) error {
 			return a.SetChannelPhoto(ctx, channelID, 0, jpeg)
+		},
+		// 标题同样走 user 会话：bot 改标题会 CHAT_ADMIN_REQUIRED
+		setTitle: func(ctx context.Context, channelID int64, title string) error {
+			return a.SetChannelTitle(ctx, channelID, 0, title)
 		},
 		cacheDir: cacheDir,
 		bus:      a.Bus(),
@@ -112,6 +120,36 @@ func (p *CoverProvider) Title(ctx context.Context, vol string) (string, error) {
 		return "", nil
 	}
 	return v.store.Title(ctx)
+}
+
+// SetTitle 改频道标题，成功后清本卷的频道元数据缓存。
+//
+// 输入：vol 卷名；title 新标题（去空白后不能为空）
+// 输出：error；卷不存在时 ErrVolumeNotFound
+// 预期：优先用带管理权限的 user 会话写（bot 改标题会被 CHAT_ADMIN_REQUIRED 拒绝）；
+//
+//	没配 user 会话时回退到 bot 会话，失败原因由上层报给面板
+func (p *CoverProvider) SetTitle(ctx context.Context, vol, title string) error {
+	v, ok := p.lookup(vol)
+	if !ok {
+		return ErrVolumeNotFound{Name: vol}
+	}
+	var err error
+	if p.setTitle != nil {
+		err = p.setTitle(ctx, v.chatID, title)
+	} else {
+		err = v.store.SetTitle(ctx, title)
+	}
+	if err != nil {
+		return err
+	}
+	// user 会话写成功后清掉 store 的频道缓存，否则面板仍读到旧标题
+	v.store.InvalidateCover()
+	p.InvalidateVolume(vol)
+	if p.bus != nil {
+		p.bus.Publish(push.TopicStatus)
+	}
+	return nil
 }
 
 // CoverImage 返回频道头像字节；没有头像时返回空结果而不是错误。

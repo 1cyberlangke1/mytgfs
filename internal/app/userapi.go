@@ -64,3 +64,14 @@ func (a *App) SetChannelPhoto(ctx context.Context, channelID, accessHash int64, 
 		return channel.SetPhoto(ctx, api, channelID, accessHash, jpeg)
 	})
 }
+
+// SetChannelTitle 用 user 会话改频道标题。
+//
+// 输入：channelID 频道号；accessHash 为 0 时内部解析；title 新标题
+// 输出：error
+// 预期：bot 会话改标题会被 CHAT_ADMIN_REQUIRED 拒绝，所以必须走这里
+func (a *App) SetChannelTitle(ctx context.Context, channelID, accessHash int64, title string) error {
+	return a.withUserAPI(ctx, func(ctx context.Context, api *tg.Client) error {
+		return channel.SetTitle(ctx, api, channelID, accessHash, title)
+	})
+}

@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,15 @@ type fakeCovers struct {
 func (f *fakeCovers) HasVolume(name string) bool { return f.volumes[name] }
 
 func (f *fakeCovers) Title(context.Context, string) (string, error) { return f.title, f.titleErr }
+
+// SetTitle 记录新标题，供接口测试断言写入的内容。
+func (f *fakeCovers) SetTitle(_ context.Context, _ string, title string) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.title = title
+	return nil
+}
 
 func (f *fakeCovers) CoverVersion(context.Context, string) (string, error) {
 	return f.version, nil
@@ -147,13 +157,35 @@ func TestCoverHandlerUnavailable(t *testing.T) {
 	}
 }
 
-// TestCoverHandlerMethod 其它方法返回 405。
+// TestCoverHandlerMethod 未支持的方法返回 405；PUT 走改标题分支。
 func TestCoverHandlerMethod(t *testing.T) {
 	c := &fakeCovers{volumes: map[string]bool{"demo": true}}
 	rec := httptest.NewRecorder()
-	handleVolumeCover(c).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/cover?vol=demo", nil))
+	handleVolumeCover(c).ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/cover?vol=demo", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("code = %d，期望 405", rec.Code)
+	}
+}
+
+// TestCoverPutUpdatesTitle PUT 改频道名字；空标题被拒。
+func TestCoverPutUpdatesTitle(t *testing.T) {
+	c := &fakeCovers{volumes: map[string]bool{"demo": true}, title: "旧名字"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/cover?vol=demo", strings.NewReader(`{"title":"新名字"}`))
+	req.Header.Set("Content-Type", "application/json")
+	handleVolumeCover(c).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d，期望 200", rec.Code)
+	}
+	if c.title != "新名字" {
+		t.Fatalf("title = %q，期望 新名字", c.title)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/cover?vol=demo", strings.NewReader(`{"title":"   "}`))
+	handleVolumeCover(c).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("空标题 code = %d，期望 400", rec.Code)
 	}
 }
 

@@ -26,6 +26,8 @@ type fakeAPI struct {
 	editMessage  []*tg.MessagesEditMessageRequest
 	getFile      []*tg.UploadGetFileRequest
 	getMessages  []*tg.ChannelsGetMessagesRequest
+	editTitles   []*tg.ChannelsEditTitleRequest
+	editTitleErr error
 
 	// texts 保存当前「频道」里的文本消息正文，供节点用例读写回放。
 	texts map[int]string
@@ -116,6 +118,17 @@ func (f *fakeAPI) MessagesEditMessage(_ context.Context, req *tg.MessagesEditMes
 	f.editMessage = append(f.editMessage, req)
 	if msg, ok := req.GetMessage(); ok {
 		f.texts[req.ID] = msg
+	}
+	return &tg.Updates{}, nil
+}
+
+// ChannelsEditTitle 记录改标题请求，供标题用例断言。
+func (f *fakeAPI) ChannelsEditTitle(_ context.Context, req *tg.ChannelsEditTitleRequest) (tg.UpdatesClass, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.editTitles = append(f.editTitles, req)
+	if f.editTitleErr != nil {
+		return nil, f.editTitleErr
 	}
 	return &tg.Updates{}, nil
 }

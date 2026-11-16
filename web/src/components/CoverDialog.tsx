@@ -7,25 +7,39 @@ import { Modal } from './Modal';
 interface CoverDialogProps {
   open: boolean;
   volumeName: string;
+  /** 当前频道标题；弹窗打开时作为输入框初值 */
+  currentTitle?: string;
   t: Translations;
   busy: boolean;
   onClose: () => void;
   /** 提交原图；服务端会裁成 512×512 后写成频道头像 */
   onSubmit: (file: File) => void;
+  /** 提交频道标题；没有提供时隐藏该输入框 */
+  onSubmitTitle?: (title: string) => void;
 }
 
-// CoverDialog 是「设置频道头像」的弹窗：选图、预览、保存。
+// CoverDialog 是「设置频道头像与名字」的弹窗：改名字、选图、预览、保存。
 export const CoverDialog: React.FC<CoverDialogProps> = ({
   open,
   volumeName,
+  currentTitle,
   t,
   busy,
   onClose,
   onSubmit,
+  onSubmitTitle,
 }) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [picked, setPicked] = useState<File | null>(null);
   const [preview, setPreview] = useState('');
+  const [title, setTitle] = useState(currentTitle ?? '');
+
+  // 每次打开都用最新的频道标题初始化输入框
+  useEffect(() => {
+    if (open) setTitle(currentTitle ?? '');
+  }, [open, currentTitle]);
+
+  const titleChanged = (currentTitle ?? '').trim() !== title.trim();
 
   // 每次关闭都清掉已选图片与预览 URL，避免下次打开显示上一张
   useEffect(() => {
@@ -71,6 +85,24 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
           </button>
         </div>
 
+        {onSubmitTitle && (
+          <div className="space-y-1.5">
+            <label htmlFor="cover-dialog-name" className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
+              {t.volume.coverDialogNameLabel}
+            </label>
+            <input
+              id="cover-dialog-name"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              disabled={busy}
+              maxLength={128}
+              placeholder={t.volume.coverDialogNamePlaceholder}
+              className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#007AFF]/40"
+            />
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <button
             type="button"
@@ -106,8 +138,11 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
           <Button
             type="button"
             variant="accent"
-            onClick={() => picked && onSubmit(picked)}
-            disabled={!picked || busy}
+            onClick={() => {
+              if (titleChanged && title.trim()) onSubmitTitle?.(title.trim());
+              if (picked) onSubmit(picked);
+            }}
+            disabled={(!picked && !titleChanged) || busy || (titleChanged && !title.trim())}
           >
             {busy ? t.volume.coverDialogSaving : t.volume.coverDialogSave}
           </Button>

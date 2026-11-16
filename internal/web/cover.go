@@ -10,10 +10,13 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"mytgfs/internal/cover"
 	"mytgfs/internal/i18n"
@@ -33,6 +36,8 @@ type CoverSource interface {
 	CoverImage(ctx context.Context, volume string) ([]byte, string, error)
 	SetCover(ctx context.Context, volume string, data []byte) error
 	Title(ctx context.Context, volume string) (string, error)
+	// SetTitle 改频道标题（面板显示名）
+	SetTitle(ctx context.Context, volume, title string) error
 }
 
 // maxCoverUpload 是面板上传头像的原始图片上限。
@@ -61,6 +66,8 @@ func handleVolumeCover(covers CoverSource) http.HandlerFunc {
 			serveCover(w, r, covers, vol)
 		case http.MethodPost:
 			uploadCover(w, r, covers, vol)
+		case http.MethodPut:
+			updateTitle(w, r, covers, vol)
 		default:
 			http.Error(w, i18n.T("err.http_method"), http.StatusMethodNotAllowed)
 		}
@@ -120,6 +127,32 @@ func uploadCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol
 	}
 	if err := covers.SetCover(r.Context(), vol, jpeg); err != nil {
 		http.Error(w, i18n.T("err.cover_set"), http.StatusBadGateway)
+		return
+	}
+	replyJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// updateTitle 改频道标题（面板显示名）。
+//
+// 输入：body {"title":"新名字"}
+// 输出：{"ok":true}；400 体非法或标题为空；502 Telegram 拒绝
+// 预期：只改频道标题，不动节点数据；成功由路由层自动推送 status
+func updateTitle(w http.ResponseWriter, r *http.Request, covers CoverSource, vol string) {
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		http.Error(w, i18n.T("err.web_bad_json"), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		http.Error(w, i18n.T("err.title_empty"), http.StatusBadRequest)
+		return
+	}
+	if err := covers.SetTitle(r.Context(), vol, req.Title); err != nil {
+		// 权限不足、频道不可用等上游原因写日志，面板只显示人话
+		slog.Warn(i18n.T("log.title_set_failed"), "vol", vol, "err", err)
+		http.Error(w, i18n.T("err.title_set"), http.StatusBadGateway)
 		return
 	}
 	replyJSON(w, http.StatusOK, map[string]bool{"ok": true})

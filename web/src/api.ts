@@ -444,6 +444,19 @@ export async function setCover(volume: string, file: File): Promise<void> {
   }
 }
 
+// setVolumeTitle 改频道标题（面板显示名）。
+export async function setVolumeTitle(volume: string, title: string): Promise<void> {
+  const q = new URLSearchParams({ vol: volume });
+  const res = await fetch(`/api/cover?${q.toString()}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
+  }
+}
+
 // ---- 下载目录（服务端落盘）----
 
 // ApiDownload 是下载目录里的一个文件。

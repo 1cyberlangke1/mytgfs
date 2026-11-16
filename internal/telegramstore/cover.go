@@ -8,8 +8,10 @@ package telegramstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -103,6 +105,32 @@ func (s *Store) Title(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return ch.Title, nil
+}
+
+// SetTitle 改频道标题（面板上的显示名）。
+//
+// 输入：title 新标题，去空白后不能为空
+// 输出：error；权限不足或频道不可用时返回翻译后的错误
+// 预期：调用成功后清空频道缓存，下次 Title 读到新值；
+//
+//	只改频道标题，不动目录节点
+func (s *Store) SetTitle(ctx context.Context, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New(i18n.T("err.title_empty"))
+	}
+	ch, err := s.resolve(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := s.api.ChannelsEditTitle(ctx, &tg.ChannelsEditTitleRequest{
+		Channel: &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
+		Title:   title,
+	}); err != nil {
+		return DescribeError(s.noteErr(err))
+	}
+	s.InvalidateCover()
+	return nil
 }
 
 // InvalidateCover 让头像与频道元数据缓存立即失效。

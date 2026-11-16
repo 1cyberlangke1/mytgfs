@@ -21,6 +21,14 @@ type fakeCoverStore struct {
 
 func (f *fakeCoverStore) CoverVersion(context.Context) (string, error) { return f.version, f.err }
 
+// SetTitle 记录新标题，测改标题链路是否写到 store。
+func (f *fakeCoverStore) SetTitle(_ context.Context, title string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.title = title
+	return nil
+}
 func (f *fakeCoverStore) CoverImage(context.Context) ([]byte, string, error) {
 	return f.data, f.version, f.err
 }

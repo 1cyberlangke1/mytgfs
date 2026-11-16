@@ -26,6 +26,11 @@ func (f *thumbFakeAPI) ChannelsGetChannels(context.Context, []tg.InputChannelCla
 	return &tg.MessagesChats{Chats: []tg.ChatClass{&tg.Channel{ID: 42, AccessHash: 1}}}, nil
 }
 
+// ChannelsEditTitle 满足 telegramstore.API；本测试不改标题。
+func (f *thumbFakeAPI) ChannelsEditTitle(context.Context, *tg.ChannelsEditTitleRequest) (tg.UpdatesClass, error) {
+	return &tg.Updates{}, nil
+}
+
 func (f *thumbFakeAPI) ChannelsGetMessages(_ context.Context, _ *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
 	return &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
 		&tg.Message{ID: 7, Media: &tg.MessageMediaDocument{Document: &tg.Document{

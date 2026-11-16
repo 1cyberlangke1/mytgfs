@@ -76,6 +76,7 @@ import {
   saveSettings,
   rebuildVolume,
   setCover,
+  setVolumeTitle,
   uploadFile,
   uploadPoster,
 } from './api';
@@ -1449,6 +1450,21 @@ export default function App() {
     }
   };
 
+  // handleSetVolumeTitle 改频道标题；成功后重取状态刷新面板显示名
+  //
+  // 输入：volume 卷名；title 新频道名
+  // 输出：无（错误转 toast，不向弹窗抛）
+  // 预期：失败时弹窗保持打开，用户可继续改
+  const handleSetVolumeTitle = async (volume: string, title: string): Promise<void> => {
+    try {
+      await setVolumeTitle(volume, title);
+      await reloadState();
+      pushToast(t.volume.titleSaved, 'success');
+    } catch (err) {
+      pushToast(errText(err), 'error');
+    }
+  };
+
   // handleRefresh 手动刷新状态、文件列表与下载任务。
   const handleRefresh = async (): Promise<void> => {
     const names = await reloadState();
@@ -1626,6 +1642,7 @@ export default function App() {
                 onCancelTransfer={handleCancelTransfer}
                 onClearCompletedTransfers={handleClearCompletedTransfers}
                 onSetCover={caps.cover ? handleSetCover : undefined}
+              onSetTitle={caps.cover ? handleSetVolumeTitle : undefined}
               />
             )}
 

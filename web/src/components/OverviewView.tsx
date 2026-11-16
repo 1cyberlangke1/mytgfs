@@ -48,6 +48,8 @@ interface OverviewViewProps {
   onClearCompletedTransfers: () => void;
   /** 设置频道头像；nil 表示服务端不支持（面板隐藏入口） */
   onSetCover?: (volumeId: string, file: File) => Promise<void>;
+  /** 改频道名字；没有提供时弹窗隐藏名字输入框 */
+  onSetTitle?: (volumeId: string, title: string) => Promise<void>;
 }
 
 
@@ -75,6 +77,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onCancelTransfer,
   onClearCompletedTransfers,
   onSetCover,
+  onSetTitle,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [coverTarget, setCoverTarget] = useState<VolumeInfo | null>(null);
@@ -578,10 +581,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       <CoverDialog
         open={coverTarget !== null}
         volumeName={coverTarget?.name ?? ''}
+        currentTitle={coverTarget?.title ?? ''}
         t={t}
         busy={coverBusy}
         onClose={() => {
           if (!coverBusy) setCoverTarget(null);
+        }}
+        onSubmitTitle={async (title) => {
+          if (!coverTarget || !onSetTitle) return;
+          setCoverBusy(true);
+          try {
+            await onSetTitle(coverTarget.id, title);
+          } finally {
+            setCoverBusy(false);
+          }
         }}
         onSubmit={async (file) => {
           if (!coverTarget || !onSetCover) return;
