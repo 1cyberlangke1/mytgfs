@@ -64,6 +64,8 @@ type FileSystem struct {
 	tr   map[string]*Transfer
 	// events 是写操作完成后通知前端的通道；构造时必填，忘接就编译不过
 	events push.Events
+	// upProg 是命令行等单次调用方的上传进度回调；面板走队列推送
+	upProg atomic.Pointer[UploadProgressFunc]
 	// copySource 解析跨卷复制的源卷；未接入时跨卷复制任务直接失败
 	copySource CopySource
 }

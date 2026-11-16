@@ -22,6 +22,37 @@ type Transfer struct {
 // 小于这个值的文件通常一个分块就读完，显示进度只会让面板闪一下。
 const transferMinSize = 1 << 20
 
+// UploadProgressFunc 是上传字节进度回调。
+//
+// 输入：path 卷内目标路径；done 已上传字节；total 文件总大小
+// 输出：无
+// 预期：由上传工作协程调用，实现必须快速返回，不能阻塞上传
+type UploadProgressFunc func(path string, done, total int64)
+
+// SetUploadProgress 设置上传进度回调。
+//
+// 输入：fn 回调；nil 表示关闭
+// 输出：无
+// 预期：命令行用它显示进度；面板不设置，继续走队列推送
+func (d *FileSystem) SetUploadProgress(fn UploadProgressFunc) {
+	if fn == nil {
+		d.upProg.Store(nil)
+		return
+	}
+	d.upProg.Store(&fn)
+}
+
+// reportUpload 把一次上传进度转发给调用方。
+//
+// 输入：path 目标路径；done 已传字节；total 总大小
+// 输出：无
+// 预期：没有设置回调时什么都不做
+func (d *FileSystem) reportUpload(path string, done, total int64) {
+	if p := d.upProg.Load(); p != nil {
+		(*p)(path, done, total)
+	}
+}
+
 // track 记录一次下载进度。
 //
 // 输入：name 卷内路径；done 已取回字节；total 文件总大小

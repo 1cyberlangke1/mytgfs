@@ -56,11 +56,19 @@ type putFailure struct {
 	Error string `json:"error"`
 }
 
+// putPlan 是 --dry-run 列出的一条待上传计划。
+type putPlan struct {
+	Local string `json:"local"`
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+}
+
 // runPut 处理批量上传。
 func runPut(args []string) {
 	fs := flag.NewFlagSet("put", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume"))
 	remote := fs.String("remote", "/", i18n.T("cli.flag.remote_base"))
+	dryRun := fs.Bool("dry-run", false, i18n.T("cli.flag.dry_run"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
 		usage()
@@ -84,15 +92,29 @@ func runPut(args []string) {
 		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 
+	// --dry-run 只读配置与本地文件，不建立连接
+	if *dryRun {
+		printPutPlan(volName, items)
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	okCount, failCount := 0, 0
 	uploaded := make([]putUploaded, 0, len(items))
 	failed := make([]putFailure, 0)
+	// 面板走队列推送进度；命令行在这条路径上单独打 stderr
+	var reporter *uploadReporter
+	if !ui.JSONMode() {
+		reporter = newUploadReporter(os.Stderr)
+	}
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
 		fsys.SetVolume(volName)
+		if reporter != nil {
+			fsys.SetUploadProgress(reporter.report)
+		}
 		// 与面板共用同一套持久化队列：中途断网/断电后任务还在
 		if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
 			return qerr
@@ -101,6 +123,9 @@ func runPut(args []string) {
 
 		for _, it := range items {
 			node, perr := putOne(ctx, fsys, it)
+			if reporter != nil {
+				reporter.end()
+			}
 			if perr != nil {
 				failCount++
 				failed = append(failed, putFailure{Path: it.remote, Local: it.local, Error: perr.Error()})
@@ -132,6 +157,35 @@ func runPut(args []string) {
 	if failCount > 0 {
 		os.Exit(1)
 	}
+}
+
+// printPutPlan 输出 --dry-run 的计划清单。
+//
+// 输入：volName 卷名；items 已展开的本地文件与远程目标
+// 输出：每条计划一行；--json 输出 items/counts/bytes
+// 预期：只读本地 stat，不发任何网络请求；单个文件读取失败按致命错误退出
+func printPutPlan(volName string, items []putItem) {
+	plan := make([]putPlan, 0, len(items))
+	var total int64
+	for _, it := range items {
+		st, err := os.Stat(it.local)
+		if err != nil {
+			fatal(err.Error())
+		}
+		plan = append(plan, putPlan{Local: it.local, Path: it.remote, Size: st.Size()})
+		total += st.Size()
+	}
+	ui.Print(map[string]any{
+		"volume":  volName,
+		"dry_run": true,
+		"items":   plan,
+		"counts":  map[string]int{"files": len(plan)},
+		"bytes":   total,
+	})
+	for _, p := range plan {
+		ui.Outf(i18n.T("put.plan"), p.Local, p.Path, p.Size)
+	}
+	ui.Outf(i18n.T("put.dry_summary"), len(plan), total)
 }
 
 // putOne 上传单个文件并返回落库后的索引记录。

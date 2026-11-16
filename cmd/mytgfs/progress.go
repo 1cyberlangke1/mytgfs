@@ -84,6 +84,88 @@ func (p *progressWriter) render(final bool) {
 	fmt.Fprintf(p.errw, "\r%5.1f%%  %s / %s  %s/s", pct, humanBytes(p.done), humanBytes(p.total), humanBytes(rate))
 }
 
+// uploadReporter 把上传进度打到 stderr。
+//
+// 输入：目标路径、已传/总字节
+// 输出：stderr 上覆盖刷新的一行；结束时补换行
+// 预期：同名文件才刷新，切换文件时重置计时
+type uploadReporter struct {
+	errw  io.Writer
+	name  string
+	start time.Time
+	last  time.Time
+	// open 表示 stderr 上还有一行没换行，end 负责收尾
+	open bool
+}
+
+// newUploadReporter 创建上传进度输出器。
+//
+// 输入：errw 进度输出（通常是 stderr）
+// 输出：*uploadReporter
+// 预期：每个文件第一次回调只记录起点，不打印 0%
+func newUploadReporter(errw io.Writer) *uploadReporter {
+	return &uploadReporter{errw: errw}
+}
+
+// report 实现 vfs.UploadProgressFunc。
+//
+// 输入：name 卷内路径；done 已传字节；total 文件大小
+// 输出：无
+// 预期：200ms 节流；done>=total 时打印收尾行并换行
+func (u *uploadReporter) report(name string, done, total int64) {
+	now := time.Now()
+	if name != u.name {
+		u.name = name
+		u.start = now
+		u.last = now
+		u.open = false
+		return
+	}
+	final := total > 0 && done >= total
+	if !final && now.Sub(u.last) < progressInterval {
+		return
+	}
+	u.render(done, total, final)
+}
+
+// render 打印一行上传进度。
+//
+// 输入：done 已传字节；total 总大小；final 是否结束
+// 输出：写到 errw
+// 预期：total<=0 时不打印；结束时补换行
+func (u *uploadReporter) render(done, total int64, final bool) {
+	if total <= 0 {
+		return
+	}
+	pct := float64(done) / float64(total) * 100
+	if pct > 100 {
+		pct = 100
+	}
+	if final {
+		fmt.Fprintf(u.errw, "\r%s  %s / %s\n", u.name, humanBytes(done), humanBytes(total))
+		u.open = false
+		return
+	}
+	var rate int64
+	if elapsed := time.Since(u.start).Seconds(); elapsed > 0 {
+		rate = int64(float64(done) / elapsed)
+	}
+	fmt.Fprintf(u.errw, "\r%s  %5.1f%%  %s / %s  %s/s", u.name, pct, humanBytes(done), humanBytes(total), humanBytes(rate))
+	u.open = true
+}
+
+// end 收尾当前文件：有未换行的进度行时补一个换行。
+//
+// 输入：无
+// 输出：无
+// 预期：去重命中不产生进度，此时什么都不做
+func (u *uploadReporter) end() {
+	if u.open {
+		fmt.Fprintln(u.errw)
+		u.open = false
+	}
+}
+
 // humanBytes 把字节数格式化成十进制单位。
 //
 // 输入：字节数（负数按 0 处理）

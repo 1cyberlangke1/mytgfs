@@ -130,7 +130,14 @@ func (d *FileSystem) handleJob(ctx context.Context, job queue.Job) error {
 		if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 			return err
 		}
-		return d.uploadNow(ctx, p, d.reporter(job.ID, p.Size))
+		// 队列进度给面板，回调进度给命令行等单次调用方；两者互不影响
+		qprog := d.reporter(job.ID, p.Size)
+		return d.uploadNow(ctx, p, func(done int64) {
+			if qprog != nil {
+				qprog(done)
+			}
+			d.reportUpload(p.Path, done, p.Size)
+		})
 	case jobCopy:
 		var p copyJob
 		if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {

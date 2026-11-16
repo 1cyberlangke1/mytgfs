@@ -9,6 +9,32 @@ import (
 	"time"
 )
 
+// TestUploadReporter 上传进度：首次回调只记起点，结束行补换行，节流期间不刷。
+func TestUploadReporter(t *testing.T) {
+	var errw bytes.Buffer
+	u := newUploadReporter(&errw)
+	u.report("/a.bin", 10, 100)
+	if errw.Len() != 0 {
+		t.Fatalf("切换文件时不应输出，得到 %q", errw.String())
+	}
+	u.last = time.Now().Add(-time.Second)
+	u.report("/a.bin", 50, 100)
+	if !strings.Contains(errw.String(), "50.0%") || !strings.Contains(errw.String(), "50 B / 100 B") {
+		t.Fatalf("进度行 = %q", errw.String())
+	}
+	if !u.open {
+		t.Fatal("非结束进度应保持未换行状态")
+	}
+	u.report("/a.bin", 100, 100)
+	if u.open || !strings.HasSuffix(errw.String(), "100 B / 100 B\n") {
+		t.Fatalf("结束行 = %q", errw.String())
+	}
+	u.end()
+	if strings.HasSuffix(errw.String(), "\n\n") {
+		t.Fatalf("结束行后不应再补空行: %q", errw.String())
+	}
+}
+
 // TestHumanBytes 十进制单位分档。
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{
