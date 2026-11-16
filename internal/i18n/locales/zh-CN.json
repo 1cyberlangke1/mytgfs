@@ -36,6 +36,7 @@
   "err.add_bot": "添加 bot 失败",
   "err.auth_lost_hint": "会话已失效，请重新登录：mytgfs auth bot / mytgfs auth user",
   "err.cat_json": "--json 模式下不能用 cat 输出二进制内容",
+  "err.get_is_dir": "目标路径是目录，不能下载；请用 ls 或 tree 查看内容",
   "err.get_stdout_json": "--json 模式下不能把文件内容写到标准输出，请指定本地文件路径",
   "err.autostart_read": "读取开机自启状态失败",
   "err.autostart_unsupported": "当前平台不支持开机自启",

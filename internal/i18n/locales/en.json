@@ -36,6 +36,7 @@
   "err.add_bot": "add bot",
   "err.auth_lost_hint": "session is no longer valid; log in again: mytgfs auth bot / mytgfs auth user",
   "err.cat_json": "cat cannot stream content to stdout in --json mode",
+  "err.get_is_dir": "target path is a directory; use ls or tree to inspect it",
   "err.get_stdout_json": "cannot stream file content to stdout in --json mode; give a local output path",
   "err.autostart_read": "failed to read autostart state",
   "err.autostart_unsupported": "autostart is not supported on this platform",

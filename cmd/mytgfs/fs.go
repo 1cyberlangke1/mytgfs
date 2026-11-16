@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -208,8 +209,11 @@ func runMv(args []string) {
 // runGet 下载文件到本地。
 //
 // 输入：--name 卷名；远端路径；可选本地路径（默认当前目录同名，"-" 输出到 stdout）
-// 输出：GET 行（含字节数）
-// 预期：本地写入失败即退出 1；已存在的本地文件会被覆盖
+// 输出：GET 行（含实际写入字节数与续传起点）；文件模式在 stderr 显示进度
+// 预期：
+//   - 本地已存在且小于远端时从断点继续，不重下已完成的字节
+//   - 本地更大或不需要续传时整份重下
+//   - --json 或 "-" 直出时不打印进度，stdout 保持纯净
 func runGet(args []string) {
 	fset := flag.NewFlagSet("get", flag.ExitOnError)
 	name := fset.String("name", "", "volume name (default: first volume)")
@@ -229,27 +233,57 @@ func runGet(args []string) {
 		os.Exit(2)
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
+		info, err := f.Info(ctx, remote)
+		if err != nil {
+			return err
+		}
+		if info.Dir {
+			return errors.New(i18n.T("err.get_is_dir"))
+		}
+		total := info.Size
+		var dst io.Writer = os.Stdout
+		var resumed int64
+		if local != "-" {
+			flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+			// 只有「本地是普通文件、非空、且比远端短」才续传
+			if st, serr := os.Stat(local); serr == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Size() < total {
+				flags = os.O_WRONLY | os.O_CREATE
+				resumed = st.Size()
+			}
+			out, oerr := os.OpenFile(local, flags, 0o644)
+			if oerr != nil {
+				return oerr
+			}
+			defer out.Close()
+			if resumed > 0 {
+				if _, serr := out.Seek(resumed, io.SeekStart); serr != nil {
+					return serr
+				}
+			}
+			dst = out
+		}
 		rf, err := f.Open(ctx, remote)
 		if err != nil {
 			return err
 		}
 		defer rf.Close()
-		var dst io.Writer = os.Stdout
-		var out *os.File
-		if local != "-" {
-			out, err = os.Create(local)
-			if err != nil {
-				return err
+		if resumed > 0 {
+			if _, serr := rf.Seek(resumed, io.SeekStart); serr != nil {
+				return serr
 			}
-			defer out.Close()
-			dst = out
 		}
-		n, err := io.Copy(dst, rf)
+		pw := newProgressWriter(dst, os.Stderr, total, resumed, local != "-" && !ui.JSONMode())
+		n, err := io.Copy(pw, rf)
 		if err != nil {
 			return err
 		}
-		ui.Print(map[string]any{"volume": vol, "path": remote, "local": local, "bytes": n})
-		ui.Printf("GET %s:%s -> %s bytes=%d\n", vol, remote, local, n)
+		pw.render(true)
+		written := resumed + n
+		ui.Print(map[string]any{
+			"volume": vol, "path": remote, "local": local,
+			"bytes": written, "resumed": resumed,
+		})
+		ui.Printf("GET %s:%s -> %s bytes=%d resumed=%d\n", vol, remote, local, written, resumed)
 		return nil
 	})
 }
