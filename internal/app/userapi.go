@@ -65,13 +65,13 @@ func (a *App) SetChannelPhoto(ctx context.Context, channelID, accessHash int64, 
 	})
 }
 
-// SetChannelTitle 用 user 会话改频道标题。
+// GrantChannelBot 用 user 会话把 bot 设为频道管理员。
 //
-// 输入：channelID 频道号；accessHash 为 0 时内部解析；title 新标题
+// 输入：channelID 频道号；accessHash 为 0 时现解析；botUsername 不含 @
 // 输出：error
-// 预期：bot 会话改标题会被 CHAT_ADMIN_REQUIRED 拒绝，所以必须走这里
-func (a *App) SetChannelTitle(ctx context.Context, channelID, accessHash int64, title string) error {
+// 预期：覆盖式设置 BotRights（发消息/编辑/改频道信息）；老卷缺 ChangeInfo 时调用
+func (a *App) GrantChannelBot(ctx context.Context, channelID, accessHash int64, botUsername string) error {
 	return a.withUserAPI(ctx, func(ctx context.Context, api *tg.Client) error {
-		return channel.SetTitle(ctx, api, channelID, accessHash, title)
+		return channel.GrantBotByUsername(ctx, api, channelID, accessHash, botUsername)
 	})
 }

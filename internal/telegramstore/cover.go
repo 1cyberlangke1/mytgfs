@@ -8,14 +8,13 @@ package telegramstore
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gotd/td/tg"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/i18n"
 )
 
@@ -115,22 +114,36 @@ func (s *Store) Title(ctx context.Context) (string, error) {
 //
 //	只改频道标题，不动目录节点
 func (s *Store) SetTitle(ctx context.Context, title string) error {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return errors.New(i18n.T("err.title_empty"))
-	}
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := s.api.ChannelsEditTitle(ctx, &tg.ChannelsEditTitleRequest{
-		Channel: &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
-		Title:   title,
-	}); err != nil {
+	if err := channel.SetTitle(ctx, s.api, ch.ID, ch.AccessHash, title); err != nil {
 		return DescribeError(s.noteErr(err))
 	}
 	s.InvalidateCover()
 	return nil
+}
+
+// BotUsername 返回 bot 自己的用户名（不含 @）。
+//
+// 输入：ctx
+// 输出：用户名；bot 会话被拒绝或没有用户名时返回错误
+// 预期：只读一次 users.getUsers；供 user 会话按用户名解析 bot 再补授权
+func (s *Store) BotUsername(ctx context.Context) (string, error) {
+	users, err := s.api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+	if err != nil {
+		return "", err
+	}
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok {
+			if user.Username == "" {
+				return "", fmt.Errorf("%s", i18n.T("err.bot_no_username"))
+			}
+			return user.Username, nil
+		}
+	}
+	return "", fmt.Errorf("%s", i18n.T("err.bot_not_found"))
 }
 
 // InvalidateCover 让头像与频道元数据缓存立即失效。

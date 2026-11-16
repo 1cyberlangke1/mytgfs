@@ -141,10 +141,13 @@ func TestCreate(t *testing.T) {
 		t.Errorf("muted = %v err = %v", res.Muted, res.MuteErr)
 	}
 
-	// bot 提权：发帖/改/删/置顶都要有
+	// bot 提权：只授真正用到的发帖/编辑/改频道信息
 	rights := api.editReq.AdminRights
-	if !rights.PostMessages || !rights.EditMessages || !rights.DeleteMessages || !rights.PinMessages {
+	if !rights.PostMessages || !rights.EditMessages || !rights.ChangeInfo {
 		t.Errorf("admin rights = %+v", rights)
+	}
+	if rights.DeleteMessages || rights.PinMessages {
+		t.Errorf("不该授予未使用权限: %+v", rights)
 	}
 
 	// 关通知：永久静音 + 不显示预览

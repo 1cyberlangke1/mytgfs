@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/push"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/volume"
@@ -29,6 +30,8 @@ type CoverStore interface {
 	Title(ctx context.Context) (string, error)
 	// SetTitle 改频道标题
 	SetTitle(ctx context.Context, title string) error
+	// BotUsername 返回 bot 用户名（补授权时用）
+	BotUsername(ctx context.Context) (string, error)
 }
 
 // coverVolume 是封面路由需要的最小卷信息。
@@ -53,8 +56,8 @@ type coverEntry struct {
 type CoverProvider struct {
 	lookup func(name string) (coverVolume, bool)
 	set    func(ctx context.Context, channelID int64, jpeg []byte) error
-	// setTitle 用带管理权限的会话改频道标题；nil 时回退到 store 的 bot 会话
-	setTitle func(ctx context.Context, channelID int64, title string) error
+	// grant 用 user 会话把 bot 补成管理员（老卷缺 ChangeInfo 时用）
+	grant    func(ctx context.Context, channelID, accessHash int64, botUsername string) error
 	cacheDir string
 	bus      *push.Hub
 
@@ -78,9 +81,10 @@ func NewCoverProvider(a *App, lookup func(name string) (*VolumeFS, bool), cacheD
 		set: func(ctx context.Context, channelID int64, jpeg []byte) error {
 			return a.SetChannelPhoto(ctx, channelID, 0, jpeg)
 		},
-		// 标题同样走 user 会话：bot 改标题会 CHAT_ADMIN_REQUIRED
-		setTitle: func(ctx context.Context, channelID int64, title string) error {
-			return a.SetChannelTitle(ctx, channelID, 0, title)
+		// 标题由 bot 会话直接改（建卷时已授 ChangeInfo）；
+		// 老卷缺这项权限，SetTitle 会自动补一次再重试
+		grant: func(ctx context.Context, channelID, accessHash int64, botUsername string) error {
+			return a.GrantChannelBot(ctx, channelID, accessHash, botUsername)
 		},
 		cacheDir: cacheDir,
 		bus:      a.Bus(),
@@ -134,22 +138,37 @@ func (p *CoverProvider) SetTitle(ctx context.Context, vol, title string) error {
 	if !ok {
 		return ErrVolumeNotFound{Name: vol}
 	}
-	var err error
-	if p.setTitle != nil {
-		err = p.setTitle(ctx, v.chatID, title)
-	} else {
+	err := v.store.SetTitle(ctx, title)
+	if channel.IsAdminRequired(err) {
+		// 老卷建卷时只授了发消息/编辑/删除/置顶，缺 ChangeInfo：
+		// 用 user 会话补一次权限，然后让 bot 重试
+		if gerr := p.grantBot(ctx, v); gerr != nil {
+			return gerr
+		}
 		err = v.store.SetTitle(ctx, title)
 	}
 	if err != nil {
 		return err
 	}
-	// user 会话写成功后清掉 store 的频道缓存，否则面板仍读到旧标题
 	v.store.InvalidateCover()
 	p.InvalidateVolume(vol)
 	if p.bus != nil {
 		p.bus.Publish(push.TopicStatus)
 	}
 	return nil
+}
+
+// grantBot 用 user 会话把 bot 的频道权限补齐。
+//
+// 输入：v 目标卷（含 store 与频道号）
+// 输出：error；bot 用户名读不到或补授权失败时返回
+// 预期：只在 bot 改标题被 CHAT_ADMIN_REQUIRED 拒绝时调用，一次性修复老卷
+func (p *CoverProvider) grantBot(ctx context.Context, v coverVolume) error {
+	name, err := v.store.BotUsername(ctx)
+	if err != nil {
+		return err
+	}
+	return p.grant(ctx, v.chatID, 0, name)
 }
 
 // CoverImage 返回频道头像字节；没有头像时返回空结果而不是错误。

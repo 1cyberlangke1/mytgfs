@@ -133,6 +133,11 @@ func (f *fakeAPI) ChannelsEditTitle(_ context.Context, req *tg.ChannelsEditTitle
 	return &tg.Updates{}, nil
 }
 
+// UsersGetUsers 回放 bot 自身身份，供补授权用例断言。
+func (f *fakeAPI) UsersGetUsers(context.Context, []tg.InputUserClass) ([]tg.UserClass, error) {
+	return []tg.UserClass{&tg.User{ID: 999, AccessHash: 1234, Bot: true, Username: "mytgfs_2026_bot"}}, nil
+}
+
 func (f *fakeAPI) ChannelsGetFullChannel(context.Context, tg.InputChannelClass) (*tg.MessagesChatFull, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

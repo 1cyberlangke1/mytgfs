@@ -65,6 +65,8 @@ type API interface {
 	ChannelsGetChannels(ctx context.Context, id []tg.InputChannelClass) (tg.MessagesChatsClass, error)
 	ChannelsGetMessages(ctx context.Context, request *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
 	ChannelsEditTitle(ctx context.Context, request *tg.ChannelsEditTitleRequest) (tg.UpdatesClass, error)
+	// UsersGetUsers 用于读 bot 自身的 user id / access_hash（补频道授权时用）
+	UsersGetUsers(ctx context.Context, request []tg.InputUserClass) ([]tg.UserClass, error)
 	MessagesSendMedia(ctx context.Context, request *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error)
 	MessagesSendMessage(ctx context.Context, request *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error)
 	MessagesEditMessage(ctx context.Context, request *tg.MessagesEditMessageRequest) (tg.UpdatesClass, error)

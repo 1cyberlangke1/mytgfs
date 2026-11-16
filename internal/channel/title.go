@@ -7,6 +7,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,16 @@ import (
 
 	"mytgfs/internal/i18n"
 )
+
+// IsAdminRequired 判断错误是否表示当前会话缺少频道管理权限。
+//
+// 输入：任意 error（可带包裹）
+// 输出：是 CHAT_ADMIN_REQUIRED 时为 true
+// 预期：调用方据此决定是否补授权后重试
+func IsAdminRequired(err error) bool {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	return ok && e.Type == "CHAT_ADMIN_REQUIRED"
+}
 
 // TitleAPI 是改标题需要的最小 API 面。
 type TitleAPI interface {

@@ -31,6 +31,11 @@ func (f *thumbFakeAPI) ChannelsEditTitle(context.Context, *tg.ChannelsEditTitleR
 	return &tg.Updates{}, nil
 }
 
+// UsersGetUsers 满足 telegramstore.API；本测试不补授权。
+func (f *thumbFakeAPI) UsersGetUsers(context.Context, []tg.InputUserClass) ([]tg.UserClass, error) {
+	return []tg.UserClass{&tg.User{ID: 7, AccessHash: 8}}, nil
+}
+
 func (f *thumbFakeAPI) ChannelsGetMessages(_ context.Context, _ *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error) {
 	return &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
 		&tg.Message{ID: 7, Media: &tg.MessageMediaDocument{Document: &tg.Document{
