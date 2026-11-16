@@ -33,6 +33,14 @@ func TestUploadReporter(t *testing.T) {
 	if strings.HasSuffix(errw.String(), "\n\n") {
 		t.Fatalf("结束行后不应再补空行: %q", errw.String())
 	}
+
+	// 小文件只有一次回调：首次即结束，也要打印收尾行
+	var once bytes.Buffer
+	u2 := newUploadReporter(&once)
+	u2.report("/b.bin", 5, 5)
+	if !strings.Contains(once.String(), "5 B / 5 B") {
+		t.Fatalf("单次回调收尾行 = %q", once.String())
+	}
 }
 
 // TestHumanBytes 十进制单位分档。

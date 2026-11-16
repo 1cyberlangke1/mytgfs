@@ -91,6 +91,8 @@ func main() {
 		runGet(os.Args[2:])
 	case "search":
 		runSearch(os.Args[2:])
+	case "shell":
+		runShell(os.Args[2:])
 	case "config":
 		runConfig(os.Args[2:])
 	case "volume":

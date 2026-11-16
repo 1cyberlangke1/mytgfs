@@ -28,12 +28,13 @@ import (
 	"mytgfs/internal/vfs"
 )
 
-// withFiles 打开指定卷的文件管理接口并执行 fn。
+// withVolume 打开指定卷并执行 fn，按需启动持久化队列。
 //
-// 输入：name 卷名（空则第一个卷）；fn 具体操作
+// 输入：name 卷名（空则第一个卷）；attachQueue 是否启动上传/删改队列；
+// fn 具体操作（拿到 app、会话、文件系统与门面）
 // 输出：操作失败时进程退出 1
-// 预期：索引为空时先用 user 会话按频道历史重建；连接在 fn 返回后关闭
-func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files) error) {
+// 预期：索引为空时先用 user 会话按频道历史重建；fn 返回后队列与连接一起关闭
+func withVolume(name string, attachQueue bool, fn func(ctx context.Context, a *app.App, vol string, s *app.Session, fsys *vfs.FileSystem, f fm.Files) error) {
 	a, err := app.Load(app.Options{})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
@@ -52,12 +53,30 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 			logging.Warn("err.fs_rebuild", rerr)
 		}
 		davfs := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
+		davfs.SetVolume(volName)
 		davfs.SetTempDir(datadir.Path("tmp"))
-		return fn(ctx, volName, fm.New(davfs))
+		if attachQueue {
+			if _, qerr := davfs.AttachQueue(ctx); qerr != nil {
+				return qerr
+			}
+			defer davfs.Close()
+		}
+		return fn(ctx, a, volName, s, davfs, fm.New(davfs))
 	})
 	if err != nil {
 		failErr(i18n.T("err.fs_prefix"), err)
 	}
+}
+
+// withFiles 打开只读文件管理接口并执行 fn。
+//
+// 输入：name 卷名；fn 具体操作
+// 输出：操作失败时进程退出 1
+// 预期：不启动队列；需要上传/删改的命令用 withVolume(name, true, ...)
+func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files) error) {
+	withVolume(name, false, func(ctx context.Context, _ *app.App, vol string, _ *app.Session, _ *vfs.FileSystem, f fm.Files) error {
+		return fn(ctx, vol, f)
+	})
 }
 
 // lsEntry 是 ls --json 的单条记录。
@@ -92,6 +111,21 @@ func lsEntries(dir string, entries []fm.Entry) []lsEntry {
 	return view
 }
 
+// printLs 输出目录的人读列表。
+//
+// 输入：dir 目录路径；entries 目录项
+// 输出：每行「类型 大小 修改时间 完整路径」
+// 预期：--json 模式下自动静默（ui.Printf 自身判断）
+func printLs(dir string, entries []fm.Entry) {
+	for _, e := range entries {
+		kind := "f"
+		if e.Dir {
+			kind = "d"
+		}
+		ui.Printf("%s %12d %s %s\n", kind, e.Size, e.Mod.Format("2006-01-02 15:04"), path.Join(dir, e.Name))
+	}
+}
+
 // runLs 列出目录内容。
 //
 // 输入：--name 卷名；可选位置参数目录（默认 --dir / MYTGFS_DIR，再退到 /）
@@ -113,13 +147,7 @@ func runLs(args []string) {
 		}
 		view := lsEntries(dir, entries)
 		ui.Print(map[string]any{"volume": vol, "dir": dir, "entries": view})
-		for _, e := range entries {
-			kind := "f"
-			if e.Dir {
-				kind = "d"
-			}
-			ui.Printf("%s %12d %s %s\n", kind, e.Size, e.Mod.Format("2006-01-02 15:04"), path.Join(dir, e.Name))
-		}
+		printLs(dir, entries)
 		return nil
 	})
 }
@@ -233,52 +261,10 @@ func runGet(args []string) {
 		os.Exit(2)
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
-		info, err := f.Info(ctx, remote)
+		written, resumed, err := getFile(ctx, f, remote, local)
 		if err != nil {
 			return err
 		}
-		if info.Dir {
-			return errors.New(i18n.T("err.get_is_dir"))
-		}
-		total := info.Size
-		var dst io.Writer = os.Stdout
-		var resumed int64
-		if local != "-" {
-			flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-			// 只有「本地是普通文件、非空、且比远端短」才续传
-			if st, serr := os.Stat(local); serr == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Size() < total {
-				flags = os.O_WRONLY | os.O_CREATE
-				resumed = st.Size()
-			}
-			out, oerr := os.OpenFile(local, flags, 0o644)
-			if oerr != nil {
-				return oerr
-			}
-			defer out.Close()
-			if resumed > 0 {
-				if _, serr := out.Seek(resumed, io.SeekStart); serr != nil {
-					return serr
-				}
-			}
-			dst = out
-		}
-		rf, err := f.Open(ctx, remote)
-		if err != nil {
-			return err
-		}
-		defer rf.Close()
-		if resumed > 0 {
-			if _, serr := rf.Seek(resumed, io.SeekStart); serr != nil {
-				return serr
-			}
-		}
-		pw := newProgressWriter(dst, os.Stderr, total, resumed, local != "-" && !ui.JSONMode())
-		n, err := io.Copy(pw, rf)
-		if err != nil {
-			return err
-		}
-		pw.render(true)
-		written := resumed + n
 		ui.Print(map[string]any{
 			"volume": vol, "path": remote, "local": local,
 			"bytes": written, "resumed": resumed,
@@ -286,6 +272,77 @@ func runGet(args []string) {
 		ui.Printf("GET %s:%s -> %s bytes=%d resumed=%d\n", vol, remote, local, written, resumed)
 		return nil
 	})
+}
+
+// getFile 把远端文件写到本地或标准输出。
+//
+// 输入：ctx；f 文件接口；remote 远端路径；local 本地路径或 "-"
+// 输出：实际写入总字节数、续传起点字节数、error
+// 预期：
+//   - 本地是普通文件且比远端短时从该长度续写，否则整份重写
+//   - local 为 "-" 时写标准输出且不输出进度
+//   - 失败时保留已写入的部分，下次调用可继续
+func getFile(ctx context.Context, f fm.Files, remote, local string) (written, resumed int64, err error) {
+	info, err := f.Info(ctx, remote)
+	if err != nil {
+		return 0, 0, err
+	}
+	if info.Dir {
+		return 0, 0, errors.New(i18n.T("err.get_is_dir"))
+	}
+	total := info.Size
+	var dst io.Writer = os.Stdout
+	if local != "-" {
+		flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+		// 只有「本地是普通文件、非空、且比远端短」才续传
+		if st, serr := os.Stat(local); serr == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Size() < total {
+			flags = os.O_WRONLY | os.O_CREATE
+			resumed = st.Size()
+		}
+		out, oerr := os.OpenFile(local, flags, 0o644)
+		if oerr != nil {
+			return 0, 0, oerr
+		}
+		defer out.Close()
+		if resumed > 0 {
+			if _, serr := out.Seek(resumed, io.SeekStart); serr != nil {
+				return 0, 0, serr
+			}
+		}
+		dst = out
+	}
+	rf, err := f.Open(ctx, remote)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rf.Close()
+	if resumed > 0 {
+		if _, serr := rf.Seek(resumed, io.SeekStart); serr != nil {
+			return 0, 0, serr
+		}
+	}
+	pw := newProgressWriter(dst, os.Stderr, total, resumed, local != "-" && !ui.JSONMode())
+	n, err := io.Copy(pw, rf)
+	if err != nil {
+		return resumed + n, resumed, err
+	}
+	pw.render(true)
+	return resumed + n, resumed, nil
+}
+
+// printSearch 输出搜索命中的人读列表。
+//
+// 输入：hits 命中项（Path 已是卷内绝对路径）
+// 输出：每行「类型 大小 路径」
+// 预期：--json 模式下自动静默
+func printSearch(hits []fm.SearchHit) {
+	for _, h := range hits {
+		kind := "f"
+		if h.Dir {
+			kind = "d"
+		}
+		ui.Printf("%s %12d %s\n", kind, h.Size, h.Path)
+	}
 }
 
 // runSearch 按文件名递归搜索。
@@ -310,13 +367,7 @@ func runSearch(args []string) {
 			return err
 		}
 		ui.Print(map[string]any{"volume": vol, "dir": start, "query": query, "hits": hits})
-		for _, h := range hits {
-			kind := "f"
-			if h.Dir {
-				kind = "d"
-			}
-			ui.Printf("%s %12d %s\n", kind, h.Size, h.Path)
-		}
+		printSearch(hits)
 		return nil
 	})
 }

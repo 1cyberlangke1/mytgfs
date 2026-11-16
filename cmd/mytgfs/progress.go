@@ -77,10 +77,7 @@ func (p *progressWriter) render(final bool) {
 		fmt.Fprintf(p.errw, "\r%s / %s  %s/s\n", humanBytes(p.done), humanBytes(p.total), humanBytes(rate))
 		return
 	}
-	pct := float64(p.done) / float64(p.total) * 100
-	if pct > 100 {
-		pct = 100
-	}
+	pct := min(float64(p.done)/float64(p.total)*100, 100.0)
 	fmt.Fprintf(p.errw, "\r%5.1f%%  %s / %s  %s/s", pct, humanBytes(p.done), humanBytes(p.total), humanBytes(rate))
 }
 
@@ -119,6 +116,10 @@ func (u *uploadReporter) report(name string, done, total int64) {
 		u.start = now
 		u.last = now
 		u.open = false
+		// 小文件可能只回调一次：名字刚切换就结束，也要把收尾行打出来
+		if total > 0 && done >= total {
+			u.render(done, total, true)
+		}
 		return
 	}
 	final := total > 0 && done >= total
@@ -137,10 +138,7 @@ func (u *uploadReporter) render(done, total int64, final bool) {
 	if total <= 0 {
 		return
 	}
-	pct := float64(done) / float64(total) * 100
-	if pct > 100 {
-		pct = 100
-	}
+	pct := min(float64(done)/float64(total)*100, 100.0)
 	if final {
 		fmt.Fprintf(u.errw, "\r%s  %s / %s\n", u.name, humanBytes(done), humanBytes(total))
 		u.open = false

@@ -151,11 +151,20 @@ func runDu(args []string) {
 			"total":   duEntry{Path: dir, Files: files, Size: size},
 			"entries": entries,
 		})
-		for _, e := range entries {
-			ui.Printf("%12d  %6d  %s\n", e.Size, e.Files, e.Path)
-		}
+		printDu(entries)
 		return nil
 	})
+}
+
+// printDu 输出目录体积的人读列表。
+//
+// 输入：entries 后序收集的目录汇总
+// 输出：每行「字节数 文件数 路径」
+// 预期：--json 模式下自动静默
+func printDu(entries []duEntry) {
+	for _, e := range entries {
+		ui.Printf("%12d  %6d  %s\n", e.Size, e.Files, e.Path)
+	}
 }
 
 // walkDu 后序汇总目录体积。

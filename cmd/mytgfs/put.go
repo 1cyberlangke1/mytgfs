@@ -19,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"slices"
@@ -87,76 +86,75 @@ func runPut(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_load"), err))
 	}
-	_, volName, ok := a.Volume(*name)
+	_, dryVol, ok := a.Volume(*name)
 	if !ok {
-		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", dryVol))
 	}
 
 	// --dry-run 只读配置与本地文件，不建立连接
 	if *dryRun {
-		printPutPlan(volName, items)
+		printPutPlan(dryVol, items)
 		return
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	okCount, failCount := 0, 0
-	uploaded := make([]putUploaded, 0, len(items))
-	failed := make([]putFailure, 0)
 	// 面板走队列推送进度；命令行在这条路径上单独打 stderr
 	var reporter *uploadReporter
 	if !ui.JSONMode() {
 		reporter = newUploadReporter(os.Stderr)
 	}
-	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
-		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
-		fsys.SetVolume(volName)
+	var (
+		uploaded []putUploaded
+		failed   []putFailure
+		vol      string
+	)
+	withVolume(*name, true, func(ctx context.Context, _ *app.App, volName string, _ *app.Session, fsys *vfs.FileSystem, _ fm.Files) error {
+		vol = volName
 		if reporter != nil {
 			fsys.SetUploadProgress(reporter.report)
 		}
-		// 与面板共用同一套持久化队列：中途断网/断电后任务还在
-		if _, qerr := fsys.AttachQueue(ctx); qerr != nil {
-			return qerr
-		}
-		defer fsys.Close()
-
-		for _, it := range items {
-			node, perr := putOne(ctx, fsys, it)
-			if reporter != nil {
-				reporter.end()
-			}
-			if perr != nil {
-				failCount++
-				failed = append(failed, putFailure{Path: it.remote, Local: it.local, Error: perr.Error()})
-				ui.Out(i18n.T("put.fail", it.remote, perr))
-				continue
-			}
-			okCount++
-			uploaded = append(uploaded, putUploaded{
-				Path:      it.remote,
-				Local:     it.local,
-				Size:      node.Size,
-				MessageID: node.ID,
-				Sha256:    node.Sha256,
-			})
-			ui.Out(i18n.T("put.ok", it.remote, node.Size, node.ID))
-		}
+		uploaded, failed = putMany(ctx, fsys, items, reporter)
 		return nil
 	})
-	if err != nil {
-		failErr(i18n.T("err.put_prefix"), err)
-	}
 	ui.Print(map[string]any{
-		"volume":   volName,
+		"volume":   vol,
 		"uploaded": uploaded,
 		"failed":   failed,
-		"counts":   map[string]int{"uploaded": okCount, "failed": failCount},
+		"counts":   map[string]int{"uploaded": len(uploaded), "failed": len(failed)},
 	})
-	ui.Out(i18n.T("put.summary", okCount, failCount))
-	if failCount > 0 {
+	ui.Out(i18n.T("put.summary", len(uploaded), len(failed)))
+	if len(failed) > 0 {
 		os.Exit(1)
 	}
+}
+
+// putMany 依次上传已展开的文件。
+//
+// 输入：ctx；fsys 已挂持久化队列的文件系统；items 待上传项；reporter 可选进度输出
+// 输出：成功与失败清单（均非 nil，便于 JSON 输出空数组）
+// 预期：单个文件失败不中断后续；每个文件结束都收尾进度行
+func putMany(ctx context.Context, fsys *vfs.FileSystem, items []putItem, reporter *uploadReporter) ([]putUploaded, []putFailure) {
+	uploaded := make([]putUploaded, 0, len(items))
+	failed := make([]putFailure, 0)
+	for _, it := range items {
+		node, perr := putOne(ctx, fsys, it)
+		if reporter != nil {
+			reporter.end()
+		}
+		if perr != nil {
+			failed = append(failed, putFailure{Path: it.remote, Local: it.local, Error: perr.Error()})
+			ui.Out(i18n.T("put.fail", it.remote, perr))
+			continue
+		}
+		uploaded = append(uploaded, putUploaded{
+			Path:      it.remote,
+			Local:     it.local,
+			Size:      node.Size,
+			MessageID: node.ID,
+			Sha256:    node.Sha256,
+		})
+		ui.Out(i18n.T("put.ok", it.remote, node.Size, node.ID))
+	}
+	return uploaded, failed
 }
 
 // printPutPlan 输出 --dry-run 的计划清单。

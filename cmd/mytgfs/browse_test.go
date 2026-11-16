@@ -66,7 +66,7 @@ func testTree() *fakeFiles {
 
 // TestWalkTree 层数不限时构造整棵树，目录体积等于子项合计。
 func TestWalkTree(t *testing.T) {
-	n, err := walkTree(context.Background(), testTree(), "/root", "root", 0, 0)
+	n, err := walkTree(t.Context(), testTree(), "/root", "root", 0, 0)
 	if err != nil {
 		t.Fatalf("walkTree: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestWalkTree(t *testing.T) {
 
 // TestWalkTreeDepth 层数截断后不再展开更深的子目录。
 func TestWalkTreeDepth(t *testing.T) {
-	n, err := walkTree(context.Background(), testTree(), "/root", "root", 0, 1)
+	n, err := walkTree(t.Context(), testTree(), "/root", "root", 0, 1)
 	if err != nil {
 		t.Fatalf("walkTree: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestWalkTreeDepth(t *testing.T) {
 // TestWalkDu 后序汇总：子目录先输出，父目录包含整棵子树。
 func TestWalkDu(t *testing.T) {
 	var entries []duEntry
-	size, files, err := walkDu(context.Background(), testTree(), "/root", &entries)
+	size, files, err := walkDu(t.Context(), testTree(), "/root", &entries)
 	if err != nil {
 		t.Fatalf("walkDu: %v", err)
 	}
