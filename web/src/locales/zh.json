@@ -188,6 +188,7 @@
     "uploadPlanEmpty": "列表里没有文件，点「恢复全选」可以放回来",
     "newTextBtn": "新建文本",
     "uploadMenuLabel": "上传",
+    "uploadMaxHint": "单个文件最大 2GB",
     "pasteBtn": "粘贴剪贴板",
     "clipboardEmpty": "剪贴板里没有可上传的内容",
     "clipboardFileList": "剪贴板里是文件路径，浏览器读不到本地文件，请在文件页按 Ctrl+V 粘贴",

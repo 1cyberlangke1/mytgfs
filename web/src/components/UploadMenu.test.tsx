@@ -62,6 +62,10 @@ describe('UploadMenu', () => {
     ]) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+    // 单文件上限在选择前就要可见，并挂到「上传文件」项上供读屏朗读
+    const hint = screen.getByText(t.files.uploadMaxHint);
+    const fileItem = screen.getByText(t.files.uploadFileBtn).closest('button');
+    expect(fileItem?.getAttribute('aria-describedby')).toBe(hint.id);
   });
 
   it('点击触发按钮后 aria-expanded 变 true', async () => {

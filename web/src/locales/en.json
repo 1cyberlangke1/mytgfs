@@ -188,6 +188,7 @@
     "uploadPlanEmpty": "The list is empty. Use Restore all to bring the files back.",
     "newTextBtn": "New Text",
     "uploadMenuLabel": "Upload",
+    "uploadMaxHint": "2GB max per file",
     "pasteBtn": "Paste clipboard",
     "clipboardEmpty": "Nothing to upload in the clipboard",
     "clipboardFileList": "The clipboard holds file paths. Browsers cannot read local files that way, so press Ctrl+V on the files page instead.",
