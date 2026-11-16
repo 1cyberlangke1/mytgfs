@@ -132,8 +132,10 @@ jobs:
 
   # 漏洞扫描：只对「代码实际调用到」的漏洞报错；标准库漏洞随 go.mod 的 go 版本一起修。
   # Release 复用本工作流，因此这里失败会挡住发版。
+  # 跑在 Windows 上：wails v3 的 Linux 后端是 cgo + GTK/WebKit，缺开发包时
+  # govulncheck 连包都加载不了；Windows 后端是纯 Go，不需要额外系统依赖。
   security:
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
