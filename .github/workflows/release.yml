@@ -5,6 +5,11 @@ on:
   push:
     tags: ['v*']
 
+# 发布过程不打断：同一 tag 重复触发时排队，不取消已经在跑的那一次。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -36,6 +41,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # 前端产物由 ci 的 frontend job 构建并上传，这里直接复用，
+      # 不再在每个平台重跑一次 npm ci + vite build。
+      - name: 下载前端产物
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/web/dist
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -45,21 +57,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
-      # dist 不入库：发布二进制前先现做前端产物
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-      - name: 构建前端
-        working-directory: web
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-      - name: 前端产物就位
-        shell: bash
-        run: |
-          rm -rf internal/web/dist
-          cp -R web/dist internal/web/dist
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
       - name: 构建
         shell: bash
         run: |

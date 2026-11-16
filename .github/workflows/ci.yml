@@ -6,6 +6,12 @@ on:
     branches: [master, main]
   pull_request:
 
+# 同一 ref 只保留最新一次运行：旧提交的测试结果没有意义，直接取消省额度。
+# 组名带 ci- 前缀，避免和 Release 工作流互相取消。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # 纯 Go 构建：不需要任何系统 SDK 或 CGO flags。
   # 三个平台都跑完整的 build / vet / test，平台差异（路径分隔符、注册表、
@@ -34,7 +40,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+          # --no-install-recommends 少装推荐包，pkg-config 需要的依赖都在 Depends 里
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
       # macOS 上 systray 需要 cgo，runner 自带 Xcode clang；Windows 纯 Go 无需 cgo。
       - name: 构建
         run: go build ./...
@@ -102,6 +109,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
       - name: 安装前端依赖
         working-directory: web
         run: npm ci --no-audit --no-fund
