@@ -106,10 +106,13 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - name: 下载所有产物
+      # 只取打包产物：ci 还会上传 web-dist 和 coverage，全下会把 index.html、
+      # coverage.out 一起传进 Release。
+      - name: 下载发布包
         uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: mytgfs-*
           merge-multiple: true
       - name: 发布 Release
         uses: softprops/action-gh-release@v3
