@@ -265,6 +265,7 @@
   "err.downloads_bad_request": "下载请求不合法",
   "err.queue_no_handler": "队列没有配置处理函数",
   "err.queue_full": "排队任务太多，等当前任务跑完再继续",
+  "err.queue_conn_lost": "网络连接多次中断，断点已保留，可点重试继续",
   "err.proxy_dialer": "代理拨号器不可用: %s",
   "log.proxy_unavailable": "SOCKS5 代理不可用: %v",
   "err.queue_unavailable": "当前入口不提供任务队列",

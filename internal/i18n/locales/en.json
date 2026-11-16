@@ -265,6 +265,7 @@
   "err.downloads_bad_request": "invalid download request",
   "err.queue_no_handler": "queue has no handler",
   "err.queue_full": "too many queued tasks, wait for the current ones to finish",
+  "err.queue_conn_lost": "connection dropped repeatedly; resume point kept, retry to continue",
   "err.proxy_dialer": "proxy dialer unavailable: %s",
   "log.proxy_unavailable": "SOCKS5 proxy unavailable: %v",
   "err.queue_unavailable": "the task queue is unavailable here",

@@ -13,10 +13,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gotd/td/tgerr"
@@ -667,6 +670,15 @@ func (q *Queue) claim(ctx context.Context) (Job, bool, error) {
 	return job, true, nil
 }
 
+// maxConnRetries 是传输层被掐断后的最大自动重试次数。
+//
+// 输入：无（测试可临时改小）
+// 输出：次数上限
+// 预期：引擎长期不可用时到点判失败并保留断点，让人看到原因并手动重试，
+//
+//	不无限打日志；断网恢复在 10 次退避（约 5 分钟）内可自愈
+var maxConnRetries = 10
+
 // run 执行任务并按需重试。
 func (q *Queue) run(ctx context.Context, job Job) {
 	q.mu.RLock()
@@ -676,6 +688,7 @@ func (q *Queue) run(ctx context.Context, job Job) {
 		q.finish(job.ID, errors.New(i18n.T("err.queue_no_handler")))
 		return
 	}
+	connRetries := 0
 	for {
 		err := handler(ctx, job)
 		if err == nil {
@@ -686,16 +699,30 @@ func (q *Queue) run(ctx context.Context, job Job) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !Retryable(err) {
-			// 频道侧错误在 telegramstore 内部已包过一次提示，这里不再重复包
-			if telegramstore.IsChannelUnavailable(err) {
-				q.finish(job.ID, err)
-			} else {
-				q.finish(job.ID, telegramstore.DescribeError(err))
+		retryable := Retryable(err)
+		if !retryable {
+			// 传输层被上游掐断（引擎判死连接、网络中断）时任务 ctx 仍存活，
+			// 这时可以安全重试：上传断点会跳过已完成的分片
+			if !isConnInterrupted(err) {
+				// 频道侧错误在 telegramstore 内部已包过一次提示，这里不再重复包
+				if telegramstore.IsChannelUnavailable(err) {
+					q.finish(job.ID, err)
+				} else {
+					q.finish(job.ID, telegramstore.DescribeError(err))
+				}
+				return
 			}
-			return
+			connRetries++
+			if connRetries > maxConnRetries {
+				q.finish(job.ID, fmt.Errorf("%s: %w", i18n.T("err.queue_conn_lost"), err))
+				return
+			}
 		}
 		wait := backoff(job.Attempt)
+		if !retryable {
+			// 连接中断单独计数退避，不跟限流等待混在一起
+			wait = backoff(connRetries)
+		}
 		if d, ok := RetryAfter(err); ok {
 			wait = d + time.Second
 		}
@@ -706,6 +733,25 @@ func (q *Queue) run(ctx context.Context, job Job) {
 		job.Attempt++
 		q.bump(job.ID, job.Attempt)
 	}
+}
+
+// isConnInterrupted 判断错误是否来自传输层被上游打断。
+//
+// 输入：handler 返回的 error
+// 输出：canceled/deadline/EOF/连接重置 之一时为 true
+// 预期：只在任务 ctx 仍存活时调用（run 已先排除主动取消），
+//
+//	这类错误重试是安全的；其它确定性错误不走这里
+func isConnInterrupted(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return true
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return true
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE):
+		return true
+	}
+	return false
 }
 
 // backoff 计算第 n 次尝试后的等待时间：1s 起翻倍，封顶 1 分钟。
