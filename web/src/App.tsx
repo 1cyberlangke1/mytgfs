@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FolderTree,
   HardDriveDownload,
@@ -80,14 +80,9 @@ import {
   uploadFile,
   uploadPoster,
 } from './api';
-import { OverviewView } from './components/OverviewView';
-import { FilesView } from './components/FilesView';
-import { SettingsView } from './components/SettingsView';
 import { AccountCard } from './components/AccountCard';
-import { DownloadsView } from './components/DownloadsView';
 import { ProblemBanner } from './components/ProblemBanner';
 import { ToastStack, type ToastMessage } from './components/ToastStack';
-import { FilePreviewModal } from './components/FilePreviewModal';
 import {
   useInterruptibleViewSpring,
 } from './components/ui';
@@ -95,6 +90,14 @@ import { WindowCustomScrollbar } from './components/CustomScrollbar';
 import { AppSidebar } from './components/AppSidebar';
 import { PhoneTabBar, PhoneTopBar } from './components/PhoneChrome';
 import { makeVideoPoster } from './utils/poster';
+
+// 按页签懒加载：首屏只带壳与概览之外的公共部分，切换页签时再取对应 chunk。
+// 输入：无；输出：React.lazy 组件；预期：vite 按动态 import 自动分包，首包体积下降。
+const OverviewView = lazy(() => import('./components/OverviewView').then((m) => ({ default: m.OverviewView })));
+const FilesView = lazy(() => import('./components/FilesView').then((m) => ({ default: m.FilesView })));
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })));
+const DownloadsView = lazy(() => import('./components/DownloadsView').then((m) => ({ default: m.DownloadsView })));
+const FilePreviewModal = lazy(() => import('./components/FilePreviewModal').then((m) => ({ default: m.FilePreviewModal })));
 
 const STORAGE_KEYS = {
   tab: 'mytgfs_active_tab_v1',
@@ -1619,6 +1622,7 @@ export default function App() {
               transformOrigin: 'top center',
             }}
           >
+            <Suspense fallback={<div className="py-16" aria-hidden="true" />}>
             {activeTab === 'overview' && (
               <OverviewView
                 t={t}
@@ -1708,6 +1712,7 @@ export default function App() {
                 onPreview={handlePreviewDownloaded}
               />
             )}
+            </Suspense>
           </motion.div>
         </main>
       </div>
@@ -1724,6 +1729,7 @@ export default function App() {
 
 
       {/* File Details & Media Preview Modal */}
+      <Suspense fallback={null}>
       <FilePreviewModal
         file={previewFile}
         allFiles={files}
@@ -1744,6 +1750,7 @@ export default function App() {
         streamOverride={localPreview ? localFileURL(localPreview.name) : undefined}
         actionLabel={t.downloads.openBtn}
       />
+      </Suspense>
 
       {/* iOS Dynamic Toast Notification Stack */}
       <ToastStack
