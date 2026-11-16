@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   keptStaged,
+  relDirPrefix,
   sourcesFromFiles,
   stageSources,
   stagedDisplayPath,
   stagedTotalBytes,
   toTransferTasks,
+  uploadArgs,
+  validateUploadName,
+  withName,
 } from './uploadPlan';
 
 // fileOf 造一个指定大小与名字的 File；size 用真实字节数，避免 mock 出不可能的体积。
@@ -44,6 +48,8 @@ describe('stageSources', () => {
     expect(new Set(staged.map((s) => s.id)).size).toBe(2);
     expect(staged.every((s) => s.volumeId === 'vol' && s.parentId === 'folder-1')).toBe(true);
     expect(staged[1]?.rel).toBe('dir/b.txt');
+    // 生效文件名默认就是 File 自带的名字
+    expect(staged.map((s) => s.name)).toEqual(['a.txt', 'b.txt']);
   });
 });
 
@@ -83,6 +89,18 @@ describe('keptStaged', () => {
   });
 });
 
+describe('relDirPrefix', () => {
+  it('取目录前缀并保留结尾斜杠', () => {
+    expect(relDirPrefix('dir/sub/a.txt')).toBe('dir/sub/');
+    expect(relDirPrefix('a.txt')).toBe('');
+    expect(relDirPrefix('')).toBe('');
+  });
+
+  it('反斜杠路径按 Windows 习惯切开', () => {
+    expect(relDirPrefix('dir\\sub\\a.txt')).toBe('dir/sub/');
+  });
+});
+
 describe('stagedDisplayPath', () => {
   it('有相对路径就用相对路径，否则用文件名', () => {
     const staged = stageSources(
@@ -95,6 +113,73 @@ describe('stagedDisplayPath', () => {
     );
     expect(stagedDisplayPath(staged[0]!)).toBe('a.txt');
     expect(stagedDisplayPath(staged[1]!)).toBe('dir/b.txt');
+  });
+
+  it('改过名后按新名字拼路径，目录层级保持不变', () => {
+    const staged = stageSources([{ file: fileOf('b.txt'), rel: 'dir/b.txt' }], 'vol', null);
+    expect(stagedDisplayPath(withName(staged[0]!, ' renamed.txt '))).toBe('dir/renamed.txt');
+  });
+});
+
+describe('validateUploadName', () => {
+  it('普通名字通过', () => {
+    expect(validateUploadName('report.txt')).toBeNull();
+    expect(validateUploadName('  带空格的名字.txt  ')).toBeNull();
+    expect(validateUploadName('.env')).toBeNull();
+  });
+
+  it('空名与点目录被拒', () => {
+    expect(validateUploadName('')).toBe('empty');
+    expect(validateUploadName('   ')).toBe('empty');
+    expect(validateUploadName('.')).toBe('empty');
+    expect(validateUploadName('..')).toBe('empty');
+  });
+
+  it('路径分隔符与 NUL 被拒', () => {
+    expect(validateUploadName('a/b.txt')).toBe('separator');
+    expect(validateUploadName('a\\b.txt')).toBe('separator');
+    expect(validateUploadName('a\u0000b.txt')).toBe('separator');
+  });
+
+  it('超过 255 字节被拒，正好 255 通过', () => {
+    expect(validateUploadName('a'.repeat(255))).toBeNull();
+    expect(validateUploadName('a'.repeat(256))).toBe('too_long');
+    // 中文按 UTF-8 三字节算：85 字正好 255，86 字就越过上限
+    expect(validateUploadName('名'.repeat(85))).toBeNull();
+    expect(validateUploadName('名'.repeat(86))).toBe('too_long');
+  });
+});
+
+describe('withName', () => {
+  it('只换生效文件名并去掉两端空白', () => {
+    const staged = stageSources([{ file: fileOf('b.txt'), rel: 'dir/b.txt' }], 'vol', 'p1');
+    const renamed = withName(staged[0]!, '  new name.txt ');
+    expect(renamed.name).toBe('new name.txt');
+    expect(renamed.file).toBe(staged[0]!.file);
+    expect(renamed.id).toBe(staged[0]!.id);
+    expect(renamed.rel).toBe('dir/b.txt');
+    expect(renamed.volumeId).toBe('vol');
+    expect(renamed.parentId).toBe('p1');
+  });
+});
+
+describe('uploadArgs', () => {
+  it('没有相对路径时只交名字，rel 留空', () => {
+    const staged = stageSources([{ file: fileOf('a.txt'), rel: '' }], 'vol', null);
+    expect(uploadArgs(withName(staged[0]!, 'b.txt'))).toEqual({ rel: '', name: 'b.txt' });
+  });
+
+  it('目录内的文件把新名字写进 rel，因为后端此时忽略 name', () => {
+    const staged = stageSources([{ file: fileOf('b.txt'), rel: 'dir/b.txt' }], 'vol', null);
+    expect(uploadArgs(withName(staged[0]!, 'c.txt'))).toEqual({
+      rel: 'dir/c.txt',
+      name: 'c.txt',
+    });
+  });
+
+  it('没改名时 rel 与原始相对路径一致', () => {
+    const staged = stageSources([{ file: fileOf('b.txt'), rel: 'dir/b.txt' }], 'vol', null);
+    expect(uploadArgs(staged[0]!)).toEqual({ rel: 'dir/b.txt', name: 'b.txt' });
   });
 });
 
@@ -134,5 +219,11 @@ describe('toTransferTasks', () => {
     );
     const tasks = toTransferTasks(staged, 'batch-1');
     expect(new Set(tasks.map((t) => t.id)).size).toBe(2);
+  });
+
+  it('改过名的项按新名字建任务，图标分类也跟新名字走', () => {
+    const staged = stageSources([{ file: fileOf('clip.mp4', 64), rel: 'dir/clip.mp4' }], 'vol', null);
+    const tasks = toTransferTasks([withName(staged[0]!, 'note.txt')], 'batch-2');
+    expect(tasks[0]).toMatchObject({ fileName: 'note.txt', category: 'document' });
   });
 });

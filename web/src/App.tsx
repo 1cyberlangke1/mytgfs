@@ -92,7 +92,14 @@ import { WindowCustomScrollbar } from './components/CustomScrollbar';
 import { AppSidebar } from './components/AppSidebar';
 import { PhoneTabBar, PhoneTopBar } from './components/PhoneChrome';
 import { makeVideoPoster } from './utils/poster';
-import { sourcesFromFiles, stageSources, toTransferTasks, type StagedUpload, type UploadSource } from './utils/uploadPlan';
+import {
+  sourcesFromFiles,
+  stageSources,
+  toTransferTasks,
+  uploadArgs,
+  type StagedUpload,
+  type UploadSource,
+} from './utils/uploadPlan';
 import { extractPasteContent, isEditableTarget, readClipboardContent } from './utils/paste';
 
 // 按页签懒加载：首屏只带壳与概览之外的公共部分，切换页签时再取对应 chunk。
@@ -512,7 +519,8 @@ export default function App() {
   const uploadAbort = useRef(new Map<string, AbortController>());
   // longOps 记录建卷/重建索这类长任务的取消句柄，键形如 create:<name>
   const longOps = useRef(new Map<string, AbortController>());
-  // rel 保留浏览器给的相对路径（文件夹上传），重发时层级不能丢
+  // rel 保留浏览器给的相对路径（文件夹上传），name 是清单里可能改过的文件名；
+  // 两者都存下来，重发/续传时不会退回原始文件名
   const uploadInputs = useRef(
     new Map<
       string,
@@ -521,6 +529,7 @@ export default function App() {
         volumeId: string;
         parentId: string | null;
         rel: string;
+        name: string;
         task: TransferTask;
         resume?: UploadResume;
       }
@@ -1011,7 +1020,8 @@ export default function App() {
     file: File,
     volumeId: string,
     parentId: string | null,
-    rel: string
+    rel: string,
+    name: string
   ) => {
     const ctl = new AbortController();
     uploadAbort.current.set(task.id, ctl);
@@ -1024,6 +1034,7 @@ export default function App() {
         volumeId,
         parentId || '/',
         rel,
+        name,
         file,
         (ratio) => {
           const bytes = Math.round(task.size * ratio);
@@ -1117,7 +1128,7 @@ export default function App() {
       const input = uploadInputs.current.get(id);
       if (!input) continue;
       activeUploads.current += 1;
-      void runUpload(input.task, input.file, input.volumeId, input.parentId, input.rel);
+      void runUpload(input.task, input.file, input.volumeId, input.parentId, input.rel, input.name);
     }
   };
 
@@ -1162,9 +1173,9 @@ export default function App() {
 
   // handleConfirmUpload 把确认后的草稿转成真正的上传任务。
   //
-  // 输入：kept 清单里留下的草稿项
+  // 输入：kept 清单里留下的草稿项（可能已在清单里改过名）
   // 输出：无
-  // 预期：先清空清单再入队；与旧实现共用 uploadInputs / uploadQueue，
+  // 预期：先清空清单再入队；改名写进 init 的 rel/name，不额外发重命名请求；
   //       并发上限、批次号与断点续传行为完全不变
   const handleConfirmUpload = (kept: StagedUpload[]) => {
     setStagedUploads([]);
@@ -1174,11 +1185,13 @@ export default function App() {
     const plan = toTransferTasks(kept, batchId);
     kept.forEach((item, index) => {
       const task = plan[index]!;
+      const target = uploadArgs(item);
       uploadInputs.current.set(task.id, {
         file: item.file,
         volumeId: item.volumeId,
         parentId: item.parentId,
-        rel: item.rel,
+        rel: target.rel,
+        name: target.name,
         task,
       });
     });

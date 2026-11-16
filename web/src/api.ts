@@ -258,9 +258,11 @@ export function discardUpload(id: string): Promise<void> {
 
 // uploadFile 上传单个文件，onProgress 汇报 0..1 进度。
 //
-// 输入：卷、目标目录、相对路径、文件、进度回调、取消信号、断点
+// 输入：卷、目标目录、相对路径、落盘文件名、文件、进度回调、取消信号、断点
 // 输出：写入后的卷内路径
 // 预期：
+//   - name 是清单里改名后的文件名，由调用方决定；与 file.name 可以不同，
+//     这样改名落进 init 请求，省掉一次上传后的重命名调用
 //   - 取消时抛 UploadPaused，会话保留，调用方可带断点继续
 //   - 会话已失效（404）时自动从头重传一次，而不是让用户手点
 //   - 其它错误丢弃服务端会话，不留半份临时文件
@@ -268,6 +270,7 @@ export async function uploadFile(
   volume: string,
   dir: string,
   rel: string,
+  name: string,
   file: File,
   onProgress?: (ratio: number) => void,
   signal?: AbortSignal,
@@ -278,7 +281,7 @@ export async function uploadFile(
     : await request<{ id: string }>('/api/upload/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vol: volume, dir, rel, name: file.name, size: file.size }),
+        body: JSON.stringify({ vol: volume, dir, rel, name, size: file.size }),
       });
   let offset = resume?.offset ?? 0;
   try {
@@ -300,7 +303,7 @@ export async function uploadFile(
     }
     if (err instanceof ApiError && err.status === 404 && (resume || offset > 0)) {
       // 服务端会话过期（重启/超时）：自动重开一次
-      return uploadFile(volume, dir, rel, file, onProgress, signal);
+      return uploadFile(volume, dir, rel, name, file, onProgress, signal);
     }
     void request(`/api/upload?id=${encodeURIComponent(session.id)}`, { method: 'DELETE' }).catch(
       () => undefined

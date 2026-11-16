@@ -59,8 +59,10 @@ describe('UploadPlanDialog', () => {
   it('列出全部文件并给出合计', () => {
     render(<UploadPlanDialog t={t} locale="zh" items={stagedOf()} onConfirm={vi.fn()} onCancel={vi.fn()} />);
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('a.txt')).toBeTruthy();
-    expect(within(dialog).getByText('dir/b.txt')).toBeTruthy();
+    // 文件名在可编辑输入框里，目录前缀单独一行显示
+    expect(within(dialog).getByDisplayValue('a.txt')).toBeTruthy();
+    expect(within(dialog).getByDisplayValue('b.txt')).toBeTruthy();
+    expect(within(dialog).getByText('dir/')).toBeTruthy();
     expect(within(dialog).getByText(/2 个文件/)).toBeTruthy();
   });
 
@@ -74,7 +76,7 @@ describe('UploadPlanDialog', () => {
     await user.click(
       within(dialog).getByRole('button', { name: `${t.files.uploadPlanRemove}: a.txt` })
     );
-    expect(within(dialog).queryByText('a.txt')).toBeNull();
+    expect(within(dialog).queryByDisplayValue('a.txt')).toBeNull();
 
     await user.click(within(dialog).getByRole('button', { name: t.files.uploadPlanConfirm }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
@@ -94,7 +96,58 @@ describe('UploadPlanDialog', () => {
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
 
     await user.click(within(dialog).getByRole('button', { name: t.files.uploadPlanRestoreAll }));
-    expect(within(dialog).getByText('a.txt')).toBeTruthy();
+    expect(within(dialog).getByDisplayValue('a.txt')).toBeTruthy();
+  });
+
+  it('清单里能改名，确认时交出新名字', async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <UploadPlanDialog t={t} locale="zh" items={stagedOf()} onConfirm={onConfirm} onCancel={vi.fn()} />
+    );
+
+    const field = screen.getByLabelText(`${t.files.uploadPlanRename}: a.txt`);
+    await user.clear(field);
+    await user.type(field, 'renamed.txt');
+    await user.click(screen.getByRole('button', { name: t.files.uploadPlanConfirm }));
+
+    const kept = onConfirm.mock.calls[0]?.[0] as { name: string }[];
+    expect(kept.map((item) => item.name)).toEqual(['renamed.txt', 'b.txt']);
+  });
+
+  it('名字为空时标红并挡住开始上传', async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <UploadPlanDialog t={t} locale="zh" items={stagedOf()} onConfirm={onConfirm} onCancel={vi.fn()} />
+    );
+
+    const field = screen.getByLabelText(`${t.files.uploadPlanRename}: a.txt`);
+    await user.clear(field);
+    expect(screen.getByText(t.files.uploadPlanNameEmpty)).toBeTruthy();
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+
+    const confirm = screen.getByRole('button', {
+      name: t.files.uploadPlanConfirm,
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    await user.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('名字带路径分隔符也被拦下', async () => {
+    const user = userEvent.setup();
+    render(
+      <UploadPlanDialog t={t} locale="zh" items={stagedOf()} onConfirm={vi.fn()} onCancel={vi.fn()} />
+    );
+
+    const field = screen.getByLabelText(`${t.files.uploadPlanRename}: a.txt`);
+    await user.clear(field);
+    await user.type(field, 'a/b.txt');
+    expect(screen.getByText(t.files.uploadPlanNameSeparator)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: t.files.uploadPlanConfirm }) as HTMLButtonElement).disabled
+    ).toBe(true);
   });
 
   it('取消走 onCancel', async () => {

@@ -5,9 +5,12 @@ import { formatBytes, inferFileCategory } from '../utils/fsLogic';
 import { Translations, interpolate } from '../utils/i18n';
 import {
   keptStaged,
-  stagedDisplayPath,
+  relDirPrefix,
   stagedTotalBytes,
+  validateUploadName,
+  withName,
   type StagedUpload,
+  type UploadNameError,
 } from '../utils/uploadPlan';
 import { Modal } from './Modal';
 import { Button } from './ui';
@@ -121,13 +124,109 @@ function PlanThumb({
   );
 }
 
+// 改名失败原因到文案键的映射：与 UploadNameError 一一对应
+const NAME_ERROR_KEYS = {
+  empty: 'uploadPlanNameEmpty',
+  separator: 'uploadPlanNameSeparator',
+  too_long: 'uploadPlanNameTooLong',
+} as const;
+
 /**
- * UploadPlanDialog 让用户在开始上传前剔除不要的文件。
+ * PlanRow 渲染清单里的一行：缩略图、可改名的文件名、大小与移除按钮。
+ *
+ * 输入：item 草稿项；name 输入框当前文本；error 校验结果；
+ *       t/locale 文案；onRename/onRemove/onPreview 回调
+ * 输出：一行 <li>
+ * 预期：文件名在确认前就能改，改的只是草稿字段，不发任何请求；
+ *       非法名字当场标红并说明原因，同时挡住「开始上传」
+ */
+function PlanRow({
+  item,
+  name,
+  error,
+  t,
+  locale,
+  onRename,
+  onRemove,
+  onPreview,
+}: {
+  item: StagedUpload;
+  name: string;
+  error: UploadNameError | null;
+  t: Translations;
+  locale: Locale;
+  onRename: (id: string, next: string) => void;
+  onRemove: (id: string) => void;
+  onPreview: (preview: ThumbPreview | null) => void;
+}) {
+  const errorId = useId();
+  const inputId = useId();
+  const prefix = relDirPrefix(item.rel);
+  // 移除按钮的读屏标签用当前输入的名字，改过名也能对上这一行
+  const path = `${prefix}${name.trim() || item.name}`;
+
+  return (
+    <li className="flex items-center gap-3 py-2">
+      <PlanThumb file={item.file} onPreview={onPreview} />
+      <div className="min-w-0 flex-1">
+        {/* 每行一个真实 label：读屏能念出改的是哪个文件，不依赖 aria-label */}
+        <label htmlFor={inputId} className="sr-only">
+          {`${t.files.uploadPlanRename}: ${item.file.name}`}
+        </label>
+        <input
+          id={inputId}
+          type="text"
+          value={name}
+          onChange={(event) => onRename(item.id, event.target.value)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
+          spellCheck={false}
+          autoComplete="off"
+          dir="auto"
+          className={`w-full min-w-0 rounded-md border bg-transparent px-2 py-1 text-sm text-zinc-900 outline-none transition-colors focus-visible:border-[#007AFF] dark:text-zinc-100 ${
+            error ? 'border-red-400 dark:border-red-500' : 'border-zinc-200 dark:border-zinc-700'
+          }`}
+        />
+        {prefix ? (
+          <p
+            className="mt-1 truncate text-[11px] font-mono text-zinc-500 dark:text-zinc-400"
+            dir="ltr"
+            title={prefix}
+          >
+            {prefix}
+          </p>
+        ) : null}
+        {error ? (
+          <p id={errorId} className="mt-1 text-[11px] text-red-500">
+            {t.files[NAME_ERROR_KEYS[error]]}
+          </p>
+        ) : null}
+      </div>
+      <span className="shrink-0 text-[11px] font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
+        {formatBytes(item.file.size, 1, locale)}
+      </span>
+      <button
+        type="button"
+        onClick={() => onRemove(item.id)}
+        aria-label={`${t.files.uploadPlanRemove}: ${path}`}
+        title={t.files.uploadPlanRemove}
+        className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </li>
+  );
+}
+
+/**
+ * UploadPlanDialog 让用户在开始上传前剔除不要的文件，并顺手改名。
  *
  * 输入：见 UploadPlanDialogProps
  * 输出：native <dialog> 形式的清单弹窗
  * 预期：
  *   - 每行一个 ✕，移除后该文件不再出现在清单里，也不会发出任何请求
+ *   - 每行文件名可直接编辑，改名写进上传请求本身，不额外发重命名调用
+ *   - 名字非法（空、带分隔符、超 255 字节）当场标红并禁用「开始上传」
  *   - 「全部移除」把整批移出；「恢复全选」把它们放回来
  *   - 清空后「开始上传」禁用，避免发出一份空计划
  *   - 清单会随外部追加（拖拽/剪贴板）继续增长，不用关掉重开
@@ -144,14 +243,26 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   // 悬停中的缩略图放大预览；移开、滚动或改动清单时清空
   const [preview, setPreview] = useState<ThumbPreview | null>(null);
+  // 改名草稿：只存输入框文本，确认时才 trim 后写进草稿项
+  const [names, setNames] = useState<Record<string, string>>({});
 
   const rows = keptStaged(items, hidden);
+  // 没改过的项没有草稿记录，直接用 stageSources 时带的原始文件名
+  const nameOf = (item: StagedUpload) => names[item.id] ?? item.name;
+  // 有任何一个名字非法就先挡住，避免发起必定被后端拒的请求
+  const blocked = rows.some((item) => validateUploadName(nameOf(item)) !== null);
   const totalBytes = stagedTotalBytes(rows);
   const summary = interpolate(
     t.files.uploadPlanSummary,
     { count: rows.length, size: formatBytes(totalBytes, 1, locale) },
     locale
   );
+
+  const rename = (id: string, next: string) => {
+    setNames((prev) => ({ ...prev, [id]: next }));
+  };
+
+  const confirm = () => onConfirm(rows.map((item) => withName(item, nameOf(item))));
 
   const hideOne = (id: string) => {
     setPreview(null);
@@ -186,44 +297,19 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
             onScroll={() => setPreview(null)}
             className="max-h-[min(50vh,20rem)] overflow-y-auto divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
           >
-            {rows.map((item) => {
-              const path = stagedDisplayPath(item);
-              return (
-                <li key={item.id} className="flex items-center gap-3 py-2">
-                  <PlanThumb file={item.file} onPreview={setPreview} />
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className="truncate text-sm text-zinc-900 dark:text-zinc-100"
-                      title={path}
-                      dir="auto"
-                    >
-                      {item.file.name}
-                    </p>
-                    {item.rel ? (
-                      <p
-                        className="truncate text-[11px] font-mono text-zinc-500 dark:text-zinc-400"
-                        dir="ltr"
-                        title={item.rel}
-                      >
-                        {item.rel}
-                      </p>
-                    ) : null}
-                  </div>
-                  <span className="shrink-0 text-[11px] font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
-                    {formatBytes(item.file.size, 1, locale)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => hideOne(item.id)}
-                    aria-label={`${t.files.uploadPlanRemove}: ${path}`}
-                    title={t.files.uploadPlanRemove}
-                    className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              );
-            })}
+            {rows.map((item) => (
+              <PlanRow
+                key={item.id}
+                item={item}
+                name={nameOf(item)}
+                error={validateUploadName(nameOf(item))}
+                t={t}
+                locale={locale}
+                onRename={rename}
+                onRemove={hideOne}
+                onPreview={setPreview}
+              />
+            ))}
           </ul>
         ) : (
           <p className="py-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
@@ -248,8 +334,8 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
               type="button"
               variant="accent"
               autoFocus
-              disabled={rows.length === 0}
-              onClick={() => onConfirm(rows)}
+              disabled={rows.length === 0 || blocked}
+              onClick={confirm}
             >
               {t.files.uploadPlanConfirm}
             </Button>
