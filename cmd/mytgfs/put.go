@@ -28,6 +28,7 @@ import (
 	"mytgfs/internal/app"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/index"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/vfs"
@@ -37,6 +38,22 @@ import (
 type putItem struct {
 	local  string
 	remote string
+}
+
+// putUploaded 是一个已上传文件的结构化结果。
+type putUploaded struct {
+	Path      string `json:"path"`
+	Local     string `json:"local"`
+	Size      int64  `json:"size"`
+	MessageID int    `json:"message_id"`
+	Sha256    string `json:"sha256,omitempty"`
+}
+
+// putFailure 是一个上传失败的条目。
+type putFailure struct {
+	Path  string `json:"path"`
+	Local string `json:"local"`
+	Error string `json:"error"`
 }
 
 // runPut 处理批量上传。
@@ -55,7 +72,7 @@ func runPut(args []string) {
 		fatal(err.Error())
 	}
 	if len(items) == 0 {
-		fatal(i18n.T("err.put_no_files"))
+		fatalCode("no_files", i18n.T("err.put_no_files"))
 	}
 
 	a, err := app.Load(app.Options{})
@@ -64,13 +81,15 @@ func runPut(args []string) {
 	}
 	_, volName, ok := a.Volume(*name)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", volName))
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	okCount, failCount := 0, 0
+	uploaded := make([]putUploaded, 0, len(items))
+	failed := make([]putFailure, 0)
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		fsys := vfs.New(ctx, s.Index, s.Store(), a.Config().Mount.ReadChunk(), nil)
 		fsys.SetVolume(volName)
@@ -81,58 +100,74 @@ func runPut(args []string) {
 		defer fsys.Close()
 
 		for _, it := range items {
-			if err := putOne(ctx, fsys, it); err != nil {
+			node, perr := putOne(ctx, fsys, it)
+			if perr != nil {
 				failCount++
-				ui.Out(i18n.T("put.fail", it.remote, err))
+				failed = append(failed, putFailure{Path: it.remote, Local: it.local, Error: perr.Error()})
+				ui.Out(i18n.T("put.fail", it.remote, perr))
 				continue
 			}
 			okCount++
+			uploaded = append(uploaded, putUploaded{
+				Path:      it.remote,
+				Local:     it.local,
+				Size:      node.Size,
+				MessageID: node.ID,
+				Sha256:    node.Sha256,
+			})
+			ui.Out(i18n.T("put.ok", it.remote, node.Size, node.ID))
 		}
 		return nil
 	})
 	if err != nil {
 		failErr(i18n.T("err.put_prefix"), err)
 	}
+	ui.Print(map[string]any{
+		"volume":   volName,
+		"uploaded": uploaded,
+		"failed":   failed,
+		"counts":   map[string]int{"uploaded": okCount, "failed": failCount},
+	})
 	ui.Out(i18n.T("put.summary", okCount, failCount))
 	if failCount > 0 {
 		os.Exit(1)
 	}
 }
 
-// putOne 上传单个文件并登记目录项。
+// putOne 上传单个文件并返回落库后的索引记录。
 //
 // 输入：ctx；fsys 卷内文件系统（已挂持久化队列）；it 本地与远程路径
-// 输出：error
+// 输出：上传后的节点记录（含消息号、大小、sha256）；失败时为 error
 // 预期：目标父目录按需创建；写入走临时文件 + 覆盖语义
-func putOne(ctx context.Context, fsys *vfs.FileSystem, it putItem) error {
+func putOne(ctx context.Context, fsys *vfs.FileSystem, it putItem) (index.Node, error) {
+	var zero index.Node
 	f, err := os.Open(it.local)
 	if err != nil {
-		return err
+		return zero, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return err
+		return zero, err
 	}
 	if st.Size() > telegramstore.MaxFileSize {
-		return telegramstore.ErrTooLarge
+		return zero, telegramstore.ErrTooLarge
 	}
 
 	if err := mkdirAll(ctx, fsys, path.Dir(it.remote)); err != nil {
-		return err
+		return zero, err
 	}
 	if err := fm.New(fsys).Upload(ctx, it.remote, f); err != nil {
-		return err
+		return zero, err
 	}
 	n, ok, err := fsys.Index().NodeByPath(ctx, it.remote)
 	if err != nil {
-		return err
+		return zero, err
 	}
 	if !ok {
-		return os.ErrNotExist
+		return zero, os.ErrNotExist
 	}
-	ui.Out(i18n.T("put.ok", it.remote, n.Size, n.ID))
-	return nil
+	return n, nil
 }
 
 // mkdirAll 按需创建远程目录。

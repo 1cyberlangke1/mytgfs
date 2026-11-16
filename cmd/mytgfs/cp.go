@@ -56,16 +56,16 @@ func runCopy(args []string) {
 	}
 	_, volName, ok := a.Volume(*name)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", volName))
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 	dstName := cmp.Or(*to, volName)
 	dstVolume, _, ok := a.Volume(dstName)
 	if !ok {
-		fatal(i18n.T("err.volume_target_not_found", dstName))
+		fatalCode("volume_not_found", i18n.T("err.volume_target_not_found", dstName))
 	}
 	// 同卷同路径才是无意义操作；跨卷复制到相同路径是合法的
 	if src == dst && dstName == volName {
-		fatal(i18n.T("err.cp_same_path"))
+		fatalCode("cp_same_path", i18n.T("err.cp_same_path"))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -89,7 +89,7 @@ func runCopy(args []string) {
 			return gerr
 		}
 		if !found {
-			fatal(i18n.T("err.cp_src_missing", src))
+			fatalCode("cp_src_missing", i18n.T("err.cp_src_missing", src))
 		}
 		old, hadOld, gerr := dstIdx.NodeByPath(ctx, dst)
 		if gerr != nil {
@@ -98,11 +98,21 @@ func runCopy(args []string) {
 		if hadOld && !*force {
 			// 目标已有同内容的文件：不发消息，直接跳过
 			if sameContent(old, source) {
+				ui.Print(map[string]any{
+					"volume":      volName,
+					"to_volume":   dstName,
+					"from":        src,
+					"to":          dst,
+					"skipped":     true,
+					"document_id": old.DocumentID,
+					"message_id":  old.ID,
+					"size":        old.Size,
+				})
 				ui.Outf("SKIP %s:%s -> %s:%s doc=%d size=%d\n",
 					volName, src, dstName, dst, old.DocumentID, old.Size)
 				return nil
 			}
-			fatal(i18n.T("err.cp_dst_exists", dst))
+			fatalCode("cp_dst_exists", i18n.T("err.cp_dst_exists", dst))
 		}
 
 		srcVol := volName
@@ -138,6 +148,16 @@ func runCopy(args []string) {
 		if nerr != nil || !ok {
 			return nerr
 		}
+		ui.Print(map[string]any{
+			"volume":      volName,
+			"to_volume":   dstName,
+			"from":        src,
+			"to":          dst,
+			"skipped":     false,
+			"document_id": part.DocumentID,
+			"message_id":  part.ID,
+			"size":        part.Size,
+		})
 		ui.Outf("COPY %s:%s -> %s:%s doc=%d msg=%d size=%d\n",
 			volName, src, dstName, dst, part.DocumentID, part.ID, part.Size)
 		return nil

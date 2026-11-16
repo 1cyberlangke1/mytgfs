@@ -130,7 +130,7 @@ func runVolumeDelete(args []string) {
 
 	volName := strings.TrimSpace(*name)
 	if volName == "" {
-		fatal(i18n.T("err.volume_name_required"))
+		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
 
 	cfg, err := config.Load(*cfgPath)
@@ -145,7 +145,7 @@ func runVolumeDelete(args []string) {
 		}
 	}
 	if target == nil {
-		fatal(i18n.T("err.volume_not_found", volName))
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 
 	apiHash := cfg.APIHash()
@@ -206,7 +206,7 @@ func runVolumeAttach(args []string) {
 
 	volName := strings.TrimSpace(*name)
 	if volName == "" {
-		fatal(i18n.T("err.volume_name_required"))
+		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -214,7 +214,7 @@ func runVolumeAttach(args []string) {
 	}
 	for _, v := range cfg.Volumes {
 		if strings.EqualFold(v.Name, volName) {
-			fatal(i18n.T("err.volume_exists", volName))
+			fatalCode("volume_exists", i18n.T("err.volume_exists", volName))
 		}
 	}
 	apiHash := cfg.APIHash()
@@ -273,13 +273,13 @@ func runVolumeCreate(args []string) {
 
 	volName := strings.TrimSpace(*name)
 	if volName == "" {
-		fatal(i18n.T("err.volume_name_required"))
+		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
 	// 先查配置里有没有重名，避免白建一个频道
 	if cfg, err := config.Load(*cfgPath); err == nil {
 		for _, v := range cfg.Volumes {
 			if strings.EqualFold(v.Name, volName) {
-				fatal(i18n.T("err.volume_exists"))
+				fatalCode("volume_exists", i18n.T("err.volume_exists"))
 			}
 		}
 	}
@@ -333,7 +333,7 @@ func runVolumeCreate(args []string) {
 	}
 	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
 		if errors.Is(aerr, config.ErrVolumeExists) {
-			fatal(i18n.T("err.volume_exists"))
+			fatalCode("volume_exists", i18n.T("err.volume_exists"))
 		}
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_write"), aerr))
 	}

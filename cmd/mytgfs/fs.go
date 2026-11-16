@@ -2,7 +2,7 @@ package main
 
 // 文件操作子命令：ls / mkdir / rm / mv / get / search。
 //
-// 与面板共用 internal/fm + internal/dav，语义完全一致：
+// 与面板共用 internal/fm + internal/vfs，语义完全一致：
 //   - 路径是卷内绝对路径，可省略前导 /，反斜杠自动转换
 //   - rm 删目录会递归删除
 //   - 所有命令支持 --name 选卷、--json 结构化输出
@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"strings"
+	"time"
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/datadir"
@@ -38,7 +39,7 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 	}
 	_, volName, ok := a.Volume(name)
 	if !ok {
-		fatal(i18n.T("err.volume_not_found", volName))
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -58,10 +59,42 @@ func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files)
 	}
 }
 
+// lsEntry 是 ls --json 的单条记录。
+//
+// 输入：无（由 fm.Entry 拼装）
+// 输出：JSON 字段 name/path/dir/size/mod
+// 预期：path 是卷内绝对路径，脚本可直接回传给 get/rm
+type lsEntry struct {
+	Name string    `json:"name"`
+	Path string    `json:"path"`
+	Dir  bool      `json:"dir"`
+	Size int64     `json:"size"`
+	Mod  time.Time `json:"mod"`
+}
+
+// lsEntries 把 fm.Entry 列表转成带完整路径的 JSON 记录。
+//
+// 输入：dir 列出的目录；entries 目录项
+// 输出：等长切片，Path = dir + name
+// 预期：dir 已由 volPath 规范化，path.Join 不会产生重复斜杠
+func lsEntries(dir string, entries []fm.Entry) []lsEntry {
+	view := make([]lsEntry, 0, len(entries))
+	for _, e := range entries {
+		view = append(view, lsEntry{
+			Name: e.Name,
+			Path: path.Join(dir, e.Name),
+			Dir:  e.Dir,
+			Size: e.Size,
+			Mod:  e.Mod,
+		})
+	}
+	return view
+}
+
 // runLs 列出目录内容。
 //
 // 输入：--name 卷名；可选位置参数目录（默认 /）
-// 输出：每行「类型 大小 修改时间 路径」；--json 输出 entries 数组
+// 输出：每行「类型 大小 修改时间 路径」；--json 输出 entries 数组（含 path）
 // 预期：目录不存在时报错退出 1
 func runLs(args []string) {
 	fset := flag.NewFlagSet("ls", flag.ExitOnError)
@@ -77,7 +110,8 @@ func runLs(args []string) {
 		if err != nil {
 			return err
 		}
-		ui.Print(map[string]any{"volume": vol, "dir": dir, "entries": entries})
+		view := lsEntries(dir, entries)
+		ui.Print(map[string]any{"volume": vol, "dir": dir, "entries": view})
 		for _, e := range entries {
 			kind := "f"
 			if e.Dir {
@@ -191,7 +225,7 @@ func runGet(args []string) {
 	}
 	// --json 下 stdout 只能是 JSON，二进制内容必须写到文件
 	if local == "-" && ui.JSONMode() {
-		fatal(i18n.T("err.get_stdout_json"))
+		fatalCode("usage", i18n.T("err.get_stdout_json"))
 	}
 	withFiles(*name, func(ctx context.Context, vol string, f fm.Files) error {
 		rf, err := f.Open(ctx, remote)

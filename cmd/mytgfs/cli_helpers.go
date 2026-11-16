@@ -60,8 +60,17 @@ func stripJSONFlag(args []string) []string {
 }
 
 func fatal(msg string) {
+	fatalCode("fatal", msg)
+}
+
+// fatalCode 以指定错误码退出。
+//
+// 输入：code 机器可读错误码；msg 人读信息
+// 输出：无（进程退出 1）；JSON 模式下发结构化错误到 stderr
+// 预期：人读模式与 fatal 完全一致，只有 JSON 的错误码不同
+func fatalCode(code, msg string) {
 	if ui.JSONMode() {
-		ui.Error("fatal", fmt.Errorf("%s", msg))
+		ui.Error(code, fmt.Errorf("%s", msg))
 		os.Exit(1)
 	}
 	ui.Errf("FAIL: %s\n", msg)

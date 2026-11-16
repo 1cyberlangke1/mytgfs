@@ -35,6 +35,7 @@ func runSync(args []string) {
 	defer cancel()
 
 	entries := 0
+	stats := map[string]any{}
 	err = a.Run(ctx, *name, func(ctx context.Context, s *app.Session) error {
 		if *rebuild {
 			nodes, rerr := a.AllNodes(ctx, s.Volume.ChatID)
@@ -45,6 +46,8 @@ func runSync(args []string) {
 			if rerr != nil {
 				return rerr
 			}
+			stats["mode"] = "rebuild"
+			stats["nodes"] = n
 			ui.Out(i18n.T("cli.rebuild_stats", n))
 		} else {
 			d := &tgsync.TelegramChannelDiffer{API: s.Client.API(), ChannelID: s.Volume.ChatID}
@@ -55,6 +58,12 @@ func runSync(args []string) {
 			if res.Truncated {
 				ui.Out(i18n.T("warn.diff_too_long"))
 			}
+			stats["mode"] = "sync"
+			stats["pulled"] = res.Pulled
+			stats["deleted"] = res.Deleted
+			stats["pts"] = res.Pts
+			stats["rounds"] = res.Rounds
+			stats["truncated"] = res.Truncated
 			ui.Out(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
 		}
 		children, cerr := s.Index.Children(ctx, 0)
@@ -62,11 +71,14 @@ func runSync(args []string) {
 			return cerr
 		}
 		entries = len(children)
+		stats["volume"] = s.Volume.Name
+		stats["entries"] = entries
 		return nil
 	})
 	if err != nil {
 		failErr(i18n.T("err.sync"), err)
 	}
+	ui.Print(stats)
 	ui.Out(i18n.T("cli.sync_ok", entries))
 }
 

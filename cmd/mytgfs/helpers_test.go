@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"mytgfs/internal/config"
+	"mytgfs/internal/fm"
 	"mytgfs/internal/ui"
 )
 
@@ -88,6 +90,38 @@ func TestStripJSONFlag(t *testing.T) {
 	}
 	if !ui.JSONMode() {
 		t.Fatal("--json 应打开 JSON 模式")
+	}
+}
+
+// TestLsEntries 目录项转 JSON 时补上卷内完整路径。
+//
+// 输入：根目录与子目录两种 dir，混合文件/目录项
+// 输出：Path 为 dir+name，其余字段原样透传
+// 预期：根目录不产生双斜杠；空列表返回非 nil 空切片
+func TestLsEntries(t *testing.T) {
+	mod := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := lsEntries("/", []fm.Entry{
+		{Name: "a.txt", Size: 3, Mod: mod},
+		{Name: "sub", Dir: true},
+	})
+	if len(got) != 2 {
+		t.Fatalf("条目数 = %d，期望 2", len(got))
+	}
+	if got[0].Path != "/a.txt" || got[0].Size != 3 || !got[0].Mod.Equal(mod) {
+		t.Fatalf("文件条目 = %+v，期望 path=/a.txt size=3", got[0])
+	}
+	if got[1].Path != "/sub" || !got[1].Dir {
+		t.Fatalf("目录条目 = %+v，期望 path=/sub dir=true", got[1])
+	}
+
+	sub := lsEntries("/batch", []fm.Entry{{Name: "b.bin"}})
+	if len(sub) != 1 || sub[0].Path != "/batch/b.bin" {
+		t.Fatalf("子目录路径 = %+v，期望 /batch/b.bin", sub)
+	}
+
+	empty := lsEntries("/", nil)
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("空列表应返回非 nil 空切片，得到 %#v", empty)
 	}
 }
 
