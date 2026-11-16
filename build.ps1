@@ -1,7 +1,7 @@
 # 构建 mytgfs。
 # 输入：-Package 额外产出可分发的 zip（含安装/卸载脚本与配置模板）
-# 输出：build\mytgfs.exe、build\mytgfs-tray.exe；失败时退出码 1
-# 预期：纯 Go 构建，不需要 CGO
+# 输出：build\mytgfs.exe、build\mytgfs-tray.exe、build\mytgfs-cli.exe；失败时退出码 1
+# 预期：纯 Go 构建，不需要 CGO；cli 版用 -tags noweb 去掉 web/tray
 param([switch]$Package)
 
 New-Item -ItemType Directory -Force -Path 'build' | Out-Null
@@ -41,12 +41,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output 'OK build\mytgfs-tray.exe'
 
+# 纯命令行版：不带 web/tray 依赖，体积约为完整版三分之一
+go build -trimpath -tags noweb -ldflags $base -o 'build\mytgfs-cli.exe' ./cmd/mytgfs
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'FAIL build\mytgfs-cli.exe'
+    exit 1
+}
+Write-Output 'OK build\mytgfs-cli.exe'
+
 # 可分发 zip：解压后运行 install.ps1，用户不需要装任何运行库
 if ($Package) {
     $out = 'build\package'
     if (Test-Path $out) { Remove-Item -Recurse -Force $out }
     New-Item -ItemType Directory -Force -Path $out | Out-Null
-    Copy-Item 'build\mytgfs.exe', 'build\mytgfs-tray.exe', 'config.example.toml', 'LICENSE' $out -Force
+    Copy-Item 'build\mytgfs.exe', 'build\mytgfs-tray.exe', 'build\mytgfs-cli.exe', 'config.example.toml', 'LICENSE' $out -Force
     Copy-Item 'packaging\install.ps1', 'packaging\uninstall.ps1' $out -Force
 
     $tag = $ver

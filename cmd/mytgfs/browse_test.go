@@ -3,8 +3,13 @@ package main
 // tree / du 递归逻辑的单测：用内存假目录树验证层数截断与体积汇总。
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
+	"os"
+	"path"
 	"testing"
 	"time"
 
@@ -12,13 +17,15 @@ import (
 	"mytgfs/internal/vfs"
 )
 
-// fakeFiles 是只实现 List 的 fm.Files 假实现。
+// fakeFiles 是只实现 List/Info/Open 的 fm.Files 假实现。
 //
-// 输入：tree 字段里的「目录路径 → 目录项」
-// 输出：List 按路径返回目录项
-// 预期：其余方法不会被 tree/du 调用，直接 panic 暴露意外依赖
+// 输入：tree 字段里的「目录路径 → 目录项」；info/data 用于单文件读取
+// 输出：List/Info/Open 按路径返回数据
+// 预期：其余方法不会被这些测试调用，直接 panic 暴露意外依赖
 type fakeFiles struct {
 	tree map[string][]fm.Entry
+	info map[string]fm.Entry
+	data map[string][]byte
 }
 
 func (f *fakeFiles) List(_ context.Context, dir string) ([]fm.Entry, error) {
@@ -29,8 +36,12 @@ func (f *fakeFiles) Search(context.Context, string, string, int) ([]fm.SearchHit
 	panic("unexpected Search")
 }
 
-func (f *fakeFiles) Info(context.Context, string) (fm.Entry, error) {
-	panic("unexpected Info")
+func (f *fakeFiles) Info(_ context.Context, p string) (fm.Entry, error) {
+	e, ok := f.info[p]
+	if !ok {
+		return fm.Entry{}, os.ErrNotExist
+	}
+	return e, nil
 }
 
 func (f *fakeFiles) Mkdir(context.Context, string) error { panic("unexpected Mkdir") }
@@ -45,7 +56,41 @@ func (f *fakeFiles) Remove(context.Context, string) error { panic("unexpected Re
 
 func (f *fakeFiles) Move(context.Context, string, string) error { panic("unexpected Move") }
 
-func (f *fakeFiles) Open(context.Context, string) (vfs.File, error) { panic("unexpected Open") }
+func (f *fakeFiles) Open(_ context.Context, p string) (vfs.File, error) {
+	b, ok := f.data[p]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return &memFile{name: path.Base(p), r: bytes.NewReader(b), size: int64(len(b))}, nil
+}
+
+// memFile 是只读内存文件，供 getFile 测试读取远端内容。
+type memFile struct {
+	name string
+	r    *bytes.Reader
+	size int64
+}
+
+func (m *memFile) Read(p []byte) (int, error)                { return m.r.Read(p) }
+func (m *memFile) Write([]byte) (int, error)                 { return 0, errors.New("read-only") }
+func (m *memFile) Close() error                              { return nil }
+func (m *memFile) Seek(off int64, whence int) (int64, error) { return m.r.Seek(off, whence) }
+
+func (m *memFile) Readdir(int) ([]fs.FileInfo, error) {
+	return nil, errors.New("not a directory")
+}
+
+func (m *memFile) Stat() (fs.FileInfo, error) { return memInfo{m}, nil }
+
+// memInfo 是 memFile 的 FileInfo 视图。
+type memInfo struct{ m *memFile }
+
+func (i memInfo) Name() string       { return i.m.name }
+func (i memInfo) Size() int64        { return i.m.size }
+func (i memInfo) Mode() fs.FileMode  { return 0o444 }
+func (i memInfo) ModTime() time.Time { return time.Unix(0, 0) }
+func (i memInfo) IsDir() bool        { return false }
+func (i memInfo) Sys() any           { return nil }
 
 // testTree 构造 /root + sub + sub/deep 三层假目录。
 func testTree() *fakeFiles {
