@@ -33,10 +33,12 @@
 
 - **发行包**：从 [Releases](https://github.com/1cyberlangke1/mytgfs/releases) 下载对应平台的包，
   解压后在 PowerShell 里执行一次 `.\install.ps1`（装到 `%LOCALAPPDATA%\mytgfs`，创建开始菜单快捷方式）。
-- **从源码构建**：Windows 执行 `.\build.ps1`（产出 `build\mytgfs.exe` 与 `build\mytgfs-tray.exe`，
-  `-Package` 附带分发 zip）；其它平台 `go build -o mytgfs ./cmd/mytgfs`。
+- **从源码构建**：Windows 执行 `.\build.ps1`（产出 `build\mytgfs.exe`、`build\mytgfs-tray.exe` 与
+  `build\mytgfs-cli.exe`，`-Package` 附带分发 zip）；其它平台 `go build -o mytgfs ./cmd/mytgfs`。
 
-`mytgfs-tray.exe` 是日常入口（GUI 子系统，全程无黑框）；`mytgfs.exe` 是命令行版，适合脚本与无界面环境。
+`mytgfs-tray.exe` 是日常入口（GUI 子系统，全程无黑框）；`mytgfs.exe` 是命令行版，适合脚本与无界面环境；
+`mytgfs-cli.exe` 是纯命令行构建（`go build -tags noweb`），不含面板与托盘依赖，体积约为完整版三分之一，
+`web` / `tray` 子命令直接视为未知命令。
 
 ### 首次配置（面板，推荐）
 
@@ -70,14 +72,24 @@
 | `mytgfs web [--port N]` | 启动本地 Web 面板（默认端口取 `[web].port`） |
 | `mytgfs tray` | 系统托盘常驻（自动同步、按需面板） |
 | `mytgfs ls` / `mkdir` / `rm` / `mv` | 列目录 / 建目录 / 删除 / 移动改名 |
-| `mytgfs get [--name 卷] <远端> [本地\|-]` | 下载（`-` 输出到 stdout） |
-| `mytgfs put [--name 卷] [--remote /目录] <路径...>` | 批量上传文件/目录 |
+| `mytgfs cat [--name 卷] <远端...>` | 按参数顺序把文件内容写到 stdout |
+| `mytgfs tree [--name 卷] [--depth N] [<目录>]` | 树形列出目录；`--depth` 限制层数 |
+| `mytgfs du [--name 卷] [<目录>]` | 按目录汇总文件数与体积 |
+| `mytgfs get [--name 卷] <远端> [本地\|-]` | 下载；本地已有且更短时自动续写，`-` 输出到 stdout |
+| `mytgfs put [--name 卷] [--remote /目录] [--dry-run] <路径...>` | 批量上传文件/目录；`--dry-run` 只列清单 |
+| `mytgfs shell [--name 卷]` | 交互式会话，`cd` / `pwd` 常驻，免去每次重连 |
 | `mytgfs sync [--name 卷] [--rebuild]` | 增量同步；`--rebuild` 全量重建索引 |
 | `mytgfs check [--name 卷] [--fix]` | 以频道全量节点为准核对索引 |
 | `mytgfs config show\|get\|set\|keys` | 读写配置（与面板设置页等价） |
 | `mytgfs startup enable\|disable\|status` | 开机自启（默认关） |
 
-各子命令都支持 `--help` 看参数；大部分支持 `--json` 输出结构化结果。
+各子命令都支持 `--help` 看参数。全局 `--dir <卷内目录>`（或环境变量 `MYTGFS_DIR`）
+给所有相对路径定基准，`--dir /a ls b` 等价于 `ls /a/b`。
+
+`--json` 下写操作返回结构化结果：`put` 给 `uploaded` / `failed` / `counts`，
+`cp` 给 `skipped` / `document_id`，`rm` 给实际删掉的 `removed`；错误进 stderr 且带稳定错误码。
+`get` 与 `put` 的进度只写 stderr，不污染 JSON。
+
 `MYTGFS_LANG` 可强制界面语言（`zh-CN` / `en`）。
 
 ## 配置
