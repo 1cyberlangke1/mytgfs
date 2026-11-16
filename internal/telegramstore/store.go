@@ -188,26 +188,37 @@ func (s *Store) ChannelID() int64 { return s.channelID }
 // 注意：access_hash 与登录 session 绑定，换 session 后需要重新解析。
 func (s *Store) resolve(ctx context.Context) (*tg.Channel, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.channel != nil {
-		return s.channel, nil
+		ch := s.channel
+		s.mu.Unlock()
+		return ch, nil
 	}
+	cache := s.cache
+	s.mu.Unlock()
+
 	// 本地缓存只存 access_hash：标题会随频道更新变化，不能一起吃缓存
-	if s.cache != nil {
-		if hash, ok, err := s.cache.LoadAccessHash(ctx, s.channelID); err == nil && ok && hash != 0 {
-			s.channel = &tg.Channel{ID: s.channelID, AccessHash: hash}
-			return s.channel, nil
+	if cache != nil {
+		if hash, ok, err := cache.LoadAccessHash(ctx, s.channelID); err == nil && ok && hash != 0 {
+			ch := &tg.Channel{ID: s.channelID, AccessHash: hash}
+			s.mu.Lock()
+			if s.channel == nil {
+				s.channel = ch
+			}
+			got := s.channel
+			s.mu.Unlock()
+			return got, nil
 		}
 	}
-	return s.loadLocked(ctx)
+	return s.loadChannel(ctx)
 }
 
-// loadLocked 发 channels.getChannels 并更新内存/本地缓存；调用方必须持有 s.mu。
+// loadChannel 发 channels.getChannels 并更新内存/本地缓存。
 //
 // 输入：ctx
 // 输出：频道信息（含标题）
-// 预期：成功后把 access_hash 写进本地缓存；频道不可见时返回翻译后的错误
-func (s *Store) loadLocked(ctx context.Context) (*tg.Channel, error) {
+// 预期：不持 s.mu 调用 RPC —— 出错时 retryingAPI 会调 dropChannel 加锁，
+// 持锁调用会自锁；成功后把 access_hash 写进本地缓存
+func (s *Store) loadChannel(ctx context.Context) (*tg.Channel, error) {
 	res, err := s.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
 		&tg.InputChannel{ChannelID: s.channelID, AccessHash: 0},
 	})
@@ -223,10 +234,13 @@ func (s *Store) loadLocked(ctx context.Context) (*tg.Channel, error) {
 	}
 	for _, c := range chats {
 		if ch, ok := c.(*tg.Channel); ok {
+			s.mu.Lock()
 			s.channel = ch
-			if s.cache != nil {
+			cache := s.cache
+			s.mu.Unlock()
+			if cache != nil {
 				// 写缓存失败不影响本次调用：下次启动再付一次 RPC 而已
-				_ = s.cache.SaveAccessHash(context.WithoutCancel(ctx), s.channelID, ch.AccessHash)
+				_ = cache.SaveAccessHash(context.WithoutCancel(ctx), s.channelID, ch.AccessHash)
 			}
 			return ch, nil
 		}

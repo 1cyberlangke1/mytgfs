@@ -130,3 +130,36 @@ func TestUploadRetriesAfterChannelInvalid(t *testing.T) {
 		t.Fatalf("getChannels 调用 %d 次，期望失效后重新解析", api.channelCalls)
 	}
 }
+
+// TestTextRetriesAfterStaleChannel 频道类错误时会重新解析频道并重跑一次。
+//
+// 输入：channels.getMessages 固定返回 CHANNEL_INVALID
+// 输出：getMessages 被调用 2 次、getChannels 也被调用 2 次
+// 预期：覆盖读元数据路径；只重试一次
+func TestTextRetriesAfterStaleChannel(t *testing.T) {
+	api := &fakeAPI{getMessagesErr: tgerr.New(400, "CHANNEL_INVALID")}
+	st := New(api, 42)
+
+	if _, err := st.Text(t.Context(), 7); err == nil {
+		t.Fatal("应当失败")
+	}
+	if len(api.getMessages) != 2 {
+		t.Fatalf("getMessages 调用 %d 次，期望 2", len(api.getMessages))
+	}
+	if api.channelCalls != 2 {
+		t.Fatalf("getChannels 调用 %d 次，期望重试时重新解析", api.channelCalls)
+	}
+}
+
+// TestTextDoesNotRetryDeterministic 权限类错误不重试。
+func TestTextDoesNotRetryDeterministic(t *testing.T) {
+	api := &fakeAPI{getMessagesErr: tgerr.New(403, "CHAT_WRITE_FORBIDDEN")}
+	st := New(api, 42)
+
+	if _, err := st.Text(t.Context(), 7); err == nil {
+		t.Fatal("应当失败")
+	}
+	if len(api.getMessages) != 1 {
+		t.Fatalf("getMessages 调用 %d 次，期望 1（不重试）", len(api.getMessages))
+	}
+}

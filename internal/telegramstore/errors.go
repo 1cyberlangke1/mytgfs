@@ -43,6 +43,27 @@ var channelErrors = map[string]string{
 	"MESSAGE_DELETE_FORBIDDEN": "err.message_delete_forbidden",
 }
 
+// staleHashErrors 是「access_hash 可能过期」的错误集合。
+//
+// 这些错误表示请求没有生效，清掉缓存的频道信息、重新解析后重试一次，
+// 可能在频道迁移或换 bot 账号后恢复正常。
+var staleHashErrors = map[string]bool{
+	"CHANNEL_INVALID":      true,
+	"CHANNEL_PRIVATE":      true,
+	"CHANNEL_INACCESSIBLE": true,
+	"PEER_ID_INVALID":      true,
+}
+
+// IsStaleChannel 判断错误是否可能由过期的 access_hash 引起。
+//
+// 输入：任意 error（可带包裹）
+// 输出：true 表示清缓存重新解析后重试一次可能成功
+// 预期：只认 staleHashErrors；权限、限流、消息不存在等确定性错误返回 false
+func IsStaleChannel(err error) bool {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	return ok && staleHashErrors[e.Type]
+}
+
 // messageGoneErrors 是「消息已经不在了」的错误集合。
 var messageGoneErrors = map[string]bool{
 	"MESSAGE_ID_INVALID":         true,

@@ -26,8 +26,10 @@ import (
 // 输出：新消息的 Part（document 与 src 相同，消息 ID 是新的）
 // 预期：file_reference 失效时刷新后重试一次；其它错误原样返回
 func (s *Store) Copy(ctx context.Context, src *Part, name, mime, caption string) (*Part, error) {
-	part, _, err := s.copyWithRefresh(ctx, s, src, name, mime, caption)
-	return part, err
+	return retryStale(s, func() (*Part, error) {
+		part, _, err := s.copyWithRefresh(ctx, s, src, name, mime, caption)
+		return part, err
+	})
 }
 
 // RefreshSource 是跨卷复制时刷新源引用的最小能力。
@@ -45,7 +47,19 @@ type RefreshSource interface {
 // 输出：新消息 Part；refreshed 为刷新后的源 Part（未刷新时为 nil，调用方应写回源索引）
 // 预期：消息发到 s 的频道，源频道不变；跨频道时 file_reference 可能失效，必须用源 Store 刷新
 func (s *Store) CopyFrom(ctx context.Context, ref RefreshSource, src *Part, name, mime, caption string) (*Part, *Part, error) {
-	return s.copyWithRefresh(ctx, ref, src, name, mime, caption)
+	run := func() (*Part, *Part, error) {
+		return s.copyWithRefresh(ctx, ref, src, name, mime, caption)
+	}
+	part, refreshed, err := run()
+	if err == nil || !IsStaleChannel(err) {
+		return part, refreshed, err
+	}
+	// 源卷与目标卷的 access_hash 都可能过期，各自清一次再跑
+	s.dropChannel()
+	if st, ok := ref.(*Store); ok && st != s {
+		st.dropChannel()
+	}
+	return run()
 }
 
 // copyWithRefresh 是 Copy/CopyFrom 的共同实现。

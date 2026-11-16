@@ -26,6 +26,10 @@ func IsFileReferenceError(err error) bool {
 // 输出：最新的 Part（含有效 file_reference）
 // 预期：消息不存在或不是 document 时返回错误，不修改任何本地状态
 func (s *Store) Refresh(ctx context.Context, messageID int) (*Part, error) {
+	return retryStale(s, func() (*Part, error) { return s.refresh(ctx, messageID) })
+}
+
+func (s *Store) refresh(ctx context.Context, messageID int) (*Part, error) {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return nil, err

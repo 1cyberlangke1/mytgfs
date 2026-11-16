@@ -18,6 +18,10 @@ import (
 // 输出：消息号；error
 // 预期：走与文件消息相同的发送节流，避免触发频道限速
 func (s *Store) SendText(ctx context.Context, text string) (int, error) {
+	return retryStale(s, func() (int, error) { return s.sendText(ctx, text) })
+}
+
+func (s *Store) sendText(ctx context.Context, text string) (int, error) {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return 0, err
@@ -42,6 +46,10 @@ func (s *Store) SendText(ctx context.Context, text string) (int, error) {
 // 输出：error
 // 预期：只改正文，不动其他属性；消息已不存在时返回错误
 func (s *Store) EditText(ctx context.Context, id int, text string) error {
+	return retryStaleErr(s, func() error { return s.editText(ctx, id, text) })
+}
+
+func (s *Store) editText(ctx context.Context, id int, text string) error {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return err
@@ -66,6 +74,10 @@ func (s *Store) EditText(ctx context.Context, id int, text string) error {
 // 输出：正文；error
 // 预期：消息不存在返回 ErrNoMessage
 func (s *Store) Text(ctx context.Context, id int) (string, error) {
+	return retryStale(s, func() (string, error) { return s.text(ctx, id) })
+}
+
+func (s *Store) text(ctx context.Context, id int) (string, error) {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return "", err

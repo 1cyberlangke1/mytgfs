@@ -110,6 +110,10 @@ func (s *Store) fetchMessages(ctx context.Context, ids []int) (map[int]*tg.Messa
 // 输出：消息号 → 节点内容；不是节点消息的 id 不出现
 // 预期：消息已被删除时跳过
 func (s *Store) FetchNodes(ctx context.Context, ids []int) (map[int]NodeInfo, error) {
+	return retryStale(s, func() (map[int]NodeInfo, error) { return s.fetchNodes(ctx, ids) })
+}
+
+func (s *Store) fetchNodes(ctx context.Context, ids []int) (map[int]NodeInfo, error) {
 	msgs, err := s.fetchMessages(ctx, ids)
 	if err != nil {
 		return nil, err

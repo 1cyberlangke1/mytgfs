@@ -117,11 +117,10 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 		return nil, err
 	}
 	part, err := s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
-	if err == nil || !IsChannelUnavailable(err) {
+	if err == nil || !IsStaleChannel(err) {
 		return part, err
 	}
-	// 本地缓存的 access_hash 可能过期（频道迁移、换 bot 账号）：
-	// 清缓存重新解析后重试一次，第二次仍失败再把错误交给上层
+	// 本地缓存的 access_hash 可能过期：清缓存重新解析后重试一次
 	s.dropChannel()
 	ch, rerr := s.resolve(ctx)
 	if rerr != nil {

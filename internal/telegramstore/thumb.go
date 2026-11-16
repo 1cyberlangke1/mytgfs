@@ -24,6 +24,10 @@ const (
 // 输出：缩略图字节（通常是 JPEG）
 // 预期：消息不存在、不是 document、或没有缩略图时返回错误；只读，不改索引
 func (s *Store) Thumb(ctx context.Context, messageID int) ([]byte, error) {
+	return retryStale(s, func() ([]byte, error) { return s.thumb(ctx, messageID) })
+}
+
+func (s *Store) thumb(ctx context.Context, messageID int) ([]byte, error) {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return nil, err

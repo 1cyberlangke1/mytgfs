@@ -34,6 +34,10 @@ func (errNoCover) Error() string { return i18n.T("err.cover_missing") }
 // 输出：photo id 的十进制字符串；无头像时为空串
 // 预期：直接用作前端图片 URL 的 ?v=，换头像后 URL 自然失效
 func (s *Store) CoverVersion(ctx context.Context) (string, error) {
+	return retryStale(s, func() (string, error) { return s.coverVersion(ctx) })
+}
+
+func (s *Store) coverVersion(ctx context.Context) (string, error) {
 	id, _, err := s.coverPhoto(ctx, false)
 	if err != nil {
 		return "", err
@@ -52,7 +56,22 @@ func (s *Store) CoverVersion(ctx context.Context) (string, error) {
 //   - 取尺寸最大的那一档，避免面板放大后糊
 //   - file_reference 过期时强制刷新一次元数据再重试
 //   - 频道没有头像返回 ErrNoCover
+//
+// coverResult 是 CoverImage 的返回值打包，便于套通用重试。
+type coverResult struct {
+	data    []byte
+	version string
+}
+
 func (s *Store) CoverImage(ctx context.Context) ([]byte, string, error) {
+	res, err := retryStale(s, func() (coverResult, error) {
+		data, version, err := s.coverImageOnce(ctx)
+		return coverResult{data: data, version: version}, err
+	})
+	return res.data, res.version, err
+}
+
+func (s *Store) coverImageOnce(ctx context.Context) ([]byte, string, error) {
 	data, version, err := s.coverImage(ctx, false)
 	if err != nil && IsFileReferenceError(err) {
 		// 引用过期：强制重拉 full info 后重试一次
@@ -101,20 +120,16 @@ func (s *Store) coverImage(ctx context.Context, force bool) ([]byte, string, err
 // 本地只缓存 access_hash 时，这里补一次 getChannels 拿标题
 func (s *Store) Title(ctx context.Context) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.channel != nil && s.channel.Title != "" {
-		return s.channel.Title, nil
+	ch := s.channel
+	s.mu.Unlock()
+	if ch != nil && ch.Title != "" {
+		return ch.Title, nil
 	}
-	if s.channel == nil && s.cache != nil {
-		if hash, ok, err := s.cache.LoadAccessHash(ctx, s.channelID); err == nil && ok && hash != 0 {
-			s.channel = &tg.Channel{ID: s.channelID, AccessHash: hash}
-		}
-	}
-	ch, err := s.loadLocked(ctx)
+	loaded, err := s.loadChannel(ctx)
 	if err != nil {
 		return "", err
 	}
-	return ch.Title, nil
+	return loaded.Title, nil
 }
 
 // SetTitle 改频道标题（面板上的显示名）。
@@ -125,6 +140,10 @@ func (s *Store) Title(ctx context.Context) (string, error) {
 //
 //	只改频道标题，不动目录节点
 func (s *Store) SetTitle(ctx context.Context, title string) error {
+	return retryStaleErr(s, func() error { return s.setTitle(ctx, title) })
+}
+
+func (s *Store) setTitle(ctx context.Context, title string) error {
 	ch, err := s.resolve(ctx)
 	if err != nil {
 		return err
