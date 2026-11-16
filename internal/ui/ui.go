@@ -34,6 +34,18 @@ func JSONMode() bool {
 	return jsonMode
 }
 
+// DisableJSON 关闭 JSON 输出，恢复默认的人读文本。
+//
+// 输入：无
+// 输出：无
+// 预期：与 EnableJSON 对称；命令行只在启动时按 --json 选择一次，
+// 测试需要确定输出形态时用它复位全局状态
+func DisableJSON() {
+	mu.Lock()
+	jsonMode = false
+	mu.Unlock()
+}
+
 // Print 在 JSON 模式下输出一条成功结果。
 //
 // 输入：data 可序列化的结果

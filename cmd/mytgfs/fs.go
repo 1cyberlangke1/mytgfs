@@ -72,8 +72,10 @@ func withVolume(name string, attachQueue bool, fn func(ctx context.Context, a *a
 //
 // 输入：name 卷名；fn 具体操作
 // 输出：操作失败时进程退出 1
-// 预期：不启动队列；需要上传/删改的命令用 withVolume(name, true, ...)
-func withFiles(name string, fn func(ctx context.Context, vol string, f fm.Files) error) {
+// 预期：不启动队列；需要上传/删改的命令用 withVolume(name, true, ...)。
+// 声明成变量是为了让测试整体替换掉「加载配置 + 连 Telegram」这一步：
+// 生产路径始终指向真实实现，命令体本身（参数解析、输出、错误传播）可被单测覆盖。
+var withFiles = func(name string, fn func(ctx context.Context, vol string, f fm.Files) error) {
 	withVolume(name, false, func(ctx context.Context, _ *app.App, vol string, _ *app.Session, _ *vfs.FileSystem, f fm.Files) error {
 		return fn(ctx, vol, f)
 	})

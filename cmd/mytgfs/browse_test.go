@@ -95,6 +95,9 @@ func (f *fakeFiles) Move(_ context.Context, from, to string) error {
 }
 
 func (f *fakeFiles) Open(_ context.Context, p string) (vfs.File, error) {
+	if err := f.errFor(p); err != nil {
+		return nil, err
+	}
 	b, ok := f.data[p]
 	if !ok {
 		return nil, os.ErrNotExist

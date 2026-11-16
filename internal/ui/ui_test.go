@@ -32,6 +32,20 @@ func TestPrintOnlyInJSONMode(t *testing.T) {
 	_ = r.Close()
 }
 
+// TestDisableJSON 关闭后回到文本模式，Print 不再下发结构化结果。
+func TestDisableJSON(t *testing.T) {
+	EnableJSON()
+	if !JSONMode() {
+		t.Fatal("EnableJSON 后应为 JSON 模式")
+	}
+	DisableJSON()
+	if JSONMode() {
+		t.Fatal("DisableJSON 后应回到文本模式")
+	}
+	// 复原成其他用例期望的状态（包级全局开关，不能留在文本模式）
+	EnableJSON()
+}
+
 // TestPrintEnvelope JSON 模式输出统一信封。
 func TestPrintEnvelope(t *testing.T) {
 	r, w, err := os.Pipe()
