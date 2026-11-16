@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { File as FileIcon, X } from 'lucide-react';
 import type { Locale } from '../types';
 import { formatBytes, inferFileCategory } from '../utils/fsLogic';
@@ -28,16 +28,60 @@ export interface UploadPlanDialogProps {
 }
 
 /**
+ * ThumbPreview 是「哪张缩略图、在哪儿」的悬停预览请求。
+ *
+ * 输入：url 对象地址；rect 缩略图格子的视口矩形
+ * 输出：无
+ * 预期：rect 用来把放大图摆在格子旁边，不依赖行内布局
+ */
+export interface ThumbPreview {
+  url: string;
+  rect: DOMRect;
+}
+
+// 放大预览固定 224px 见方，尺寸确定后定位无需二次测量
+const ZOOM_SIZE = 224;
+const ZOOM_GAP = 12;
+const ZOOM_EDGE = 8;
+
+/**
+ * zoomStyle 把放大预览摆到缩略图右侧，右侧放不下翻到左侧。
+ *
+ * 输入：缩略图矩形
+ * 输出：fixed 定位的 left/top/宽高
+ * 预期：垂直以缩略图为中心，越界时夹进视口
+ */
+function zoomStyle(rect: DOMRect): React.CSSProperties {
+  let left = rect.right + ZOOM_GAP;
+  if (left + ZOOM_SIZE > window.innerWidth - ZOOM_EDGE) {
+    left = rect.left - ZOOM_GAP - ZOOM_SIZE;
+  }
+  if (left < ZOOM_EDGE) left = ZOOM_EDGE;
+  const top = Math.max(
+    ZOOM_EDGE,
+    Math.min(rect.top + rect.height / 2 - ZOOM_SIZE / 2, window.innerHeight - ZOOM_EDGE - ZOOM_SIZE)
+  );
+  return { left, top, width: ZOOM_SIZE, height: ZOOM_SIZE };
+}
+
+/**
  * PlanThumb 渲染清单左侧的预览格。
  *
- * 输入：file 待上传文件
- * 输出：图片显示缩略图，其它类型显示通用文件图标
+ * 输入：file 待上传文件；onPreview 悬停/聚焦时上报放大预览，移开传 null
+ * 输出：图片显示缩略图并带描边，其它类型显示通用文件图标
  * 预期：剪贴板粘贴进来的图片名字是 pasted-<时间戳>.png，光看名字认不出，
- *       缩略图让用户确认要传的到底是哪张图；对象 URL 随卸载释放
+ *       缩略图 + 悬停放大让用户确认要传的到底是哪张图；对象 URL 随卸载释放
  */
-function PlanThumb({ file }: { file: File }) {
+function PlanThumb({
+  file,
+  onPreview,
+}: {
+  file: File;
+  onPreview: (preview: ThumbPreview | null) => void;
+}) {
   const isImage = inferFileCategory(file.name, false) === 'image';
   const [url, setUrl] = useState('');
+  const cellRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!isImage) {
@@ -49,8 +93,25 @@ function PlanThumb({ file }: { file: File }) {
     return () => URL.revokeObjectURL(next);
   }, [file, isImage]);
 
+  // 悬停或键盘聚焦时把格子和对象地址交给父组件，由它画放大预览
+  const show = () => {
+    const cell = cellRef.current;
+    if (!url || !cell) return;
+    onPreview({ url, rect: cell.getBoundingClientRect() });
+  };
+
   return (
-    <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-zinc-100 dark:bg-zinc-800">
+    <span
+      ref={cellRef}
+      role={isImage ? 'img' : undefined}
+      aria-label={isImage ? file.name : undefined}
+      tabIndex={isImage ? 0 : undefined}
+      onPointerEnter={show}
+      onPointerLeave={() => onPreview(null)}
+      onFocus={show}
+      onBlur={() => onPreview(null)}
+      className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 transition-colors hover:border-[#007AFF]/60 focus-visible:border-[#007AFF] dark:border-zinc-700 dark:bg-zinc-800"
+    >
       {url ? (
         <img src={url} alt="" className="h-full w-full object-cover" />
       ) : (
@@ -81,6 +142,8 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
   const titleId = useId();
   // 被移除的 id：保留而不是直接删，才能支持「恢复全选」
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  // 悬停中的缩略图放大预览；移开、滚动或改动清单时清空
+  const [preview, setPreview] = useState<ThumbPreview | null>(null);
 
   const rows = keptStaged(items, hidden);
   const totalBytes = stagedTotalBytes(rows);
@@ -91,6 +154,7 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
   );
 
   const hideOne = (id: string) => {
+    setPreview(null);
     setHidden((prev) => {
       const next = new Set(prev);
       next.add(id);
@@ -98,7 +162,10 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
     });
   };
 
-  const hideAll = () => setHidden(new Set(items.map((item) => item.id)));
+  const hideAll = () => {
+    setPreview(null);
+    setHidden(new Set(items.map((item) => item.id)));
+  };
   const restoreAll = () => setHidden(new Set());
 
   return (
@@ -115,12 +182,15 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
         </div>
 
         {rows.length > 0 ? (
-          <ul className="max-h-[min(50vh,20rem)] overflow-y-auto divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+          <ul
+            onScroll={() => setPreview(null)}
+            className="max-h-[min(50vh,20rem)] overflow-y-auto divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
+          >
             {rows.map((item) => {
               const path = stagedDisplayPath(item);
               return (
                 <li key={item.id} className="flex items-center gap-3 py-2">
-                  <PlanThumb file={item.file} />
+                  <PlanThumb file={item.file} onPreview={setPreview} />
                   <div className="min-w-0 flex-1">
                     <p
                       className="truncate text-sm text-zinc-900 dark:text-zinc-100"
@@ -185,6 +255,17 @@ export const UploadPlanDialog: React.FC<UploadPlanDialogProps> = ({
             </Button>
           </div>
         </div>
+
+        {/* 放大预览：fixed 定位，不受清单滚动容器裁剪 */}
+        {preview && (
+          <div className="pointer-events-none fixed z-50" style={zoomStyle(preview.rect)}>
+            <img
+              src={preview.url}
+              alt=""
+              className="h-full w-full rounded-xl border border-zinc-200 bg-white object-contain shadow-2xl dark:border-zinc-700 dark:bg-zinc-950"
+            />
+          </div>
+        )}
       </div>
     </Modal>
   );

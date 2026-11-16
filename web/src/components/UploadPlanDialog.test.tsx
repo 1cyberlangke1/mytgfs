@@ -6,7 +6,7 @@
 // 输出：断言移除、全部移除、恢复全选与确认时交出的清单；
 // 预期：被移除的文件不会出现在 onConfirm 的参数里。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DICTIONARY } from '../utils/i18n';
 import { stageSources } from '../utils/uploadPlan';
@@ -24,6 +24,16 @@ function installDialogShim() {
       this.dispatchEvent(new Event('close'));
     };
   }
+}
+
+// Node 自带 URL.createObjectURL，但喂 jsdom 的 File 会拿到空地址；
+// 测试里统一换成固定假地址，便于按 src 断言数量。
+function installObjectURLShim() {
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: () => 'blob:test',
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} });
 }
 
 // stagedOf 造两个带相对路径的草稿项。
@@ -93,5 +103,24 @@ describe('UploadPlanDialog', () => {
     render(<UploadPlanDialog t={t} locale="zh" items={stagedOf()} onConfirm={vi.fn()} onCancel={onCancel} />);
     await user.click(screen.getByRole('button', { name: t.files.cancel }));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('图片缩略图悬停后出现放大预览，移开消失', () => {
+    installObjectURLShim();
+    const png = new File([new Uint8Array(8)], 'shot.png', { type: 'image/png' });
+    const items = stageSources([{ file: png, rel: '' }], 'vol', null);
+    render(
+      <UploadPlanDialog t={t} locale="zh" items={items} onConfirm={vi.fn()} onCancel={vi.fn()} />
+    );
+
+    const cell = screen.getByRole('img', { name: 'shot.png' });
+    const count = () => document.querySelectorAll('img[src="blob:test"]').length;
+    expect(count()).toBe(1);
+
+    fireEvent.pointerEnter(cell);
+    expect(count()).toBe(2);
+
+    fireEvent.pointerLeave(cell);
+    expect(count()).toBe(1);
   });
 });
