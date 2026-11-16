@@ -1,3 +1,5 @@
+//go:build !noweb
+
 package main
 
 // `mytgfs web` 模式下的状态负载。

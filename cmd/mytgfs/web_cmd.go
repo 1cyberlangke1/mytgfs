@@ -1,3 +1,5 @@
+//go:build !noweb
+
 package main
 
 // mytgfs CLI 入口。

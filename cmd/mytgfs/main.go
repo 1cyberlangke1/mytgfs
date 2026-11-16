@@ -87,12 +87,14 @@ func main() {
 		runConfig(os.Args[2:])
 	case "volume":
 		runVolume(os.Args[2:])
-	case "web":
-		runWeb(os.Args[2:])
+	case "web", "tray":
+		// 面板与托盘只在完整构建里存在；CLI-only 构建落到未知命令分支
+		if !dispatchUI(os.Args[1], os.Args[2:]) {
+			usage()
+			os.Exit(2)
+		}
 	case "startup":
 		runStartup(os.Args[2:])
-	case "tray":
-		runTray(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)

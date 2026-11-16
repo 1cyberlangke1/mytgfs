@@ -1,3 +1,5 @@
+//go:build !noweb
+
 package main
 
 // web 模式状态负载的单测：卷统计、注册表顺序、索引出错只影响该卷。

@@ -24,7 +24,11 @@ func usage() {
 		ui.Error("usage", fmt.Errorf("%s", i18n.T("cli.usage_short")))
 		os.Exit(2)
 	}
-	ui.Errf("%s\n", i18n.T("cli.usage"))
+	ui.Errf("%s", i18n.T("cli.usage_head"))
+	if !cliOnlyBuild {
+		ui.Errf("%s", i18n.T("cli.usage_ui"))
+	}
+	ui.Errf("%s\n", i18n.T("cli.usage_tail"))
 }
 
 func readTrim(path string) string {

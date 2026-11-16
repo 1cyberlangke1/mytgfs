@@ -1,3 +1,5 @@
+//go:build !noweb
+
 package main
 
 import (
