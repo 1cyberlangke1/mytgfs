@@ -40,6 +40,13 @@ jobs:
         run: go build ./...
       - name: 静态检查
         run: go vet ./...
+      # 轻量构建：不带 web/tray，只用 -tags noweb 验证纯命令行版能编译。
+      - name: 构建纯命令行版
+        shell: bash
+        run: |
+          out=build/mytgfs-cli
+          if [ "$RUNNER_OS" = "Windows" ]; then out=$out.exe; fi
+          go build -tags noweb -o "$out" ./cmd/mytgfs
       - name: 格式检查
         if: runner.os == 'Linux'
         run: |
