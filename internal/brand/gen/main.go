@@ -22,6 +22,7 @@ import (
 
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
+	"github.com/tc-hib/winres"
 )
 
 // plateSVG 只有文件夹底板（描边 + 半透明白填充），坐标系与原 emblem 一致。
@@ -224,6 +225,39 @@ func writeICO(path string, sizes []int) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+// writeSYSO 把 ICO 编译成 Windows 资源对象，让图标进入 exe 文件本体。
+//
+// 输入：dst 输出路径；icoPath 多尺寸 ICO
+// 输出：写盘错误
+// 预期：Go 只会把 .syso 里的资源链接进二进制；application.Options.Icon 只影响
+//
+//	窗口与托盘，Explorer、快捷方式和任务管理器读的是文件资源里的图标。
+//	文件名带 _windows_amd64，只对 windows/amd64 生效
+func writeSYSO(dst, icoPath string) error {
+	f, err := os.Open(icoPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	ico, err := winres.LoadICO(f)
+	if err != nil {
+		return fmt.Errorf("%s: %w", icoPath, err)
+	}
+	var rs winres.ResourceSet
+	if err := rs.SetIcon(winres.RT_ICON, ico); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	err = rs.WriteObject(out, winres.ArchAMD64)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 func main() {
 	const out = "internal/brand/icons"
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -248,10 +282,22 @@ func main() {
 		}
 		fmt.Printf("%s %d B\n", name, len(data))
 	}
-	if err := writeICO(filepath.Join(out, "icon-windows.ico"), []int{16, 24, 32, 48, 64, 128, 256}); err != nil {
+	icoPath := filepath.Join(out, "icon-windows.ico")
+	if err := writeICO(icoPath, []int{16, 24, 32, 48, 64, 128, 256}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	st, _ := os.Stat(filepath.Join(out, "icon-windows.ico"))
-	fmt.Printf("%s %d B\n", filepath.Join(out, "icon-windows.ico"), st.Size())
+	st, _ := os.Stat(icoPath)
+	fmt.Printf("%s %d B\n", icoPath, st.Size())
+
+	// 可执行文件本体也要图标：没有 .syso 时 Explorer 只显示空白文件图标
+	for _, dir := range []string{"cmd/mytray", "cmd/mytgfs"} {
+		dst := filepath.Join(dir, "rsrc_windows_amd64.syso")
+		if err := writeSYSO(dst, icoPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		st, _ := os.Stat(dst)
+		fmt.Printf("%s %d B\n", dst, st.Size())
+	}
 }

@@ -1,7 +1,8 @@
 # 构建 mytgfs。
 # 输入：-Package 额外产出可分发的 zip（含安装/卸载脚本与配置模板）
-# 输出：build\mytgfs.exe、build\mytgfs-tray.exe、build\mytgfs-cli.exe；失败时退出码 1
-# 预期：纯 Go 构建，不需要 CGO；cli 版用 -tags noweb 去掉 web/tray
+# 输出：build\mytgfs.exe、build\mytgfs-tray.exe、build\mytgfs-cli.exe、build\mytgfs.ico；失败时退出码 1
+# 预期：纯 Go 构建，不需要 CGO；cli 版用 -tags noweb 去掉 web/tray；
+#       exe 文件图标由 cmd\*/rsrc_windows_amd64.syso 提供（internal/brand/gen 生成）
 param([switch]$Package)
 
 New-Item -ItemType Directory -Force -Path 'build' | Out-Null
@@ -48,6 +49,10 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Output 'OK build\mytgfs-cli.exe'
+
+# 桌面快捷方式把图标指向 build\mytgfs.ico：每次构建都补一份，避免快捷方式显示空白文档图标
+Copy-Item 'internal\brand\icons\icon-windows.ico' 'build\mytgfs.ico' -Force
+Write-Output 'OK build\mytgfs.ico'
 
 # 可分发 zip：解压后运行 install.ps1，用户不需要装任何运行库
 if ($Package) {
