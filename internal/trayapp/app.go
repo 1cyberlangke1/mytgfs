@@ -431,7 +431,8 @@ func Run(opts Options) error {
 					}
 					return channel.Delete(ctx, uc.API(), res)
 				})
-				if rerr != nil {
+				// 频道已经不存在：删卷的目的就是清掉这条引用，继续清理本地
+				if rerr != nil && !channel.IsStale(rerr) {
 					return rerr
 				}
 				if rerr := appRoot.MutateConfig(func(p string) error {

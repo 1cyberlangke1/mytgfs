@@ -98,8 +98,9 @@ func runVolumeCheck(args []string) {
 			ui.Printf("%s\n", i18n.T("volume.check_title", v.Name, v.ChatID))
 			if _, cerr := channel.Check(ctx, client.API(), v.ChatID); cerr != nil {
 				bad++
-				results = append(results, volResult{Name: v.Name, ChatID: v.ChatID, Error: cerr.Error()})
-				ui.Printf("%s\n", i18n.T("volume.check_fail", cerr))
+				reason := checkFailure(v.ChatID, cerr)
+				results = append(results, volResult{Name: v.Name, ChatID: v.ChatID, Error: reason.Error()})
+				ui.Printf("%s\n", i18n.T("volume.check_fail", reason))
 				continue
 			}
 			results = append(results, volResult{Name: v.Name, ChatID: v.ChatID, OK: true})
@@ -115,6 +116,18 @@ func runVolumeCheck(args []string) {
 	if bad > 0 {
 		os.Exit(1)
 	}
+}
+
+// checkFailure 把「频道不存在 / bot 已被移出」这类 RPC 错误换成可操作的说明。
+//
+// 输入：频道号；channel.Check 返回的错误
+// 输出：可直接展示的 error；非频道失效类错误原样返回
+// 预期：只改写 access_hash 类错误，避免把限流、权限等原因误报成频道已删
+func checkFailure(channelID int64, err error) error {
+	if channel.IsStale(err) {
+		return errors.New(i18n.T("err.channel_unusable", channelID))
+	}
+	return err
 }
 
 // runVolumeDelete 删除一个卷：删 Telegram 频道 → 移除配置条目 → 删本地索引。
@@ -172,10 +185,15 @@ func runVolumeDelete(args []string) {
 		}
 		return channel.Delete(ctx, client.API(), res)
 	})
-	if err != nil {
+	switch {
+	case err == nil:
+		ui.Out(i18n.T("volume.channel_deleted", channelID))
+	case channel.IsStale(err):
+		// 频道已经不存在：删卷的目的就是清掉这条引用，继续清理本地
+		ui.Out(i18n.T("volume.channel_already_gone", channelID))
+	default:
 		failErr(i18n.T("err.volume_delete_prefix"), err)
 	}
-	ui.Out(i18n.T("volume.channel_deleted", channelID))
 
 	if err := config.RemoveVolume(*cfgPath, volName); err != nil {
 		failErr(i18n.T("err.volume_config_remove_prefix"), err)
