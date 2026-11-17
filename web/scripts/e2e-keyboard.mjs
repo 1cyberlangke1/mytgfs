@@ -122,6 +122,68 @@ function chromiumCandidates() {
   return [...fromEnv, 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge'];
 }
 
+// killTree 结束一个子进程及其整棵子进程树。
+//
+// 输入：spawn 出来的子进程（可为空）
+// 输出：无
+// 预期：Windows 上 chrome 与 WebView2 都会派生多个子进程，只 kill 父进程会
+//       留下仍占着调试端口的孤儿，下一轮 e2e 就会连到已经死掉的旧页面；
+//       所以 Windows 走 taskkill /T 连子树一起收，其它平台用普通 kill
+function killTree(proc) {
+  if (!proc || !proc.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+      return;
+    } catch {
+      /* taskkill 不可用时退回普通 kill */
+    }
+  }
+  try {
+    proc.kill();
+  } catch {
+    /* 已退出 */
+  }
+}
+
+// shutdownBrowser 让浏览器自己退出，连子进程一起收。
+//
+// 输入：无（用全局调试端口）
+// 输出：无
+// 预期：只 kill 父进程在 Windows 上会留下占着调试端口的孤儿（chrome 的启动
+//       进程会提前退出，把浏览器交给另一个进程）；CDP 的 Browser.close 让
+//       chrome 自己正常关闭，进程树全清、端口一定释放；拿不到调试端点再退回 killTree
+async function shutdownBrowser() {
+  try {
+    const info = await fetch('http://127.0.0.1:' + port + '/json/version').then((r) => r.json());
+    if (info.webSocketDebuggerUrl) {
+      const bw = new WebSocket(info.webSocketDebuggerUrl);
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 3000);
+        bw.addEventListener(
+          'open',
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true }
+        );
+        bw.addEventListener('error', reject, { once: true });
+      });
+      bw.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      await sleep(500);
+      try {
+        bw.close();
+      } catch {
+        /* 已经断开 */
+      }
+    }
+  } catch {
+    /* 浏览器已退出或调试端口不可用 */
+  }
+  killTree(browser);
+}
+
 // launchBrowser 起一个 headless 浏览器并等调试端口可用。
 //
 // 输入：url 要打开的页面
@@ -159,11 +221,7 @@ async function launchBrowser(url) {
       await sleep(200);
     }
     tried.push(bin + (spawnErr ? '（' + spawnErr + '）' : '（端口未就绪）'));
-    try {
-      proc.kill();
-    } catch {
-      /* 已退出 */
-    }
+    killTree(proc);
   }
   throw new Error('找不到可用的 Chrome/Chromium：' + tried.join('; '));
 }
@@ -345,6 +403,18 @@ async function evaluate(expression) {
   return res.result?.value;
 }
 
+// matchesTarget 判断一个调试目标是不是本次 e2e 自己的页面。
+//
+// 输入：CDP 的 /json/list 条目（含 url）
+// 输出：true 表示属于本次运行
+// 预期：web 只认面板端口、shell 只认 wails.localhost；不校验的话，上一轮
+//       残留的同端口浏览器会被误连，报出一堆和本次无关的失败
+function matchesTarget(t) {
+  if (target === 'web') return t.url.startsWith('http://127.0.0.1:' + webPort);
+  if (target === 'shell') return t.url.startsWith('http://wails.localhost');
+  return true;
+}
+
 // findTarget 等调试目标出现。
 //
 // 输入：无
@@ -360,10 +430,7 @@ async function findTarget() {
     try {
       const list = await fetch('http://127.0.0.1:' + port + '/json/list').then((r) => r.json());
       const page = list.find(
-        (t) =>
-          t.type === 'page' &&
-          t.webSocketDebuggerUrl &&
-          (target === 'web' ? t.url.startsWith('http://127.0.0.1:' + webPort) : true)
+        (t) => t.type === 'page' && t.webSocketDebuggerUrl && matchesTarget(t)
       );
       if (page) return page;
     } catch {
@@ -1121,7 +1188,7 @@ try {
     /* 已断开 */
   }
   try {
-    child?.kill();
+    killTree(child);
   } catch {
     /* 已退出 */
   }
@@ -1138,7 +1205,7 @@ try {
     }
   }
   try {
-    browser?.kill();
+    await shutdownBrowser();
   } catch {
     /* 已退出 */
   }
