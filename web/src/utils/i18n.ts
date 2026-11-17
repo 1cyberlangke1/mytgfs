@@ -13,25 +13,6 @@ export interface LocaleMeta {
   byteUnits: [string, string, string, string, string];
 }
 
-
-
-/**
- * Negotiates best locale from BCP-47 language tags (e.g. navigator.languages).
- *
- * 输入：浏览器语言标签列表；fallback 兜底语言
- * 输出：'zh' 或 'en'
- * 预期：中日韩等其它语种统一回落到 en，繁中也归到 zh（界面只维护简中 + 英文）
- */
-export function matchBcp47Locale(tags: readonly string[], fallback: Locale = 'zh'): Locale {
-  for (const raw of tags) {
-    const tag = raw.trim().toLowerCase();
-    if (!tag) continue;
-    if (tag.startsWith('zh')) return 'zh';
-    if (tag.startsWith('en')) return 'en';
-  }
-  return fallback;
-}
-
 export interface PluralForms {
   one: string;
   few?: string;

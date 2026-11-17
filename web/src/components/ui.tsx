@@ -1,13 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
-import * as TabsPrimitive from '@radix-ui/react-tabs';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import {
   HTMLMotionProps,
-  LayoutGroup,
   motion,
   useMotionValue,
   useSpring,
@@ -243,68 +241,6 @@ export const Switch: React.FC<SwitchProps> = ({
   );
 };
 
-export interface SegmentedTabsProps<T extends string> {
-  value: T;
-  onValueChange: (val: T) => void;
-  items: { id: T; label: React.ReactNode; icon?: React.ReactNode }[];
-  layoutGroupId: string;
-  ariaLabel?: string;
-  className?: string;
-}
-
-export function SegmentedTabs<T extends string>({
-  value,
-  onValueChange,
-  items,
-  layoutGroupId,
-  ariaLabel,
-  className,
-}: SegmentedTabsProps<T>) {
-  return (
-    <LayoutGroup id={layoutGroupId}>
-      <TabsPrimitive.Root
-        value={value}
-        onValueChange={(v) => onValueChange(v as T)}
-        className={className}
-      >
-        <TabsPrimitive.List
-          aria-label={ariaLabel}
-          className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-zinc-200/70 dark:bg-zinc-800/80 backdrop-blur-md"
-        >
-          {items.map((item) => {
-            const isActive = value === item.id;
-            return (
-              <TabsPrimitive.Trigger key={item.id} value={item.id} asChild>
-                <motion.button
-                  type="button"
-                  whileTap={{ scale: 0.91 }}
-                  whileHover={{ scale: 1.02 }}
-                  transition={IOS_BOUNCE_SPRING}
-                  className={cn(
-                    'relative h-7 px-3 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer select-none whitespace-nowrap z-10 focus-visible:outline-none',
-                    isActive
-                      ? 'text-zinc-950 dark:text-white font-semibold'
-                      : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-zinc-200'
-                  )}
-                >
-                  {isActive && (
-                    <motion.span
-                      layoutId={`${layoutGroupId}-pill`}
-                      transition={IOS_SPRING}
-                      className="absolute inset-0 rounded-lg bg-white dark:bg-zinc-900 shadow-xs -z-10"
-                    />
-                  )}
-                  {item.icon}
-                  <span>{item.label}</span>
-                </motion.button>
-              </TabsPrimitive.Trigger>
-            );
-          })}
-        </TabsPrimitive.List>
-      </TabsPrimitive.Root>
-    </LayoutGroup>
-  );
-}
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
 

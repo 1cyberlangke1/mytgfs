@@ -1,7 +1,4 @@
 export type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'invalid_credentials';
-
-export type IndexStatus = 'ready' | 'rebuilding';
-
 export type FileCategory = 'folder' | 'image' | 'video' | 'audio' | 'pdf' | 'archive' | 'document';
 
 export interface FileItem {
@@ -103,12 +100,3 @@ export type Locale = string;
 // ThemeMode 是外观偏好：system 表示跟随操作系统的深浅色设置
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-export type ConfigErrorCode =
-  | 'SYNTAX_MISSING_EQ'
-  | 'INVALID_HOST'
-  | 'INVALID_PORT'
-  | 'INVALID_SYNC_INTERVAL'
-  | 'INVALID_DL_CONN'
-  | 'INVALID_UL_CONC'
-  | 'INVALID_CHUNK_SIZE'
-  | 'INVALID_BOOL';
