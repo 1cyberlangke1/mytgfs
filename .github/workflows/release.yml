@@ -12,13 +12,62 @@ concurrency:
 
 permissions:
   contents: write
+  # 读同一提交的 CI 运行记录（只读，不重跑）
+  actions: read
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
+  # 质量门：只读同一提交的 CI 结论，不重复执行。
+  # CI 由 push master 触发，tag 通常指向同一个提交，这里等那次运行结束即可。
+  # 对比旧做法（把 ci.yml 当子流程再跑一遍）：省掉整套重复 job，也避免
+  # master 与 tag 两个 run 同时起 KVM 模拟器导致 CDP 超时。
+  # tag 打在从没跑过 CI 的提交上时会明确失败，而不是悄悄放行。
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: 等待同一提交的 CI 结论
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          runs=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20")
+          run_id=$(echo "$runs" | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty')
+          if [ -z "$run_id" ]; then
+            echo "提交 $SHA 没有 CI 运行记录：先把这个提交推到 master 让 CI 跑完，再打 tag" >&2
+            exit 1
+          fi
+          echo "跟踪 CI run $run_id"
+          gh run watch "$run_id" --repo "$REPO" --exit-status --interval 20
+
+  # 前端产物：不再复用 CI 工作流，这里产一份给 build 矩阵嵌入（dist 不入库）。
+  # 只构建一次，三个平台共享；lint/单测已由 gate 等待的那次 CI 覆盖。
+  frontend:
+    needs: gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: 安装前端依赖
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+      - name: 构建前端
+        working-directory: web
+        run: npm run build
+      - name: 上传前端产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
 
   build:
-    needs: ci
+    needs: [gate, frontend]
     strategy:
       fail-fast: false
       matrix:
@@ -124,7 +173,7 @@ jobs:
   # 没有 keystore 时 gradle 会回退 debug 签名，那种包每次 CI 机器都是新生成的
   # 随机密钥，签名一变用户就无法覆盖升级，所以这里直接拒绝缺密钥的构建。
   android:
-    needs: ci
+    needs: gate
     runs-on: ubuntu-24.04
     env:
       ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/release.jks
@@ -187,8 +236,8 @@ jobs:
     needs: [build, android]
     runs-on: ubuntu-24.04
     steps:
-      # 只取打包产物：ci 还会上传 web-dist 和 coverage，全下会把 index.html、
-      # coverage.out 一起传进 Release。
+      # 只取发布包：本工作流的 frontend job 也会上传 web-dist，全下会把
+      # index.html 一起传进 Release。
       - name: 下载发布包
         uses: actions/download-artifact@v8
         with:
