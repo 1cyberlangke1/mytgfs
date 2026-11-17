@@ -91,12 +91,17 @@ type Options struct {
 	// 输入：127.0.0.1:7890 之类；输出：无
 	// 预期：设置后 MTProto 的 TCP 由代理建立
 	Proxy string
+	// BotToken 非空时，Run 在发现会话未授权时自动用它登录一次。
+	// 输入：bot token 明文；输出：无
+	// 预期：只给「首次运行 / 会话缺失」的场景用；留空则完全不做登录 RPC
+	BotToken string
 }
 
 // Client 包装 telegram.Client 与 floodwait 调度器。
 type Client struct {
 	*telegram.Client
-	waiter *floodwait.Waiter
+	waiter   *floodwait.Waiter
+	botToken string
 }
 
 // New 创建带 floodwait 中间件的客户端。
@@ -149,7 +154,7 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		// Resolver 显式走 SOCKS5 时由代理建立 MTProto 的 TCP
 		Resolver: resolver,
 	})
-	return &Client{Client: client, waiter: waiter}
+	return &Client{Client: client, waiter: waiter, botToken: opts.BotToken}
 }
 
 // mapConnState 把 gotd 的连接状态映射成本包的精简枚举。
@@ -180,8 +185,40 @@ func mapConnState(fn func(ConnState)) func(telegram.ConnectionState) {
 // 预期：ctx 取消时一起退出；flood 等待期间不会阻塞调度器
 func (c *Client) Run(ctx context.Context, f func(context.Context) error) error {
 	return c.waiter.Run(ctx, func(ctx context.Context) error {
-		return c.Client.Run(ctx, f)
+		return c.Client.Run(ctx, func(ctx context.Context) error {
+			if err := c.ensureLogin(ctx); err != nil {
+				return err
+			}
+			return f(ctx)
+		})
 	})
+}
+
+// ensureLogin 在会话未授权时用 bot token 登录一次。
+//
+// 输入：ctx
+// 输出：error；未配置 token、已授权或登录成功都返回 nil
+// 预期：
+//   - 未配置 token 时不做任何 RPC，保持原行为（未授权仍由调用方自己报错）
+//   - 已有授权会话（user 或 bot）时不重新登录，避免把 user 会话顶掉
+//
+// 没有这一步时，只有 token 文件、没有会话文件的机器（全新安装、手机）
+// 拿到的 auth key 从未在服务端登记，任何 RPC 都返回 401 AUTH_KEY_UNREGISTERED。
+func (c *Client) ensureLogin(ctx context.Context) error {
+	if c.botToken == "" {
+		return nil
+	}
+	st, err := c.Auth().Status(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Authorized {
+		return nil
+	}
+	if _, err := c.Auth().Bot(ctx, c.botToken); err != nil {
+		return fmt.Errorf("%s: %w", i18n.T("err.bot_login_prefix"), err)
+	}
+	return nil
 }
 
 // PooledAPI 返回一个把请求分散到最多 n 条连接的 API 客户端。

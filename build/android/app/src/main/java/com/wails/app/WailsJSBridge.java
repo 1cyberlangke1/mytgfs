@@ -127,6 +127,18 @@ public class WailsJSBridge {
     }
 
     /**
+     * Copy a sandbox file into the public Downloads collection.
+     * Called from JavaScript: wails.exportToDownloads(path)
+     *
+     * @param path absolute path under the app's files or cache directory
+     * @return true when the copy landed in MediaStore.Downloads
+     */
+    @JavascriptInterface
+    public boolean exportToDownloads(String path) {
+        return bridge.exportToDownloads(path);
+    }
+
+    /**
      * Relaunch the app so it re-reads config.toml after first-time setup.
      * Called from JavaScript: wails.restartApp()
      */

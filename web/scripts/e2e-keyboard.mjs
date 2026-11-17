@@ -5,7 +5,7 @@
 // 输出：逐项 PASS/FAIL；任一失败退出码为 1
 // 预期：不连 Telegram、不用真实账号；每条断言都等真实条件出现，
 //       不用固定 sleep 猜时间，避免 CI 偶发失败
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -13,10 +13,15 @@ import path from 'node:path';
 
 const argTarget = (process.argv.find((a) => a.startsWith('--target=')) || '').split('=')[1];
 const target = argTarget || process.env.MYTGFS_E2E_TARGET || 'shell';
-if (target !== 'shell' && target !== 'web') {
-  console.error('未知 --target：' + target + '（可选 shell / web）');
+if (target !== 'shell' && target !== 'web' && target !== 'android') {
+  console.error('未知 --target：' + target + '（可选 shell / web / android）');
   process.exit(2);
 }
+// shell=真实 Wails 桌面壳（CDP 只有 Windows 的 WebView2 能开）
+// web=网页版面板 + 系统自带 Chromium（三平台都能跑）
+// android=模拟器/真机里的 APK，经 adb 转发 WebView 的 devtools 套接字
+const isAndroid = target === 'android';
+const androidAppID = process.env.MYTGFS_E2E_APP_ID || 'com.mytgfs.app';
 // shell=真实 Wails 桌面壳（CDP 只有 Windows 的 WebView2 能开）
 // web=网页版面板 + 系统自带 Chromium（三平台都能跑）
 const exeDefault =
@@ -30,9 +35,13 @@ const exeDefault =
 // 可执行文件路径按仓库根算：npm 脚本的工作目录是 web/，相对路径会找错地方
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const exe = path.resolve(process.env.MYTGFS_E2E_EXE || path.join(repoRoot, exeDefault));
+// 安卓目标不跑子进程，改为 adb 安装/启动 APK
+const apkPath = path.resolve(
+  process.env.MYTGFS_E2E_APK || path.join(repoRoot, 'build', 'mytgfs-e2e-android.apk')
+);
 const port = Number(process.env.MYTGFS_E2E_PORT || 9339);
 const webPort = Number(process.env.MYTGFS_E2E_WEB_PORT || port + 1);
-if (!existsSync(exe)) {
+if (!isAndroid && !existsSync(exe)) {
   console.error('缺少可执行文件：' + exe + '（先 go build -tags e2e ./cmd/mytray 或 ./cmd/mytgfs）');
   process.exit(1);
 }
@@ -68,9 +77,11 @@ const logPath = path.join(workDir, 'shell.log');
 // 所以先用 openSync 拿到句柄，stdout/stderr 都指过去
 const logFd = openSync(logPath, 'a');
 
-// 子进程：shell 是桌面壳，web 是 `mytgfs web` 起的面板服务
-const child =
-  target === 'web'
+// 子进程：shell 是桌面壳，web 是 `mytgfs web` 起的面板服务；
+// 安卓没有子进程，进程由 adb 装好并拉起（见 bootAndroid）
+const child = isAndroid
+  ? null
+  : target === 'web'
     ? spawn(exe, ['web', '--port', String(webPort)], {
         cwd: workDir,
         env: { ...process.env, MYTGFS_E2E_MOCK: '1' },
@@ -188,6 +199,115 @@ if (target === 'web') {
   }
 }
 
+// adbBin 定位 adb 可执行文件。
+//
+// 输入：无（读 ADB / ANDROID_HOME / ANDROID_SDK_ROOT 环境变量）
+// 输出：可直接 spawn 的命令或绝对路径
+// 预期：优先显式 ADB，其次 SDK 下的 platform-tools，最后交给 PATH
+function adbBin() {
+  if (process.env.ADB) return process.env.ADB;
+  const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+  if (sdk) {
+    const candidate = path.join(sdk, 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb');
+    if (existsSync(candidate)) return candidate;
+  }
+  return 'adb';
+}
+
+// adb 同步执行一条 adb 命令。
+//
+// 输入：参数数组；timeout 毫秒
+// 输出：spawnSync 结果（status/stdout/stderr），失败时把 stderr 拼进异常
+// 预期：安装/启动这类长命令单独放宽超时，其它命令 60s 足够
+function adb(args, timeout = 60000) {
+  const res = spawnSync(adbBin(), args, { encoding: 'utf8', timeout, maxBuffer: 16 << 20 });
+  if (res.error) throw new Error('adb ' + args.join(' ') + ' 调用失败：' + res.error.message);
+  if (res.status !== 0) {
+    throw new Error('adb ' + args.join(' ') + ' 退出码 ' + res.status + '：' + (res.stderr || res.stdout || '').trim());
+  }
+  return res;
+}
+
+// adbTry 与 adb 同，但不因非零退出码抛错。
+//
+// 输入：参数数组；timeout 毫秒
+// 输出：spawnSync 结果
+// 预期：给「失败是预期内状态」的探测用（例如进程还没起来时的 pidof）
+function adbTry(args, timeout = 60000) {
+  return spawnSync(adbBin(), args, { encoding: 'utf8', timeout, maxBuffer: 16 << 20 });
+}
+
+// bootAndroid 装 APK、拉起应用并把 WebView 的 devtools 套接字转发到本机端口。
+//
+// 输入：无（apkPath / androidAppID / port 来自模块级常量与环境变量）
+// 输出：无；失败抛错
+// 预期：条件轮询等设备与包管理器就绪，不用固定 sleep；
+//       套接字名固定为 webview_devtools_remote_<pid>，转发后 CDP 与桌面壳完全一致
+async function bootAndroid() {
+  if (!existsSync(apkPath)) {
+    throw new Error('缺少 APK：' + apkPath + '（先 build-android.ps1 -E2E）');
+  }
+  await waitFor('安卓设备上线', () => adb(['get-state']).stdout.trim() === 'device', 300000);
+  await waitFor('设备启动完成', () => adb(['shell', 'getprop', 'sys.boot_completed']).stdout.trim() === '1', 300000);
+  adb(['install', '-r', '-t', apkPath], 600000);
+  // 清掉上一轮的数据：设置用例会改 config.toml，残留会让「默认值 15」的断言失败
+  adb(['shell', 'pm', 'clear', androidAppID]);
+  adb(['shell', 'am', 'force-stop', androidAppID]);
+  // 启动组件名不能手写：清单里的类在 namespace 包下（com.wails.app），
+  // applicationId 只决定安装包名，pkg/.Activity 会解析成不存在的类
+  const resolved = adb(['shell', 'cmd', 'package', 'resolve-activity', '--brief', androidAppID])
+    .stdout.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.includes('/'))
+    .pop();
+  if (!resolved) throw new Error('解析不到启动组件：' + androidAppID);
+  // pm clear 会杀进程并删任务，紧跟着的 am start 可能被系统一起清掉；
+  // 以「进程真的活着」为准，起不来就再发一次启动
+  let pid = '';
+  for (let attempt = 0; attempt < 20 && !pid; attempt += 1) {
+    const started = spawnSync(adbBin(), ['shell', 'am', 'start', '-W', '-n', resolved], {
+      encoding: 'utf8',
+      timeout: 120000,
+      maxBuffer: 16 << 20,
+    });
+    if (/Status: ok/.test(started.stdout || '')) {
+      pid = adbTry(['shell', 'pidof', androidAppID]).stdout.trim();
+    }
+    if (!pid) await sleep(500);
+  }
+  if (!pid) throw new Error('应用进程起不来：' + androidAppID);
+  adb(['forward', 'tcp:' + port, 'localabstract:webview_devtools_remote_' + pid.split(/\s+/)[0]]);
+}
+
+// configText 读面板实际写盘的配置文本。
+//
+// 输入：无
+// 输出：config.toml 内容；读不到返回空串
+// 预期：安卓的配置在应用沙盒 files/ 下，只能经 run-as 读取
+function configText() {
+  if (!isAndroid) {
+    try {
+      return readFileSync(cfgPath, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+  const res = spawnSync(adbBin(), ['shell', 'run-as', androidAppID, 'cat', 'files/config.toml'], {
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+  return res.status === 0 ? res.stdout : '';
+}
+
+if (isAndroid) {
+  try {
+    await bootAndroid();
+  } catch (err) {
+    console.error('ERROR ' + (err?.message || err));
+    process.exit(1);
+  }
+}
+
 // shellLog 读子进程日志尾部，失败时贴进错误信息。
 //
 // 输入：最多取多少字符
@@ -234,7 +354,7 @@ async function evaluate(expression) {
 //       web 目标只认面板地址那一页，避免连到浏览器的空白页
 async function findTarget() {
   for (let i = 0; i < 360; i += 1) {
-    if (child.exitCode !== null) {
+    if (child && child.exitCode !== null) {
       throw new Error('面板进程提前退出（code=' + child.exitCode + '）：' + shellLog());
     }
     try {
@@ -428,6 +548,32 @@ async function walkUntil(keyName, ok, max = 12) {
   return { ok: false, trail };
 }
 
+// enterToolbar 从列表把焦点走到工具栏区域。
+//
+// 输入：无（要求当前焦点在列表内，内部会先确保列表聚焦）
+// 输出：walkUntil 结果 {ok, trail}
+// 预期：列表首项再按 ↑ 不拦截按键，焦点交给页面级移动，于是落到工具栏
+async function enterToolbar() {
+  await waitFor('列表聚焦', focusList);
+  return walkUntil('ArrowUp', (i) => i.kind !== 'list', 14);
+}
+
+// walkToSearch 在工具栏里按候选方向找搜索框。
+//
+// 输入：方向数组（桌面只有 ArrowLeft；手机工具栏换行，搜索框在上方，先 ArrowUp）
+// 输出：{ok, trail}
+// 预期：每个方向都从工具栏起点重新来，避免上一次走错把焦点带到页面角落
+async function walkToSearch(dirs) {
+  let result = { ok: false, trail: [] };
+  for (const dir of dirs) {
+    const enter = await enterToolbar();
+    if (!enter.ok) return enter;
+    result = await walkUntil(dir, (i) => i.kind === 'input', 8);
+    if (result.ok) return result;
+  }
+  return result;
+}
+
 // focused 返回当前焦点元素在 DOM 中的稳定标识：导航项用 href，其余退到 aria-label/文本。
 //
 // 输入：无
@@ -617,22 +763,25 @@ try {
   );
 
   // ---- 1. 方向键导航 ----
+  // 桌面是左侧竖栏，上下键换项；安卓是底部横栏，只有左右键能换项
+  const navNext = isAndroid ? 'ArrowRight' : 'ArrowDown';
+  const navPrev = isAndroid ? 'ArrowLeft' : 'ArrowUp';
   await evaluate(`document.activeElement?.blur(); true`);
-  await key('ArrowDown');
+  await key(navNext);
   const first = await waitFor('方向键落到导航', async () => {
     const text = await focused();
     return text !== 'BODY' ? text : false;
   });
   check('无焦点时方向键落到导航', true, first);
 
-  await key('ArrowDown');
+  await key(navNext);
   const second = await waitFor('方向键换项', async () => {
     const text = await focused();
     return text !== first ? text : false;
   });
   check('方向键按位置移到下一项', true, first + ' → ' + second);
 
-  await key('ArrowUp');
+  await key(navPrev);
   const back = await waitFor('反向移回', async () => {
     const text = await focused();
     return text === first ? text : false;
@@ -754,9 +903,12 @@ try {
   const leaveList = await walkUntil('ArrowUp', (i) => i.kind !== 'list', 14);
   check('↑ 能把光标移出列表到工具栏', leaveList.ok, leaveList.trail.join(' > '));
 
-  // 5.2 工具栏里连续按 ←，必须能走到搜索框（下拉框不再把方向键吃掉）
-  const toSearch = await walkUntil('ArrowLeft', (i) => i.kind === 'input', 8);
-  check('← 从工具栏走到搜索框', toSearch.ok, toSearch.trail.join(' > '));
+  // 5.2 工具栏里连续按方向键，必须能走到搜索框（下拉框不再把方向键吃掉）
+  //     桌面工具栏是一行，搜索框在最左边；手机上工具栏换行，搜索框在上方一行，
+  //     所以先试 ↑，不行再退回 ←（每次都从列表重新走进工具栏）
+  const searchDirs = isAndroid ? ['ArrowUp', 'ArrowLeft'] : ['ArrowLeft'];
+  const toSearch = await walkToSearch(searchDirs);
+  check('方向键从工具栏走到搜索框', toSearch.ok, toSearch.trail.join(' > '));
 
   // 5.2 未按 Enter 前，字符不许进搜索框（两段式：选中 ≠ 编辑）
   await rawKey('c');
@@ -815,9 +967,9 @@ try {
   check('连续 → 至少走过三个控件', steps.length >= 3, String(steps.length));
   check('连续步进起点在工具栏', before.kind === 'input' || before.kind === 'select' || before.kind === 'other', JSON.stringify(before));
 
-  // 5.6 连续 ← 走回搜索框，验证反向同样通
-  const backToSearch = await walkUntil('ArrowLeft', (i) => i.kind === 'input', 8);
-  check('← 能连续走回搜索框', backToSearch.ok, backToSearch.trail.join(' > '));
+  // 5.6 连续反向走回搜索框，验证反向同样通（手机工具栏换行，方向同 5.2）
+  const backToSearch = await walkToSearch(searchDirs);
+  check('反方向能连续走回搜索框', backToSearch.ok, backToSearch.trail.join(' > '));
 
   // 5.7 回到列表确认键盘仍然可用：F2 能打开改名弹窗，Esc 能关掉
   // 先 Esc 清掉游标：游标停在末项时 ↓ 会按设计把焦点送出列表到分页按钮
@@ -860,13 +1012,7 @@ try {
     btns[btns.length - 1]?.click();
     return true;
   })()`);
-  const persisted = await waitFor('配置写盘', () => {
-    try {
-      return readFileSync(cfgPath, 'utf8').includes('sync_seconds = 17');
-    } catch {
-      return false;
-    }
-  });
+  const persisted = await waitFor('配置写盘', () => configText().includes('sync_seconds = 17'));
   check('设置写入配置文件', persisted !== false);
   const disabledAgain = await waitFor('保存后按钮回到禁用', () =>
     evaluate(`(() => {
@@ -889,7 +1035,7 @@ try {
     evaluate(`document.querySelector(${JSON.stringify(fieldSel)})?.getAttribute('aria-invalid') === 'true'`)
   );
   check('超范围值拒绝保存', invalid === true);
-  check('非法值没有写盘', readFileSync(cfgPath, 'utf8').includes('sync_seconds = 17'));
+  check('非法值没有写盘', configText().includes('sync_seconds = 17'));
 
   // 改回合法值，避免影响后续步骤
   await setValue(fieldSel, '15');
@@ -902,23 +1048,65 @@ try {
   }
   check('Esc 从设置页回到导航', settingsToNav === true);
 
-  // ---- 7. 下载页：假文件渲染，Esc 逐层退回导航 ----
-  await clickNav('#downloads');
-  await waitFor('切到下载页', async () => (await tabHash()) === '#downloads');
-  const rows = await waitFor('假下载文件渲染', () =>
-    evaluate(`(() => {
-      const text = document.querySelector('main')?.textContent ?? '';
-      return text.includes('已下载报告.pdf') && text.includes('已下载歌曲.mp3') ? text : false;
-    })()`)
-  );
-  check('下载页列出本地文件', typeof rows === 'string');
+  // ---- 7. 下载页：假文件渲染，Esc 逐层退回导航；安卓同样有下载页，只是没有「打开文件夹」 ----
+  if (isAndroid) {
+    // 侧栏在手机布局里仍留在 DOM（CSS 隐藏），所以按 href 断言而不是数个数
+    const downloadsLinks = await evaluate(
+      `document.querySelectorAll('nav[aria-label] a[href="#downloads"]').length`
+    );
+    check('安卓渲染下载页入口', downloadsLinks > 0, String(downloadsLinks));
+    await clickNav('#files');
+    await waitFor('切回文件页', async () => (await tabHash()) === '#files');
+    await waitFor('文件行渲染', () => evaluate(`document.querySelectorAll('[data-file-id]').length > 0`));
+    const hasDownloadBtn = await evaluate(`(() => {
+      const btns = [...document.querySelectorAll('[data-file-id] button[aria-label]')];
+      return btns.some((b) => /下载|Download/i.test(b.getAttribute('aria-label')));
+    })()`);
+    check('安卓渲染下载按钮', hasDownloadBtn === true);
+    await clickNav('#downloads');
+    await waitFor('切到下载页', async () => (await tabHash()) === '#downloads');
+    const androidRows = await waitFor('安卓下载页列出本地文件', () =>
+      evaluate(`(() => {
+        const text = document.querySelector('main')?.textContent ?? '';
+        return text.includes('已下载报告.pdf') && text.includes('已下载歌曲.mp3') ? text : false;
+      })()`)
+    );
+    check('安卓下载页列出本地文件', typeof androidRows === 'string');
+    // 安卓没有文件管理器语义：按钮改成导出到系统公共下载目录，不再是「打开文件夹」
+    const hasFolderBtn = await evaluate(`(() => {
+      const main = document.querySelector('main');
+      if (!main) return false;
+      return [...main.querySelectorAll('button')].some((b) =>
+        /打开文件夹|Open folder/i.test(b.textContent || '')
+      );
+    })()`);
+    check('安卓不渲染打开下载文件夹', hasFolderBtn === false);
+    const hasExportBtn = await evaluate(`(() => {
+      const main = document.querySelector('main');
+      if (!main) return false;
+      return [...main.querySelectorAll('button')].some((b) =>
+        /导出到系统下载目录|Export to Downloads/i.test(b.textContent || '')
+      );
+    })()`);
+    check('安卓渲染导出到下载目录', hasExportBtn === true);
+  } else {
+    await clickNav('#downloads');
+    await waitFor('切到下载页', async () => (await tabHash()) === '#downloads');
+    const rows = await waitFor('假下载文件渲染', () =>
+      evaluate(`(() => {
+        const text = document.querySelector('main')?.textContent ?? '';
+        return text.includes('已下载报告.pdf') && text.includes('已下载歌曲.mp3') ? text : false;
+      })()`)
+    );
+    check('下载页列出本地文件', typeof rows === 'string');
 
-  let reachedNav = false;
-  for (let i = 0; i < 4 && !reachedNav; i += 1) {
-    await key('Escape');
-    reachedNav = await pollTrue(onNav, 2000);
+    let reachedNav = false;
+    for (let i = 0; i < 4 && !reachedNav; i += 1) {
+      await key('Escape');
+      reachedNav = await pollTrue(onNav, 2000);
+    }
+    check('Esc 从下载页回到导航', reachedNav === true);
   }
-  check('Esc 从下载页回到导航', reachedNav === true);
 } catch (err) {
   console.error('ERROR ' + (err?.message || err));
   if (pageErrors.length > 0) {
@@ -933,9 +1121,21 @@ try {
     /* 已断开 */
   }
   try {
-    child.kill();
+    child?.kill();
   } catch {
     /* 已退出 */
+  }
+  if (isAndroid) {
+    try {
+      adb(['forward', '--remove', 'tcp:' + port]);
+    } catch {
+      /* 转发可能已被系统回收 */
+    }
+    try {
+      adb(['shell', 'am', 'force-stop', androidAppID]);
+    } catch {
+      /* 应用可能已退出 */
+    }
   }
   try {
     browser?.kill();

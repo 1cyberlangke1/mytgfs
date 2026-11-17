@@ -6,6 +6,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -36,6 +37,7 @@ import android.os.PowerManager;
 import android.os.StatFs;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.util.DisplayMetrics;
@@ -1446,6 +1448,62 @@ public class WailsBridge {
                 Log.e(TAG, "openFile failed: " + path, e);
             }
         });
+    }
+
+    /**
+     * Export a sandbox file into the public Downloads collection.
+     *
+     * Input: absolute path under the app's files/ or cache/ directory
+     * Output: true when the copy landed in MediaStore.Downloads
+     * Behaviour: insert + stream copy with IS_PENDING toggled so the system
+     *            Files app never sees a half-written file. Needs Android 10+.
+     */
+    public boolean exportToDownloads(String path) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "exportToDownloads needs Android 10+");
+            return false;
+        }
+        File f = new File(path);
+        if (!f.isFile()) {
+            Log.w(TAG, "exportToDownloads: not a file " + path);
+            return false;
+        }
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, f.getName());
+        values.put(MediaStore.Downloads.MIME_TYPE, exportMime(f.getName()));
+        values.put(MediaStore.Downloads.IS_PENDING, 1);
+        Uri item = activity.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+        if (item == null) {
+            Log.w(TAG, "exportToDownloads: insert returned null");
+            return false;
+        }
+        try (java.io.InputStream in = new java.io.FileInputStream(f);
+             java.io.OutputStream out = activity.getContentResolver().openOutputStream(item)) {
+            if (out == null) {
+                return false;
+            }
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Downloads.IS_PENDING, 0);
+            activity.getContentResolver().update(item, done, null, null);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "exportToDownloads failed: " + path, e);
+            return false;
+        }
+    }
+
+    // exportMime 按文件名后缀推断 MIME，推不出时给 application/octet-stream。
+    private static String exportMime(String name) {
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        int dot = lower.lastIndexOf('.');
+        String ext = dot >= 0 ? lower.substring(dot + 1) : "";
+        String mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return mime != null ? mime : "application/octet-stream";
     }
 
     /**

@@ -32,7 +32,7 @@ const makeTask = (patch: Partial<DownloadTask>): DownloadTask => ({
 const renderView = (files: DownloadItem[], tasks: DownloadTask[] = []) => {
   const handlers = {
     onRefresh: vi.fn(),
-    onOpenDir: vi.fn(),
+    onDirAction: vi.fn(),
     onRemove: vi.fn(),
     onTask: vi.fn(),
     onPreview: vi.fn(),
@@ -45,7 +45,8 @@ const renderView = (files: DownloadItem[], tasks: DownloadTask[] = []) => {
       files={files}
       tasks={tasks}
       onRefresh={handlers.onRefresh}
-      onOpenDir={handlers.onOpenDir}
+      dirAction="open"
+      onDirAction={handlers.onDirAction}
       onRemove={handlers.onRemove}
       onTask={handlers.onTask}
       onPreview={handlers.onPreview}
@@ -84,7 +85,9 @@ describe('DownloadsView', () => {
   });
 
   it('删除要先确认，确认后只回调一次', () => {
-    const handlers = renderView([{ name: 'cat.jpg', size: 2048, mod: '2026-11-15T10:00:00Z' }]);
+    const handlers = renderView([
+      { name: 'cat.jpg', size: 2048, mod: '2026-11-15T10:00:00Z', path: 'D:/d/cat.jpg' },
+    ]);
 
     fireEvent.click(screen.getByRole('button', { name: t.downloads.removeBtn }));
     expect(handlers.onRemove).not.toHaveBeenCalled();
@@ -95,7 +98,9 @@ describe('DownloadsView', () => {
   });
 
   it('预览/刷新/打开目录各自触发一次回调', () => {
-    const handlers = renderView([{ name: 'note.txt', size: 12, mod: '2026-11-15T10:00:00Z' }]);
+    const handlers = renderView([
+      { name: 'note.txt', size: 12, mod: '2026-11-15T10:00:00Z', path: 'D:/d/note.txt' },
+    ]);
 
     fireEvent.click(screen.getByRole('button', { name: t.downloads.previewBtn }));
     expect(handlers.onPreview).toHaveBeenCalledWith('note.txt');
@@ -104,7 +109,36 @@ describe('DownloadsView', () => {
     expect(handlers.onRefresh).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: t.downloads.openDirBtn }));
-    expect(handlers.onOpenDir).toHaveBeenCalledTimes(1);
+    expect(handlers.onDirAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('导出模式下按钮改名并走同一个回调', () => {
+    const handlers = {
+      onRefresh: vi.fn(),
+      onDirAction: vi.fn(),
+      onRemove: vi.fn(),
+      onTask: vi.fn(),
+      onPreview: vi.fn(),
+    };
+    render(
+      <DownloadsView
+        t={t}
+        locale="zh"
+        dir="/data/user/0/com.mytgfs.app/files/data/downloads"
+        files={[{ name: 'note.txt', size: 12, mod: '2026-11-15T10:00:00Z', path: '/data/x/note.txt' }]}
+        tasks={[]}
+        onRefresh={handlers.onRefresh}
+        dirAction="export"
+        onDirAction={handlers.onDirAction}
+        onRemove={handlers.onRemove}
+        onTask={handlers.onTask}
+        onPreview={handlers.onPreview}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: t.downloads.openDirBtn })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t.downloads.exportDirBtn }));
+    expect(handlers.onDirAction).toHaveBeenCalledTimes(1);
   });
 
   it('空列表显示空态', () => {

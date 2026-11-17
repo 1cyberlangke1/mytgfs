@@ -266,7 +266,7 @@ func (a *App) Run(ctx context.Context, name string, fn func(context.Context, *Se
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: cmp.Or(a.opts.SessionPath, DefaultSessionPath), Key: key},
-		tgclient.Options{})
+		tgclient.Options{BotToken: cfg.BotToken()})
 
 	return client.Run(ctx, func(ctx context.Context) error {
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())

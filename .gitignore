@@ -88,6 +88,7 @@ build-*/
 # Gradle / Go 生成物
 build/android/.gradle/
 build/android/app/build/
+build/android/build/
 build/android/_gen/
 build/android/overlay.json
 build/android/local.properties

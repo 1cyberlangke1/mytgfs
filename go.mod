@@ -7,6 +7,7 @@ require (
 	github.com/gotd/contrib v0.26.0
 	github.com/gotd/td v0.165.0
 	github.com/natefinch/atomic v1.0.1
+	github.com/ncruces/go-sqlite3 v0.37.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/wailsapp/wails/v3 v3.0.0
@@ -41,7 +42,9 @@ require (
 	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v6 v6.5.35401 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/ogen-go/ogen v1.23.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

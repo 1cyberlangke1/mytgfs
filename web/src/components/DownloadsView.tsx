@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FolderOpen, RefreshCw, Trash2, HardDriveDownload, Pause, Play, X, Eye } from 'lucide-react';
+import { FolderDown, FolderOpen, RefreshCw, Trash2, HardDriveDownload, Pause, Play, X, Eye } from 'lucide-react';
 import { DownloadItem, DownloadTask } from '../types';
 import { Locale } from '../types';
 import { formatBytes, inferFileCategory } from '../utils/fsLogic';
@@ -16,8 +16,10 @@ interface DownloadsViewProps {
   tasks: DownloadTask[];
   /** 刷新列表：服务端可能在别处新增或删除文件 */
   onRefresh: () => void;
-  /** 用系统文件管理器打开下载目录 */
-  onOpenDir: () => void;
+  /** 下载目录动作：桌面用文件管理器打开，安卓把文件导出到系统下载目录 */
+  dirAction: 'open' | 'export';
+  /** 执行上面的动作。安卓导出的是整批已下载文件，不是某一个 */
+  onDirAction: () => void;
   /** 删除本地副本；返回 Promise 以便页面自行收尾 */
   onRemove: (name: string) => Promise<void> | void;
   /** 暂停、继续或取消一个下载任务 */
@@ -38,7 +40,8 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
   files,
   tasks,
   onRefresh,
-  onOpenDir,
+  dirAction,
+  onDirAction,
   onRemove,
   onTask,
   onPreview,
@@ -68,14 +71,18 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
               .replace('{size}', formatBytes(totalBytes))}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={onRefresh}>
             <RefreshCw className="w-3.5 h-3.5" />
             <span>{t.downloads.refreshBtn}</span>
           </Button>
-          <Button type="button" variant="accent" onClick={onOpenDir}>
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>{t.downloads.openDirBtn}</span>
+          <Button type="button" variant="accent" onClick={onDirAction}>
+            {dirAction === 'export' ? (
+              <FolderDown className="w-3.5 h-3.5" />
+            ) : (
+              <FolderOpen className="w-3.5 h-3.5" />
+            )}
+            <span>{dirAction === 'export' ? t.downloads.exportDirBtn : t.downloads.openDirBtn}</span>
           </Button>
         </div>
       </div>

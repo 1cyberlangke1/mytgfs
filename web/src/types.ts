@@ -77,6 +77,8 @@ export interface DownloadItem {
   size: number;
   /** RFC3339 文本，按本地时区展示 */
   mod: string;
+  /** 本地绝对路径；安卓导出到系统下载目录时用它定位沙盒文件 */
+  path: string;
 }
 
 /** 下载任务状态：完成的任务会直接进入文件列表 */

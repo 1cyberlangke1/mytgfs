@@ -102,7 +102,8 @@ func runWeb(args []string) {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
 	client := tgclient.New(cfg.Telegram.APIID, cfg.APIHash(),
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key}, tgclient.Options{})
+		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+		tgclient.Options{BotToken: cfg.BotToken()})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())

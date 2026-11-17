@@ -74,6 +74,9 @@ type downloadItem struct {
 	Size int64  `json:"size"`
 	// Mod 是最后写入时间的 RFC3339 文本，前端按本地时区展示。
 	Mod string `json:"mod"`
+	// Path 是本地绝对路径。安卓没有文件管理器语义，导出到公共下载目录时
+	// 需要它把沙盒文件交给 MediaStore，因此随列表一起下发。
+	Path string `json:"path"`
 }
 
 // downloadTask 是一次进行中的下载。
@@ -521,6 +524,7 @@ func (d *downloadStore) List() ([]downloadItem, error) {
 			Name: e.Name(),
 			Size: info.Size(),
 			Mod:  info.ModTime().Format(time.RFC3339),
+			Path: filepath.Join(dir, e.Name()),
 		})
 	}
 	slicesSortDescByMod(out)
@@ -680,11 +684,18 @@ func handleAPIDownloadOpenFile(dl *downloadStore) http.HandlerFunc {
 			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
 			return
 		}
-		if err := dl.OpenFile(r.URL.Query().Get("name")); err != nil {
+		// 绝对路径要一起回传：安卓没有文件管理器语义，
+		// 由前端拿路径走 FileProvider + 系统选择器打开。
+		path, err := dl.Path(r.URL.Query().Get("name"))
+		if err != nil {
 			replyJSONError(w, downloadStatus(err), err.Error())
 			return
 		}
-		replyJSON(w, http.StatusOK, map[string]any{"opened": true})
+		if oerr := dl.OpenFile(r.URL.Query().Get("name")); oerr != nil {
+			replyJSON(w, http.StatusOK, map[string]any{"opened": false, "path": path})
+			return
+		}
+		replyJSON(w, http.StatusOK, map[string]any{"opened": true, "path": path})
 	}
 }
 

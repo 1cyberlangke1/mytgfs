@@ -21,6 +21,9 @@ func main() {
 	if err := prepareSandbox(); err != nil {
 		slog.Error("sandbox unavailable", "err", err)
 	}
+	if err := prepareE2EConfig(); err != nil {
+		slog.Error("e2e config unavailable", "err", err)
+	}
 	logging.SetupFromConfig("config.toml")
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
 	cfg := fs.String("config", "config.toml", "config file")

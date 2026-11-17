@@ -158,7 +158,11 @@ public class MainActivity extends AppCompatActivity {
                             java.util.Map<String, String> headers = new java.util.HashMap<>();
                             headers.put("Access-Control-Allow-Origin", "*");
                             headers.put("Cache-Control", "no-cache");
-                            headers.put("Content-Type", "application/json");
+                            // /wails/ 下既有 JSON 也有 runtime.js：一律标 application/json 会让
+                            // 动态 import 被 MIME 检查拦下（Failed to fetch dynamically imported module），
+                            // 前端就拿不到 Call/Events。所以按扩展名给类型。
+                            // 走构造器参数，不要再往 headers 里塞 Content-Type，否则会出现两份值。
+                            String wailsMime = wailsMimeFor(path);
 
                             // Detect error envelopes: if the body starts with
                             // {"ok":false, return HTTP 500 so the fallback
@@ -175,7 +179,7 @@ public class MainActivity extends AppCompatActivity {
                             }
 
                             return new WebResourceResponse(
-                                "application/json",
+                                wailsMime,
                                 "UTF-8",
                                 status,
                                 reason,
@@ -321,6 +325,21 @@ public class MainActivity extends AppCompatActivity {
             break;
         }
         return "application/octet-stream";
+    }
+
+    // wailsMimeFor 推断 /wails/* 响应的 Content-Type。
+    //
+    // 输入：以 /wails/ 开头的路径（可能带 query）
+    // 输出：MIME 字符串；runtime.js 必须 text/javascript，其余默认 application/json
+    // 预期：ES module 的 MIME 检查是硬性的，给错就整块运行时加载失败
+    private static String wailsMimeFor(String fullPath) {
+        int q = fullPath.indexOf('?');
+        String path = q >= 0 ? fullPath.substring(0, q) : fullPath;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "text/javascript";
+        if (lower.endsWith(".css")) return "text/css";
+        if (lower.endsWith(".wasm")) return "application/wasm";
+        return "application/json";
     }
 
     private void loadApplication() {

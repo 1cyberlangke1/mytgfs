@@ -12,8 +12,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-
-	_ "modernc.org/sqlite"
 )
 
 // SearchHit 是递归搜索命中的一条记录。
@@ -66,9 +64,9 @@ CREATE TABLE IF NOT EXISTS pending_done (
 func Open(path string) (*Index, error) {
 	dsn := path
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+		dsn = dsnFor(path)
 	}
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, err
 	}

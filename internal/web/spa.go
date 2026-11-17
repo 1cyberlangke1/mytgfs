@@ -40,6 +40,19 @@ func spaHandler() http.Handler {
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
+		// index.html 直接写出：http.FileServer 会把 /index.html 301 到 ./，
+		// Wails 的安卓资源服务器又把 "/" 规范成 "/index.html" 再取，
+		// 于是 301 被当成错误、页面变成 ERR_CONNECTION_REFUSED。
+		if p == "index.html" {
+			data, rerr := fs.ReadFile(sub, "index.html")
+			if rerr != nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(data)
+			return
+		}
 		if f, oerr := sub.Open(p); oerr == nil {
 			_ = f.Close()
 			files.ServeHTTP(w, r)

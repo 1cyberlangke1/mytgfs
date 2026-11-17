@@ -255,6 +255,9 @@ func Run(opts Options) error {
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
 		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
 		tgclient.Options{
+			// 首次运行（手机、全新安装）只有 token 文件没有会话：
+			// 让 Run 自己登录，否则拿到的 auth key 未登记，所有 RPC 都是 401
+			BotToken: cfg.BotToken(),
 			OnConnState: func(s tgclient.ConnState) {
 				switch s {
 				case tgclient.ConnReady:

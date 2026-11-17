@@ -38,7 +38,7 @@ import {
   scrollActiveToEdge,
 } from './utils/keynav';
 import { subscribePush } from './events';
-import { platformCaps } from './platform';
+import { exportNativeFile, platformCaps } from './platform';
 import {
   DICTIONARY,
   LOCALE_OPTIONS,
@@ -1422,6 +1422,29 @@ export default function App() {
       });
   };
 
+  // handleExportDownloads 把沙盒里的下载文件导出到系统公共下载目录（安卓专用）。
+  // 单个文件失败不影响其余，最后按成功数给一条提示。
+  const handleExportDownloads = () => {
+    const targets = downloads.filter((f) => f.path);
+    if (targets.length === 0) {
+      pushToast(t.downloads.exportEmptyToast, 'error');
+      return;
+    }
+    let ok = 0;
+    for (const f of targets) {
+      try {
+        if (exportNativeFile(f.path)) ok += 1;
+      } catch {
+        // 桥不可用或某一个文件被占用：继续导出剩下的
+      }
+    }
+    if (ok === 0) {
+      pushToast(t.downloads.exportFailedToast, 'error');
+      return;
+    }
+    pushToast(t.downloads.exportedToast.replace('{count}', String(ok)), 'success');
+  };
+
   // downloadedPreview 把本地下载文件包成 FileItem，复用同一个预览弹窗
   // 媒体源由 streamOverride 指向 /api/downloads/file，不经过卷索引
   const downloadedPreview = useMemo<FileItem | null>(() => {
@@ -1804,7 +1827,10 @@ export default function App() {
                 files={downloads}
                 tasks={downloadTasks}
                 onRefresh={() => void reloadDownloads()}
-                onOpenDir={handleOpenDownloads}
+                dirAction={platformCaps.downloadsDirAction}
+                onDirAction={
+                  platformCaps.downloadsDirAction === 'open' ? handleOpenDownloads : handleExportDownloads
+                }
                 onRemove={handleRemoveDownload}
                 onTask={handleDownloadTask}
                 onPreview={handlePreviewDownloaded}

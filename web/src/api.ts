@@ -7,7 +7,7 @@
 // 所以安卓上所有 /api/* 都经 Wails 服务方法 mytgfs/internal/web.Bridge.Do 转发，
 // 前端仍按 fetch/Response 的语义使用，调用方不需要区分平台。
 
-import { isAndroid } from './platform';
+import { isAndroid, openNativeFile } from './platform';
 import { wailsRuntime } from './runtime';
 
 export interface ApiFile {
@@ -608,6 +608,8 @@ export interface ApiDownload {
   name: string;
   size: number;
   mod: string;
+  /** 本地绝对路径；安卓导出到系统下载目录时用它定位沙盒文件 */
+  path: string;
 }
 
 // ApiDownloadTask 是一次进行中的下载。
@@ -642,9 +644,18 @@ export function localFileURL(name: string): string {
 //
 // 输入：name 文件名
 // 输出：{opened:true}
-// 预期：桌面壳与网页版走同一接口；失败由调用方提示
-export function openDownloadedFile(name: string): Promise<{ opened: boolean }> {
-  return request(`/api/downloads/open-file?name=${encodeURIComponent(name)}`, { method: 'POST' });
+// 预期：桌面由服务端拉起系统程序；安卓服务端拿不到文件管理器，
+//       改用它回传的绝对路径走 FileProvider + 系统选择器（用户自己选应用）
+export async function openDownloadedFile(name: string): Promise<{ opened: boolean }> {
+  const res = await request<{ opened: boolean; path?: string }>(
+    `/api/downloads/open-file?name=${encodeURIComponent(name)}`,
+    { method: 'POST' }
+  );
+  if (!res.opened && isAndroid && res.path) {
+    openNativeFile(res.path);
+    return { opened: true };
+  }
+  return { opened: res.opened };
 }
 
 // getDownloads 列出已下载文件与进行中的任务。
