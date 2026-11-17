@@ -27,14 +27,14 @@ import (
 	"mytgfs/internal/tgclient"
 )
 
-// 默认路径与 CLI 约定一致。
+// 默认路径与 CLI 约定一致（定义集中在 config 包）。
 const (
-	DefaultConfigPath   = "config.toml"
-	DefaultAPIHashFile  = "secrets/api_hash"
-	DefaultBotTokenFile = "secrets/bot_token"
-	DefaultBotSession   = "secrets/bot.session"
-	DefaultUserSession  = "secrets/user.session"
-	DefaultKeyPath      = "secrets/session.key"
+	DefaultConfigPath   = config.DefaultConfigPath
+	DefaultAPIHashFile  = config.DefaultAPIHashFile
+	DefaultBotTokenFile = config.DefaultBotTokenFile
+	DefaultBotSession   = config.DefaultBotSession
+	DefaultUserSession  = config.DefaultUserSession
+	DefaultKeyPath      = config.DefaultKeyPath
 )
 
 // Paths 是登录服务需要的文件位置。
@@ -159,6 +159,20 @@ func (s *Service) SaveCredentials(ctx context.Context, apiID int, apiHash, botTo
 	return s.Status(), nil
 }
 
+// sessionClient 建一条指向 path 的临时连接。
+//
+// 输入：apiID/apiHash 应用凭据；path bot 或 user 会话文件
+// 输出：client；密钥读不出来时返回带前缀的错误
+// 预期：每次调用现读密钥，轮换密钥后下一次调用即生效
+func (s *Service) sessionClient(apiID int, apiHash, path string) (*tgclient.Client, error) {
+	key, err := crypto.LoadOrCreateKey(s.p.KeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+	}
+	return tgclient.New(apiID, apiHash,
+		&sessionstore.Encrypted{Path: path, Key: key}, tgclient.Options{}), nil
+}
+
 // LoginBot 用 bot token 登录并返回 bot 身份。
 //
 // 输入：ctx；token（空串表示用已保存的 token）
@@ -173,12 +187,10 @@ func (s *Service) LoginBot(ctx context.Context, token string) (Identity, error) 
 	if token == "" {
 		return Identity{}, errors.New(i18n.T("err.bot_token_required"))
 	}
-	key, err := crypto.LoadOrCreateKey(s.p.KeyPath)
+	client, err := s.sessionClient(apiID, apiHash, s.p.BotSession)
 	if err != nil {
-		return Identity{}, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+		return Identity{}, err
 	}
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: s.p.BotSession, Key: key}, tgclient.Options{})
 
 	var idn Identity
 	err = client.Run(ctx, func(ctx context.Context) error {
@@ -215,12 +227,10 @@ func (s *Service) StartUserLogin(ctx context.Context, phone string) (CodeRequest
 	if err != nil {
 		return CodeRequest{}, err
 	}
-	key, err := crypto.LoadOrCreateKey(s.p.KeyPath)
+	client, err := s.sessionClient(apiID, apiHash, s.p.UserSession)
 	if err != nil {
-		return CodeRequest{}, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+		return CodeRequest{}, err
 	}
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: s.p.UserSession, Key: key}, tgclient.Options{})
 
 	var out CodeRequest
 	err = client.Run(ctx, func(ctx context.Context) error {
@@ -260,12 +270,10 @@ func (s *Service) FinishUserLogin(ctx context.Context, in FinishRequest) (Finish
 	if err != nil {
 		return FinishResult{}, err
 	}
-	key, err := crypto.LoadOrCreateKey(s.p.KeyPath)
+	client, err := s.sessionClient(apiID, apiHash, s.p.UserSession)
 	if err != nil {
-		return FinishResult{}, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+		return FinishResult{}, err
 	}
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: s.p.UserSession, Key: key}, tgclient.Options{})
 
 	var out FinishResult
 	err = client.Run(ctx, func(ctx context.Context) error {
@@ -312,12 +320,10 @@ func (s *Service) Identity(ctx context.Context, bot bool) (Identity, error) {
 	if !fileExists(path) {
 		return Identity{}, errors.New(i18n.T("err.session_missing"))
 	}
-	key, err := crypto.LoadOrCreateKey(s.p.KeyPath)
+	client, err := s.sessionClient(apiID, apiHash, path)
 	if err != nil {
-		return Identity{}, fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+		return Identity{}, err
 	}
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: path, Key: key}, tgclient.Options{})
 
 	var idn Identity
 	err = client.Run(ctx, func(ctx context.Context) error {

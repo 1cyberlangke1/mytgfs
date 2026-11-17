@@ -148,14 +148,7 @@ func resolveChannelAccess(ctx context.Context, api GrantAPI, channelID int64) (i
 	if err != nil {
 		return 0, fmt.Errorf(i18n.T("err.promote_bot")+": %w", err)
 	}
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range ChatsOf(res) {
 		if ch, ok := c.(*tg.Channel); ok && ch.ID == channelID {
 			return ch.AccessHash, nil
 		}

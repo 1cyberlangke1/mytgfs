@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path"
 	"strings"
 	"time"
@@ -44,7 +43,7 @@ func withVolume(name string, attachQueue bool, fn func(ctx context.Context, a *a
 		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {

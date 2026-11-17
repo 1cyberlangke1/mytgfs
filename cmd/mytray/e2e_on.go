@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"mytgfs/internal/config"
 )
 
 // prepareE2EConfig 在安卓 e2e 包里补一份最小配置。
@@ -20,7 +22,7 @@ func prepareE2EConfig() error {
 	if runtime.GOOS != "android" {
 		return nil
 	}
-	if _, err := os.Stat("config.toml"); err == nil {
+	if _, err := os.Stat(config.DefaultConfigPath); err == nil {
 		return nil
 	}
 	if err := os.MkdirAll("secrets", 0o755); err != nil {
@@ -36,5 +38,5 @@ func prepareE2EConfig() error {
 		"bot_token_file = \"\"\n\n" +
 		"[mount]\n" +
 		"sync_seconds = 15\n"
-	return os.WriteFile("config.toml", []byte(cfg), 0o600)
+	return os.WriteFile(config.DefaultConfigPath, []byte(cfg), 0o600)
 }

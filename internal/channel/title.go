@@ -75,14 +75,7 @@ func resolveTitleAccessHash(ctx context.Context, api TitleAPI, channelID int64) 
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", i18n.T("err.title_set"), err)
 	}
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range ChatsOf(res) {
 		if ch, ok := c.(*tg.Channel); ok && ch.ID == channelID {
 			return ch.AccessHash, nil
 		}

@@ -30,11 +30,12 @@ import (
 
 // 默认路径与命令行既有约定一致；Options 零值直接可用。
 const (
-	DefaultConfigPath  = "config.toml"
-	DefaultSessionPath = "secrets/bot.session"
+	DefaultConfigPath = config.DefaultConfigPath
+	// DefaultSessionPath 是 bot 会话文件。
+	DefaultSessionPath = config.DefaultBotSession
 	// DefaultUserSessionPath 是 user 会话（建频道、列频道这类 bot 做不到的操作）。
-	DefaultUserSessionPath = "secrets/user.session"
-	DefaultKeyPath         = "secrets/session.key"
+	DefaultUserSessionPath = config.DefaultUserSession
+	DefaultKeyPath         = config.DefaultKeyPath
 	// DefaultVolumeName 是无 [[volumes]] 段时的隐式卷名。
 	DefaultVolumeName = "mytgfs"
 )

@@ -9,24 +9,23 @@ package main
 //   mytgfs sync [--limit N]                拉频道历史重建本地索引
 
 import (
-	"context"
 	"fmt"
+	"os"
+
+	"mytgfs/internal/app"
 	"mytgfs/internal/auth"
 	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/logging"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/ui"
 	"mytgfs/internal/version"
-	"os"
-	"os/signal"
 )
 
 func main() {
-	logging.SetupFromConfig("config.toml")
-	if cfg, err := config.Load("config.toml"); err == nil {
+	logging.SetupFromConfig(config.DefaultConfigPath)
+	if cfg, err := config.Load(config.DefaultConfigPath); err == nil {
 		tgclient.SetDefaultProxy(cfg.Telegram.Proxy)
 	}
 	os.Args = append([]string{os.Args[0]}, stripJSONFlag(os.Args[1:])...)
@@ -115,17 +114,14 @@ func main() {
 
 func runAuth(sub string) {
 	apiID, apiHash := loadAPI()
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
+	key := mustSessionKey()
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	switch sub {
 	case "bot":
-		token := readTrim("secrets/bot_token")
+		token := readTrim(config.DefaultBotTokenFile)
 		if token == "" {
 			fmt.Fprint(os.Stderr, i18n.T("prompt.bot_token"))
 			token = readLine()
@@ -133,7 +129,7 @@ func runAuth(sub string) {
 		p := auth.Params{
 			APIID:   apiID,
 			APIHash: apiHash,
-			Session: &sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+			Session: &sessionstore.Encrypted{Path: app.DefaultSessionPath, Key: key},
 		}
 		if err := auth.LoginBot(ctx, p, token); err != nil {
 			fatal(err.Error())
@@ -148,7 +144,7 @@ func runAuth(sub string) {
 		p := auth.Params{
 			APIID:   apiID,
 			APIHash: apiHash,
-			Session: &sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
+			Session: &sessionstore.Encrypted{Path: app.DefaultUserSessionPath, Key: key},
 		}
 		if err := auth.LoginUser(ctx, p, phone, password); err != nil {
 			fatal(err.Error())

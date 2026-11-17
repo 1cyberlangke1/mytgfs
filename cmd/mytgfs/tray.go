@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 
+	"mytgfs/internal/config"
 	"mytgfs/internal/trayapp"
 )
 
@@ -18,7 +19,7 @@ func runTray(args []string) {
 	_ = fs.Parse(args)
 
 	if err := trayapp.Run(trayapp.Options{
-		ConfigPath:     "config.toml",
+		ConfigPath:     config.DefaultConfigPath,
 		SingleInstance: true,
 	}); err != nil {
 		fatal(err.Error())

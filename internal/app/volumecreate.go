@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/gotd/td/tg"
@@ -85,7 +86,7 @@ func (a *App) CreateVolume(ctx context.Context, name, title, botUsername string)
 		})
 	})
 	if err != nil {
-		return VolumeCreateResult{}, err
+		return VolumeCreateResult{}, authLostHint(err)
 	}
 	if res.AvatarErr != nil {
 		logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
@@ -98,6 +99,18 @@ func (a *App) CreateVolume(ctx context.Context, name, title, botUsername string)
 		Muted:     res.Muted,
 		MuteErr:   res.MuteErr,
 	}, nil
+}
+
+// authLostHint 给「登录已失效」类错误补上重新登录的提示。
+//
+// 输入：底层错误
+// 输出：原错误；IsAuthLost 时换成带提示的错误（保留原始 error 供 errors.Is）
+// 预期：各入口不必各自判断一次，展示文案保持一致
+func authLostHint(err error) error {
+	if err != nil && tgclient.IsAuthLost(err) {
+		return fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), err)
+	}
+	return err
 }
 
 // botUsername 用 bot 会话读取 bot 用户名。

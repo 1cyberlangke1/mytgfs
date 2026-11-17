@@ -21,7 +21,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"path"
 	"strings"
 
@@ -68,7 +67,7 @@ func runCopy(args []string) {
 		fatalCode("cp_same_path", i18n.T("err.cp_same_path"))
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {

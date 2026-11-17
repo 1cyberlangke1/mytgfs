@@ -24,9 +24,9 @@ func main() {
 	if err := prepareE2EConfig(); err != nil {
 		slog.Error("e2e config unavailable", "err", err)
 	}
-	logging.SetupFromConfig("config.toml")
+	logging.SetupFromConfig(config.DefaultConfigPath)
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
-	cfg := fs.String("config", "config.toml", "config file")
+	cfg := fs.String("config", config.DefaultConfigPath, "config file")
 	_ = fs.Parse(os.Args[1:])
 	if c, err := config.Load(*cfg); err == nil {
 		tgclient.SetDefaultProxy(c.Telegram.Proxy)

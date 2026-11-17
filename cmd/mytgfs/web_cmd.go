@@ -19,7 +19,6 @@ import (
 	"mytgfs/internal/autostart"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
 	"mytgfs/internal/datadir"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
@@ -37,7 +36,6 @@ import (
 	"mytgfs/internal/web"
 	"net"
 	"os"
-	"os/signal"
 	"sync"
 	"time"
 )
@@ -53,7 +51,7 @@ func runWeb(args []string) {
 		}
 	})
 
-	const cfgPath = "config.toml"
+	const cfgPath = config.DefaultConfigPath
 	cfg, err := config.Load(cfgPath)
 
 	// 端口优先级：命令行 --port > config.toml [web].port > 默认 8720
@@ -73,7 +71,7 @@ func runWeb(args []string) {
 	url := "http://" + addr
 	ui.Out(i18n.T("cli.web_url", url))
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	// 面板资源由前端构建产物内嵌，启停状态全部走 web.Options
@@ -96,12 +94,8 @@ func runWeb(args []string) {
 		}
 		return
 	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
 	client := tgclient.New(cfg.Telegram.APIID, cfg.APIHash(),
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+		&sessionstore.Encrypted{Path: app.DefaultSessionPath, Key: mustSessionKey()},
 		tgclient.Options{BotToken: cfg.BotToken()})
 
 	err = client.Run(ctx, func(ctx context.Context) error {
@@ -258,7 +252,6 @@ func runWeb(args []string) {
 				coverProvider.Forget(volume.NormalizeChatID(res.ChannelID))
 				return nil
 			},
-			// 添加已有频道：用 bot 会话校验频道可见性与发言权
 			// 挂载已有频道：只读校验与写配置都在 app 装配根
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
 				res, err := appRoot.AttachVolume(ctx, name, chatID)

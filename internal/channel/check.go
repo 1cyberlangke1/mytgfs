@@ -68,14 +68,7 @@ func Check(ctx context.Context, api CheckAPI, channelID int64) (*Health, error) 
 		return nil, err
 	}
 	var ch *tg.Channel
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range ChatsOf(res) {
 		if v, ok := c.(*tg.Channel); ok && v.ID == channelID {
 			ch = v
 			break

@@ -13,10 +13,8 @@ import (
 
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
-	"mytgfs/internal/sessionstore"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/tgclient"
@@ -39,30 +37,18 @@ func (a *App) AllNodes(ctx context.Context, channelID int64) ([]telegramstore.No
 	if _, err := os.Stat(a.userSessionPath()); err != nil {
 		return nil, nil
 	}
-	cfg := a.Config()
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		return nil, ErrMissingAPIHash
-	}
-	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
-	if err != nil {
-		return nil, err
-	}
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: a.userSessionPath(), Key: key},
-		tgclient.Options{})
-
 	var nodes []telegramstore.NodeInfo
-	if err := client.Run(ctx, func(ctx context.Context) error {
-		ch, rerr := channel.Resolve(ctx, client.API(), channelID)
+	err := a.runClient(ctx, a.userSessionPath(), tgclient.Options{}, func(ctx context.Context, c *tgclient.Client) error {
+		ch, rerr := channel.Resolve(ctx, c.API(), channelID)
 		if rerr != nil {
 			return rerr
 		}
-		h := &tgsync.TelegramHistory{API: client.API(), ChannelID: ch.ChannelID}
+		h := &tgsync.TelegramHistory{API: c.API(), ChannelID: ch.ChannelID}
 		var herr error
 		nodes, herr = h.AllNodes(ctx)
 		return herr
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return nodes, nil

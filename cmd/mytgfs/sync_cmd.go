@@ -16,8 +16,6 @@ import (
 	"mytgfs/internal/i18n"
 	tgsync "mytgfs/internal/sync"
 	"mytgfs/internal/ui"
-	"os"
-	"os/signal"
 )
 
 func runSync(args []string) {
@@ -31,7 +29,7 @@ func runSync(args []string) {
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	entries := 0

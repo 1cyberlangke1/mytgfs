@@ -37,14 +37,7 @@ func Resolve(ctx context.Context, api ResolveAPI, channelID int64) (*Result, err
 	if err != nil {
 		return nil, err
 	}
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range ChatsOf(res) {
 		if ch, ok := c.(*tg.Channel); ok && ch.ID == channelID {
 			return &Result{ChannelID: ch.ID, AccessHash: ch.AccessHash, Title: ch.Title}, nil
 		}

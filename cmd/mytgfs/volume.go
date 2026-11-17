@@ -12,13 +12,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
@@ -56,7 +54,7 @@ func runVolume(args []string) {
 // 预期：只读 RPC（getChannels + getParticipant），不往频道写任何消息
 func runVolumeCheck(args []string) {
 	fs := flag.NewFlagSet("volume check", flag.ExitOnError)
-	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
+	cfgPath := fs.String("config", config.DefaultConfigPath, i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load(*cfgPath)
@@ -71,16 +69,12 @@ func runVolumeCheck(args []string) {
 	if apiHash == "" {
 		fatal(i18n.T("err.missing_api_hash"))
 	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+		&sessionstore.Encrypted{Path: app.DefaultSessionPath, Key: mustSessionKey()},
 		tgclient.Options{})
 	bad := 0
 	type volResult struct {
@@ -127,6 +121,23 @@ func checkFailure(channelID int64, err error) error {
 	return err
 }
 
+// volumeTarget 解析卷名并加载配置。
+//
+// 输入：cfgPath 配置文件路径；rawName 命令行 --name
+// 输出：加载好的 App 与规整后的卷名
+// 预期：卷名为空或配置读不出来时直接退出 1
+func volumeTarget(cfgPath, rawName string) (*app.App, string) {
+	volName := strings.TrimSpace(rawName)
+	if volName == "" {
+		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
+	}
+	a, err := app.Load(app.Options{ConfigPath: cfgPath})
+	if err != nil {
+		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
+	}
+	return a, volName
+}
+
 // runVolumeDelete 删除一个卷：删 Telegram 频道 → 移除配置条目 → 删本地索引。
 //
 // 输入：--name 卷名（必填）；--config 配置文件
@@ -135,20 +146,12 @@ func checkFailure(channelID int64, err error) error {
 func runVolumeDelete(args []string) {
 	fs := flag.NewFlagSet("volume delete", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume_plain"))
-	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
+	cfgPath := fs.String("config", config.DefaultConfigPath, i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
-	volName := strings.TrimSpace(*name)
-	if volName == "" {
-		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
-	}
+	appRoot, volName := volumeTarget(*cfgPath, *name)
 
-	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	res, err := appRoot.DeleteVolume(ctx, volName)
@@ -178,18 +181,11 @@ func runVolumeAttach(args []string) {
 	fs := flag.NewFlagSet("volume attach", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
 	chatID := fs.Int64("chat-id", 0, i18n.T("cli.flag.chat_id"))
-	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
+	cfgPath := fs.String("config", config.DefaultConfigPath, i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
-	volName := strings.TrimSpace(*name)
-	if volName == "" {
-		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
-	}
-	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	appRoot, volName := volumeTarget(*cfgPath, *name)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	res, err := appRoot.AttachVolume(ctx, volName, *chatID)
@@ -222,18 +218,11 @@ func runVolumeCreate(args []string) {
 	name := fs.String("name", "", i18n.T("cli.flag.volume_index"))
 	title := fs.String("title", "", i18n.T("cli.flag.title_default"))
 	bot := fs.String("bot", "", i18n.T("cli.flag.bot_default"))
-	cfgPath := fs.String("config", "config.toml", i18n.T("cli.flag.config_file"))
+	cfgPath := fs.String("config", config.DefaultConfigPath, i18n.T("cli.flag.config_file"))
 	_ = fs.Parse(args)
 
-	volName := strings.TrimSpace(*name)
-	if volName == "" {
-		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
-	}
-	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	appRoot, volName := volumeTarget(*cfgPath, *name)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	res, err := appRoot.CreateVolume(ctx, volName, *title, *bot)

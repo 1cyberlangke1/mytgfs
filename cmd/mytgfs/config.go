@@ -23,7 +23,7 @@ import (
 )
 
 // configPath 是命令行默认配置文件。
-const configPath = "config.toml"
+const configPath = config.DefaultConfigPath
 
 // runConfig 处理 config 的子命令。
 func runConfig(args []string) {

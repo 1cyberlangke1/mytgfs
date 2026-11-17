@@ -8,8 +8,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
-	"os/signal"
 
 	"mytgfs/internal/app"
 	"mytgfs/internal/fsck"
@@ -52,7 +50,7 @@ func runCheck(args []string) {
 		fatal(i18n.T("err.volume_no_channel", volName))
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	var rep fsck.Report

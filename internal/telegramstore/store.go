@@ -19,6 +19,7 @@ import (
 	"github.com/gotd/td/tg"
 	"golang.org/x/time/rate"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/i18n"
 )
 
@@ -225,14 +226,7 @@ func (s *Store) loadChannel(ctx context.Context) (*tg.Channel, error) {
 	if err != nil {
 		return nil, DescribeError(err)
 	}
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range channel.ChatsOf(res) {
 		if ch, ok := c.(*tg.Channel); ok {
 			s.mu.Lock()
 			s.channel = ch

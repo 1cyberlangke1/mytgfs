@@ -11,6 +11,7 @@ import (
 
 	"github.com/gotd/td/tg"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/telegramstore"
 )
@@ -98,14 +99,7 @@ func (h *TelegramHistory) channel(ctx context.Context) (*tg.Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	var chats []tg.ChatClass
-	switch m := res.(type) {
-	case *tg.MessagesChats:
-		chats = m.Chats
-	case *tg.MessagesChatsSlice:
-		chats = m.Chats
-	}
-	for _, c := range chats {
+	for _, c := range channel.ChatsOf(res) {
 		if ch, ok := c.(*tg.Channel); ok {
 			return ch, nil
 		}

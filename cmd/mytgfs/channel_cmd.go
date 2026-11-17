@@ -12,48 +12,39 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"mytgfs/internal/channel"
-	"mytgfs/internal/config"
-	"mytgfs/internal/crypto"
-	"mytgfs/internal/i18n"
-	"mytgfs/internal/sessionstore"
-	"mytgfs/internal/tgclient"
-	"mytgfs/internal/ui"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
+
+	"github.com/gotd/td/tg"
+
+	"mytgfs/internal/channel"
+	"mytgfs/internal/config"
+	"mytgfs/internal/i18n"
+	"mytgfs/internal/ui"
 )
 
+// runChannelCreate 建私有频道，可选把 bot 提为管理员。
+//
+// 输入：--name 频道标题；--bot bot 用户名（可空）
+// 输出：频道 id / access_hash / chat_id
+// 预期：建频道与拉 bot 都在同一条 user 连接里完成，任一失败即整体失败
 func runChannelCreate(args []string) {
 	fs := flag.NewFlagSet("channel create", flag.ExitOnError)
 	name := fs.String("name", "mytgfs", i18n.T("cli.flag.channel_title"))
 	bot := fs.String("bot", "", i18n.T("cli.flag.bot_optional"))
 	_ = fs.Parse(args)
 
-	apiID, apiHash := loadAPI()
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
-
 	var res *channel.Result
-	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Create(ctx, client.API(), *name)
-		if err != nil {
-			return err
+	err := runUserSession(func(ctx context.Context, api *tg.Client) error {
+		r, cerr := channel.Create(ctx, api, *name)
+		if cerr != nil {
+			return cerr
 		}
 		if *bot != "" {
-			id, err := channel.AddBot(ctx, client.API(), r, *bot)
-			if err != nil {
-				return err
+			id, aerr := channel.AddBot(ctx, api, r, *bot)
+			if aerr != nil {
+				return aerr
 			}
 			r.BotID = id
 		}
@@ -67,29 +58,19 @@ func runChannelCreate(args []string) {
 }
 
 // runChannelList 列出当前 user 能管理的频道。
-
+//
+// 输入：无额外参数
+// 输出：每行一个频道的可读列表，--json 时输出结构化结果
+// 预期：只读 RPC，不改动任何频道
 func runChannelList(args []string) {
 	fs := flag.NewFlagSet("channel list", flag.ExitOnError)
 	_ = fs.Parse(args)
 
-	apiID, apiHash := loadAPI()
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
-
 	var out []channel.Item
-	err = client.Run(ctx, func(ctx context.Context) error {
-		items, err := channel.List(ctx, client.API())
-		if err != nil {
-			return err
+	err := runUserSession(func(ctx context.Context, api *tg.Client) error {
+		items, lerr := channel.List(ctx, api)
+		if lerr != nil {
+			return lerr
 		}
 		out = items
 		for _, it := range items {
@@ -103,8 +84,11 @@ func runChannelList(args []string) {
 	ui.Print(map[string]any{"channels": out})
 }
 
-// runChannelAdd 把 bot 加到已有频道。
-
+// runChannelAdd 把 bot 加到已有频道并提权。
+//
+// 输入：--channel 频道 id；--bot bot 用户名（都不为空）
+// 输出：频道 id / access_hash / chat_id
+// 预期：缺参数直接退出 1，不发 RPC
 func runChannelAdd(args []string) {
 	fs := flag.NewFlagSet("channel add", flag.ExitOnError)
 	channelID := fs.Int64("channel", 0, "channel id")
@@ -114,24 +98,12 @@ func runChannelAdd(args []string) {
 	if *channelID == 0 || *bot == "" {
 		fatal(i18n.T("err.need_channel_bot"))
 	}
-	apiID, apiHash := loadAPI()
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
 
 	var res *channel.Result
-	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Add(ctx, client.API(), *channelID, *bot)
+	err := runUserSession(func(ctx context.Context, api *tg.Client) error {
+		r, cerr := channel.Add(ctx, api, *channelID, *bot)
 		res = r
-		return err
+		return cerr
 	})
 	if err != nil {
 		failErr(i18n.T("err.add_bot"), err)
@@ -140,7 +112,10 @@ func runChannelAdd(args []string) {
 }
 
 // runChannelInit 建频道并给 bot 提权（等价 channel create --bot）。
-
+//
+// 输入：--name 频道标题；--bot bot 用户名（必填）
+// 输出：频道 id / access_hash / chat_id
+// 预期：--bot 为空直接退出 1
 func runChannelInit(args []string) {
 	fs := flag.NewFlagSet("channel init", flag.ExitOnError)
 	name := fs.String("name", "mytgfs", i18n.T("cli.flag.channel_title"))
@@ -150,24 +125,12 @@ func runChannelInit(args []string) {
 	if *botUsername == "" {
 		fatal(i18n.T("err.bot_required"))
 	}
-	apiID, apiHash := loadAPI()
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	client := tgclient.New(apiID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
 
 	var res *channel.Result
-	err = client.Run(ctx, func(ctx context.Context) error {
-		r, err := channel.Init(ctx, client.API(), *botUsername, *name)
+	err := runUserSession(func(ctx context.Context, api *tg.Client) error {
+		r, cerr := channel.Init(ctx, api, *botUsername, *name)
 		res = r
-		return err
+		return cerr
 	})
 	if err != nil {
 		failErr(i18n.T("err.channel_init_prefix"), err)
@@ -180,7 +143,6 @@ func runChannelInit(args []string) {
 // 输入：cfg 配置；name 命令行 --name（可为空）
 // 输出：卷名
 // 预期：显式 --name 原样返回；留空时取第一个卷，没有卷配置时用默认名 mytgfs
-
 func resolveVolumeName(cfg config.Config, name string) string {
 	if name != "" {
 		return name
@@ -191,15 +153,11 @@ func resolveVolumeName(cfg config.Config, name string) string {
 	return "mytgfs"
 }
 
-// runSync 增量拉取频道消息并更新本地索引。
-// runSync 用频道 pts 游标增量同步，或用 user 会话回填历史。
+// chatID 把频道 id 转成 Bot API 的 -100... 形式。
 //
-// 输入：命令行参数（--limit 单轮上限、--name 卷名、--backfill 走历史回填）
-// 输出：无（打印统计；失败退出）
-// 预期：默认走 updates.getChannelDifference，bot 会话即可，只拉新变化；
-//
-//	--backfill 走 messages.getHistory（user-only），用于首次深挖旧文件
-
+// 输入：channelID 原始频道 id
+// 输出：-100<channelID> 形式的 chat_id
+// 预期：只做展示与配置写法，不改动索引里的原始 id
 func chatID(channelID int64) int64 {
 	return -1000000000000 - channelID
 }
@@ -209,8 +167,8 @@ func chatID(channelID int64) int64 {
 // 输入：无（读 MYTGFS_API_ID 环境变量与 config.toml）
 // 输出：api_id、api_hash
 // 预期：api_id 先看环境变量，再看 config.toml 的 [telegram].api_id；
-// 两者都没有时直接报错退出，不内置任何默认值（api_id 是应用所有者的身份）。
-
+//
+//	两者都没有时直接报错退出，不内置任何默认值（api_id 是应用所有者的身份）。
 func loadAPI() (int, string) {
 	apiID := 0
 	if v := strings.TrimSpace(os.Getenv("MYTGFS_API_ID")); v != "" {
@@ -221,14 +179,14 @@ func loadAPI() (int, string) {
 		apiID = n
 	}
 	if apiID == 0 {
-		if cfg, err := config.Load("config.toml"); err == nil {
+		if cfg, err := config.Load(config.DefaultConfigPath); err == nil {
 			apiID = cfg.Telegram.APIID
 		}
 	}
 	if apiID == 0 {
 		fatal(i18n.T("err.missing_api_id"))
 	}
-	apiHash := readTrim("secrets/api_hash")
+	apiHash := readTrim(config.DefaultAPIHashFile)
 	if apiHash == "" {
 		fatal(i18n.T("err.missing_api_hash"))
 	}

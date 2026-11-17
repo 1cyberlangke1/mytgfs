@@ -59,7 +59,7 @@ type Options struct {
 // 预期：托盘一眼看清是哪个盘、占多少
 
 func Run(opts Options) error {
-	cfgPath := cmp.Or(opts.ConfigPath, "config.toml")
+	cfgPath := cmp.Or(opts.ConfigPath, config.DefaultConfigPath)
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -75,7 +75,7 @@ func Run(opts Options) error {
 		}
 		return fmt.Errorf("%s", i18n.T("err.missing_api_hash"))
 	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
+	key, err := crypto.LoadOrCreateKey(app.DefaultKeyPath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
 	}
@@ -240,7 +240,7 @@ func Run(opts Options) error {
 	}, datadir.Path("thumbs"))
 
 	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
+		&sessionstore.Encrypted{Path: app.DefaultSessionPath, Key: key},
 		tgclient.Options{
 			// 首次运行（手机、全新安装）只有 token 文件没有会话：
 			// 让 Run 自己登录，否则拿到的 auth key 未登记，所有 RPC 都是 401
@@ -341,9 +341,6 @@ func Run(opts Options) error {
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
 				res, err := appRoot.CreateVolume(ctx, name, title, "")
 				if err != nil {
-					if tgclient.IsAuthLost(err) {
-						return nil, fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), err)
-					}
 					return nil, err
 				}
 				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
@@ -362,7 +359,6 @@ func Run(opts Options) error {
 				coverProvider.Forget(volume.NormalizeChatID(res.ChannelID))
 				return nil
 			},
-			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
 			// 挂载已有频道：只读校验与写配置都在 app 装配根
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
 				res, err := appRoot.AttachVolume(ctx, name, chatID)
