@@ -54,6 +54,15 @@ func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime,
 		return nil, DescribeError(s.noteErr(err))
 	}
 
+	return partFromUpdates(updates)
+}
+
+// partFromUpdates 把「发送文档消息」的返回转成 Part。
+//
+// 输入：MessagesSendMedia 的返回值
+// 输出：Part；返回值里没有文档时返回 ErrNoDocument
+// 预期：只取文档本体与消息号，缩略图存 stripping 后的可持久化形态
+func partFromUpdates(updates tg.UpdatesClass) (*Part, error) {
 	doc, msgID, err := extractDocument(updates)
 	if err != nil {
 		return nil, err

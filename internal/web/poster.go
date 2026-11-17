@@ -53,8 +53,7 @@ func onlyDigits(s string) bool {
 // 预期：只写本地缓存，不改索引与 Telegram
 func handleAPIPoster(dir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		q := r.URL.Query()

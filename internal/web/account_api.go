@@ -65,8 +65,7 @@ func handleAPICredentials(opts Options) http.HandlerFunc {
 // 预期：登录成功后 token 才落盘
 func handleAPILoginBot(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.Auth == nil {
@@ -97,8 +96,7 @@ func handleAPILoginBot(opts Options) http.HandlerFunc {
 // 预期：下一步提交验证码时把 hash 原样带回
 func handleAPIUserStart(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.Auth == nil {
@@ -129,8 +127,7 @@ func handleAPIUserStart(opts Options) http.HandlerFunc {
 // 预期：need_password 为 true 时前端显示密码框再调一次
 func handleAPIUserFinish(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.Auth == nil {

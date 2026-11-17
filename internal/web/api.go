@@ -324,11 +324,23 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// requirePost 校验写接口的请求方法。
+//
+// 输入：w/r 当前请求
+// 输出：true 表示方法正确；false 表示已回 405，调用方立即 return
+// 预期：所有 JSON 写接口共用，免得每个 handler 抄一遍同样的四行
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodPost {
+		return true
+	}
+	replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+	return false
+}
+
 // handleAPIMkdir 新建目录。
 func handleAPIMkdir(api *filesAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		var body jsonBody
@@ -357,8 +369,7 @@ func handleAPIMkdir(api *filesAPI) http.HandlerFunc {
 // handleAPIMove 移动/改名一个或多个条目。
 func handleAPIMove(api *filesAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		var body jsonBody
@@ -413,8 +424,7 @@ func handleAPIMove(api *filesAPI) http.HandlerFunc {
 // handleAPIRemove 删除一个或多个条目。
 func handleAPIRemove(api *filesAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		var body jsonBody
@@ -585,8 +595,7 @@ func valueString(v any) string {
 // handleAPISync 触发一次增量同步。
 func handleAPISync(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.Sync == nil {

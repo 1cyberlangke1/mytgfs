@@ -320,15 +320,7 @@ FROM nodes WHERE substr(path, 1, ?) = ? ORDER BY path`, len(base)+1, base+"/")
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Node
-	for rows.Next() {
-		n, err := scanNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return collectNodes(rows)
 }
 
 // PathByMessageID 按消息号查路径。

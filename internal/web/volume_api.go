@@ -53,8 +53,7 @@ func handleAPIChannels(opts Options) http.HandlerFunc {
 // 预期：能力未注入 501；卷名重复 409
 func handleAPIAttachVolume(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.AttachVolume == nil {

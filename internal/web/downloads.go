@@ -680,8 +680,7 @@ func handleAPIDownloadFile(dl *downloadStore) http.HandlerFunc {
 // 预期：失败返回 502，由页面提示原因
 func handleAPIDownloadOpenFile(dl *downloadStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		// 绝对路径要一起回传：安卓没有文件管理器语义，
@@ -764,8 +763,7 @@ func handleAPIDownloads(dl *downloadStore) http.HandlerFunc {
 // 预期：暂停保留已下载字节，继续从断点续写
 func handleAPIDownloadTask(dl *downloadStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if dl == nil || dl.dirFn == nil {
@@ -804,8 +802,7 @@ func handleAPIDownloadTask(dl *downloadStore) http.HandlerFunc {
 // 预期：目录不存在时先创建；打开失败返回 502
 func handleAPIDownloadsOpen(dl *downloadStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if err := dl.Open(); err != nil {

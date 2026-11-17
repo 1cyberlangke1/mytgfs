@@ -93,6 +93,23 @@ func (i *Index) ensureNodes(ctx context.Context) error {
 const nodeColumns = `id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256, thumb`
 
 // scanNode 把一行扫进 Node。
+// collectNodes 把查询结果逐行解析成节点列表。
+//
+// 输入：rows 已执行的查询，列顺序同 nodeColumns
+// 输出：按查询顺序排列的节点；扫描或遍历出错时返回 error
+// 预期：调用方负责 rows.Close()；这里只负责扫描与收集
+func collectNodes(rows *sql.Rows) ([]Node, error) {
+	var out []Node
+	for rows.Next() {
+		n, err := scanNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 	var n Node
 	var isDir int
@@ -159,15 +176,7 @@ FROM nodes WHERE parent_id = ? ORDER BY is_dir DESC, name`, parentID)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Node
-	for rows.Next() {
-		n, err := scanNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return collectNodes(rows)
 }
 
 // PutNode 写入或覆盖一个节点。
@@ -374,15 +383,7 @@ func (i *Index) AllNodes(ctx context.Context) ([]Node, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Node
-	for rows.Next() {
-		n, err := scanNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return collectNodes(rows)
 }
 
 // ClearNodes 清空节点表。

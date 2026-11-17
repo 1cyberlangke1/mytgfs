@@ -25,8 +25,7 @@ type RebuildFunc func(ctx context.Context, volume string) (any, error)
 // 预期：只接受 POST；卷名从查询参数取，避免路径拼接
 func handleAPIRebuild(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			replyJSONError(w, http.StatusMethodNotAllowed, i18n.T("err.web_method"))
+		if !requirePost(w, r) {
 			return
 		}
 		if opts.Rebuild == nil {

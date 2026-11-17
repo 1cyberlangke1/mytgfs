@@ -502,16 +502,5 @@ func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume
 	if err != nil {
 		return nil, err
 	}
-	doc, msgID, err := extractDocument(updates)
-	if err != nil {
-		return nil, err
-	}
-	return &Part{
-		MessageID:     msgID,
-		DocumentID:    doc.ID,
-		AccessHash:    doc.AccessHash,
-		FileReference: doc.FileReference,
-		Size:          doc.Size,
-		Thumb:         strippedOf(doc),
-	}, nil
+	return partFromUpdates(updates)
 }
