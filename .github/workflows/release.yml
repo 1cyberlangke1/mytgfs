@@ -48,10 +48,27 @@ jobs:
         with:
           name: web-dist
           path: internal/web/dist
+      # 与 ci.yml 一致：显式缓存 + restore-keys，go.sum 变动时也能复用老快照，
+      # 免得 macOS 上 wails 的 cgo 全量重编
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: 解析 Go 缓存目录
+        id: goenv
+        shell: bash
+        run: |
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - name: 恢复 Go 模块与编译缓存
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.goenv.outputs.mod }}
+            ${{ steps.goenv.outputs.build }}
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       # Wails v3 桌面壳在 Linux 走 cgo + GTK4/WebKitGTK 6.0，缺开发包会导致 pkg-config 失败
       - name: 安装 Linux 桌面依赖
         if: runner.os == 'Linux'
@@ -134,7 +151,15 @@ jobs:
       - name: 安装前端依赖
         working-directory: web
         run: npm ci --no-audit --no-fund
+      # NDK 解压后有 2 GB 多，命中缓存就跳过下载安装
+      - name: 恢复 Android NDK
+        id: ndk
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          key: ndk-28.2.13676358-${{ runner.os }}
       - name: 安装 Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null

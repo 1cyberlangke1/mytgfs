@@ -31,10 +31,29 @@ jobs:
         with:
           name: web-dist
           path: internal/web/dist
+      # setup-go 自带缓存的键含 go.sum 哈希：go.sum 一变就整体失效，
+      # macOS 上 wails 的 cgo 全量重编要 6 分钟。这里改成显式缓存 + restore-keys：
+      # 精确键没命中时仍能复用一个老快照。Go 的编译缓存是内容寻址的，
+      # 混进旧条目只会被忽略，不会污染新构建。
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: 解析 Go 缓存目录
+        id: goenv
+        shell: bash
+        run: |
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - name: 恢复 Go 模块与编译缓存
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.goenv.outputs.mod }}
+            ${{ steps.goenv.outputs.build }}
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       # Wails v3 的 Linux 桌面壳走 cgo + GTK4/WebKitGTK 6.0，缺开发包会导致 pkg-config 失败。
       - name: 安装 Linux 桌面依赖
         if: runner.os == 'Linux'
@@ -151,12 +170,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Gradle 依赖与守护进程跨运行复用（Release 的 android job 用的是同一个 action）
+      - uses: gradle/actions/setup-gradle@v4
       - name: 安装前端依赖
         working-directory: web
         run: npm ci --no-audit --no-fund
       # runner 预装的 NDK 版本不确定；build-android.ps1 取 ndk 目录下最大的版本，
-      # 这里显式装一个，避免拿到过旧版本
+      # 这里显式装一个，避免拿到过旧版本。NDK 解压后有 2 GB 多，命中缓存就跳过下载
+      - name: 恢复 Android NDK
+        id: ndk
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          key: ndk-28.2.13676358-${{ runner.os }}
       - name: 安装 Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null
@@ -197,7 +225,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # 不固定 govulncheck 版本（要能发现新公布的漏洞），改成按自然周缓存已编译好的
+      # 二进制：同一周内复用省掉约 20 秒编译，跨周自动重新装一次最新的
+      - name: 解析 Go bin 目录与本周缓存键
+        id: vuln
+        shell: bash
+        run: |
+          echo "bin=$(go env GOPATH)/bin" >> "$GITHUB_OUTPUT"
+          echo "week=$(date -u +%Y-%V)" >> "$GITHUB_OUTPUT"
+      - name: 恢复 govulncheck
+        id: vuln-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.vuln.outputs.bin }}
+          key: govulncheck-${{ runner.os }}-${{ steps.vuln.outputs.week }}
       - name: 安装 govulncheck
+        if: steps.vuln-cache.outputs.cache-hit != 'true'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: 漏洞扫描
         run: govulncheck ./...
