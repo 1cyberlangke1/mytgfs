@@ -81,8 +81,16 @@ coverage/
 !internal/web/dist/**
 
 # 编译产物
-build/
+build/*
 build-*/
+# 安卓宿主工程要入库（build/* 只忽略一级子项，这里把 android 放回来）
+!build/android/
+# Gradle / Go 生成物
+build/android/.gradle/
+build/android/app/build/
+build/android/_gen/
+build/android/overlay.json
+build/android/local.properties
 *.o
 *.obj
 *.exe

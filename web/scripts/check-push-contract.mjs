@@ -1,8 +1,9 @@
-// 前端推送约束检查：只有 src/events.ts 可以直接开 SSE 或读 Wails 运行时。
+// 前端推送约束检查：只有 src/events.ts 可以直接开 SSE 或订阅 Wails 事件。
 //
 // 输入：web/src 下的 .ts/.tsx 文件
 // 输出：违反即非零退出，CI 与 npm run lint 都会拦住
-// 预期：组件只能 subscribePush，避免每个页面各写一套推送分支
+// 预期：组件只能 subscribePush，避免每个页面各写一套推送分支；
+//       读 window.wails.platform() 探测平台不算推送通道，单独放行
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -16,7 +17,8 @@ const allowFile = join(srcDir, 'events.ts');
 // 禁止在 events.ts 之外出现的写法：它们代表「自己另开一条推送通道」
 const forbidden = [
   { pattern: /new\s+EventSource\s*\(/, why: '用 subscribePush，不要自己开 SSE' },
-  { pattern: /\.wails\b/, why: '用 subscribePush，不要直接读 Wails 运行时' },
+  { pattern: /\.wails\s*(?:\?\.)?\.\s*Events\b/, why: '用 subscribePush，不要直接订阅 Wails 事件' },
+  { pattern: /\bEvents\s*\.\s*On\s*\(/, why: '用 subscribePush，不要直接订阅 Wails 事件' },
 ];
 
 // walk 收集 src 下的 TypeScript 源码

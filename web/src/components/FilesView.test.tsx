@@ -117,6 +117,8 @@ function renderView(): Handlers {
       onDeleteItems={onDeleteItems}
       onDownloadFile={vi.fn()}
       onPreviewFile={onPreviewFile}
+      canDownload
+      canPaste
       canCreateVolume={false}
       canDeleteVolume={false}
       canAttachVolume={false}

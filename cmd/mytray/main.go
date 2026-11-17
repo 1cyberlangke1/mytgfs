@@ -17,6 +17,10 @@ import (
 )
 
 func main() {
+	// 安卓上进程 cwd 是只读根目录：先切到 app 私有目录，再碰任何相对路径
+	if err := prepareSandbox(); err != nil {
+		slog.Error("sandbox unavailable", "err", err)
+	}
 	logging.SetupFromConfig("config.toml")
 	fs := flag.NewFlagSet("mytgfs-tray", flag.ExitOnError)
 	cfg := fs.String("config", "config.toml", "config file")
@@ -28,6 +32,7 @@ func main() {
 	if err := trayapp.Run(trayapp.Options{
 		ConfigPath:     *cfg,
 		SingleInstance: true,
+		SetupAllowed:   setupAllowed,
 	}); err != nil {
 		slog.Error("tray exited", "err", err)
 		os.Exit(1)

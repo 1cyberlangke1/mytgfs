@@ -28,6 +28,8 @@ interface FilePreviewModalProps {
   streamOverride?: string;
   /** 主按钮文案；本地文件是「打开」而不是「下载」 */
   actionLabel?: string;
+  /** 设备能力：安卓没有下载目录，主操作按钮不渲染 */
+  canDownload?: boolean;
 }
 
 export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
@@ -39,6 +41,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   onDownload,
   streamOverride,
   actionLabel,
+  canDownload = true,
 }) => {
   const [imgZoomed, setImgZoomed] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -283,7 +286,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                         </dl>
                       </div>
 
-                      {!file.isDir && (
+                      {!file.isDir && canDownload && (
                         <div className="space-y-2.5 pt-4 border-t border-slate-200 dark:border-slate-800">
                           <Button
                             type="button"

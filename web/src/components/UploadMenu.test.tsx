@@ -41,6 +41,7 @@ function propsOf() {
     onPickFolder: vi.fn(),
     onNewText: vi.fn(),
     onPasteClipboard: vi.fn(),
+    canPaste: true,
   };
 }
 

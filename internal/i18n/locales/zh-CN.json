@@ -1,4 +1,5 @@
 {
+  "android.fgs_text": "正在同步 Telegram 频道",
   "channel.ok": "频道已创建: channel_id=%d access_hash=%d chat_id=%d",
   "check_clean": "索引与频道一致: %d 条",
   "check_fix_hint": "加 --fix 按核对结果修复索引",

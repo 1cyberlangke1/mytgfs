@@ -3,6 +3,8 @@
 // 主题名与 Go 侧 internal/push 的 Topics 一一对应；加主题只改这两处，
 // 不允许在组件里再写一套 EventSource / Events.On 分支。
 
+import { setWailsRuntime, wailsRuntime } from './runtime';
+
 export type PushTopic = 'status' | 'progress' | 'config';
 
 const TOPICS: PushTopic[] = ['status', 'progress', 'config'];
@@ -15,9 +17,10 @@ interface WailsEvents {
   On(name: string, cb: () => void): () => void;
 }
 
-// 桌面壳运行时：main.tsx 在渲染前把 /wails/runtime.js 挂到 window.wails。
+// 桌面壳运行时：initPushRuntime 在渲染前把 /wails/runtime.js 挂进运行时句柄。
+// 安卓的 window.wails 是 Java 桥对象（没有 Events），不能从那里取。
 function desktopEvents(): WailsEvents | undefined {
-  return (window as unknown as { wails?: { Events?: WailsEvents } }).wails?.Events;
+  return wailsRuntime()?.Events;
 }
 
 // initPushRuntime 在桌面壳里加载 Wails 运行时并挂到 window.wails。
@@ -30,6 +33,7 @@ export async function initPushRuntime(): Promise<void> {
   const runtimePath = ['', 'wails', 'runtime.js'].join('/');
   try {
     const runtime = await import(/* @vite-ignore */ runtimePath);
+    setWailsRuntime(runtime);
     const w = window as unknown as { wails?: unknown };
     w.wails = w.wails ?? runtime;
   } catch {

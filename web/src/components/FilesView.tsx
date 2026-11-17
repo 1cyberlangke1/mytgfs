@@ -120,6 +120,10 @@ interface FilesViewProps {
   onDeleteItems: (itemIds: string[]) => void;
   onDownloadFile: (file: FileItem) => void;
   onPreviewFile: (file: FileItem) => void;
+  /** 设备能力：安卓没有对用户可见的下载目录，下载入口整块不渲染 */
+  canDownload: boolean;
+  /** 设备能力：安卓没有可读的剪贴板上传通道 */
+  canPaste: boolean;
   /** 服务端能力：纯网页模式可能不允许建/删卷 */
   canCreateVolume: boolean;
   canDeleteVolume: boolean;
@@ -204,6 +208,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
   onDeleteItems,
   onDownloadFile,
   onPreviewFile,
+  canDownload,
+  canPaste,
   canCreateVolume,
   canDeleteVolume,
   canAttachVolume,
@@ -918,6 +924,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 onPickFolder={() => dirInputRef.current?.click()}
                 onNewText={onNewTextFile}
                 onPasteClipboard={onPasteClipboard}
+                canPaste={canPaste}
               />
               <Button
                 type="button"
@@ -1153,15 +1160,17 @@ export const FilesView: React.FC<FilesViewProps> = ({
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => onDownloadFile(item)}
-                          aria-label={`${t.files.actionDownload} ${item.name}`}
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </Button>
+                        {canDownload && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => onDownloadFile(item)}
+                            aria-label={`${t.files.actionDownload} ${item.name}`}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
                       </>
                     )}
                     <Button
@@ -1322,16 +1331,18 @@ export const FilesView: React.FC<FilesViewProps> = ({
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onDownloadFile(item)}
-                            aria-label={`${t.files.actionDownload} ${item.name}`}
-                            title={t.files.actionDownload}
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </Button>
+                          {canDownload && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => onDownloadFile(item)}
+                              aria-label={`${t.files.actionDownload} ${item.name}`}
+                              title={t.files.actionDownload}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </>
                       )}
                       <Button

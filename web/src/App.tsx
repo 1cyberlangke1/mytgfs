@@ -38,6 +38,7 @@ import {
   scrollActiveToEdge,
 } from './utils/keynav';
 import { subscribePush } from './events';
+import { platformCaps } from './platform';
 import {
   DICTIONARY,
   LOCALE_OPTIONS,
@@ -806,6 +807,7 @@ export default function App() {
 
   // reloadDownloads 读取下载目录；失败时在横幅里说明原因，而不是留一个空列表
   const reloadDownloads = useCallback(async () => {
+    if (!platformCaps.downloads) return;
     try {
       const res = await getDownloads();
       setDownloads(res.files ?? []);
@@ -1248,6 +1250,7 @@ export default function App() {
   // 文件页的粘贴入口：文件进上传清单，纯文本开「新建文本」预填。
   // 焦点在输入控件里时放行原生粘贴，不抢用户正在输入的内容。
   useEffect(() => {
+    if (!platformCaps.paste) return;
     if (activeTab !== 'files') return;
     const onPaste = (e: ClipboardEvent) => {
       if (isEditableTarget(e.target)) return;
@@ -1595,12 +1598,13 @@ export default function App() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
+  const navAll: { id: NavTab; label: string; icon: React.ReactNode }[] = [
     { id: 'overview', label: t.nav.overview, icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
     { id: 'files', label: t.nav.files, icon: <FolderTree className="w-4 h-4 shrink-0" /> },
     { id: 'settings', label: t.nav.settings, icon: <Sliders className="w-4 h-4 shrink-0" /> },
     { id: 'downloads', label: t.nav.downloads, icon: <HardDriveDownload className="w-4 h-4 shrink-0" /> },
   ];
+  const navItems = navAll.filter((item) => item.id !== 'downloads' || platformCaps.downloads);
 
   // 主题按钮：显示当前档位，点一下切到下一档，浅色 → 深色 → 跟随系统 → 浅色
   //
@@ -1760,6 +1764,8 @@ export default function App() {
                 onDeleteItems={handleDeleteItems}
                 onDownloadFile={handleDownloadFile}
                 onPreviewFile={setPreviewFile}
+                canDownload={platformCaps.downloads}
+                canPaste={platformCaps.paste}
                 canCreateVolume={caps.createVolume}
                 canDeleteVolume={caps.deleteVolume}
                 canAttachVolume={caps.attachVolume}
@@ -1779,7 +1785,8 @@ export default function App() {
                   t={t}
                   locale={locale}
                   settings={settings}
-                  canAutostart={caps.autostart}
+                  canAutostart={caps.autostart && platformCaps.autostart}
+                  canUseShortcuts={platformCaps.shortcuts}
                   shortcuts={shortcuts}
                   onChangeShortcuts={handleChangeShortcuts}
                   onSaveSettings={handleSaveSettings}
@@ -1789,7 +1796,7 @@ export default function App() {
               </div>
             )}
 
-            {activeTab === 'downloads' && (
+            {platformCaps.downloads && activeTab === 'downloads' && (
               <DownloadsView
                 t={t}
                 locale={locale}
@@ -1828,6 +1835,7 @@ export default function App() {
         locale={locale}
         onClose={() => setPreviewFile(null)}
         onDownload={handleDownloadFile}
+        canDownload={platformCaps.downloads}
       />
 
       {/* 下载页本地预览：媒体源指向 /api/downloads/file，主按钮交给系统默认程序 */}

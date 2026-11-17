@@ -1,0 +1,124 @@
+# 构建 mytgfs 的安卓 APK。
+#
+# 输入：-Abi 目标架构（arm64-v8a 真机 / x86_64 模拟器）；-Task Gradle 任务；
+#       -Proxy 走 HTTP 代理下载 Gradle 依赖；-NoGradle 只编 libwails.so
+# 输出：build\android\app\build\outputs\apk\<变体>\*.apk，并复制成
+#       build\mytgfs-<版本>-android-<abi>.apk
+# 预期：Go 侧用 NDK clang 编成 libwails.so，Gradle 只负责打包；
+#       Windows 主机上 wails3 的 Taskfile 不认（uname 判 Darwin/Linux），故自建脚本
+
+param(
+    [ValidateSet('arm64-v8a', 'x86_64')]
+    [string]$Abi = 'arm64-v8a',
+    [ValidateSet('assembleDebug', 'assembleRelease')]
+    [string]$Task = 'assembleDebug',
+    [string]$Proxy = '',
+    [switch]$NoGradle
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$androidDir = Join-Path $root 'build\android'
+
+if (-not (Test-Path $androidDir)) {
+    throw "找不到安卓宿主工程: $androidDir"
+}
+
+# 版本号：与桌面二进制用同一套 git 描述
+$version = (& git describe --tags --always 2>$null)
+if (-not $version) { $version = 'dev' }
+$version = $version.Trim() -replace '^v', ''
+
+$sdk = $env:ANDROID_HOME
+if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+if (-not $sdk) { throw 'ANDROID_HOME / ANDROID_SDK_ROOT 未设置' }
+
+# NDK：优先 ANDROID_NDK_HOME，否则取 sdk\ndk 下版本号最大的
+$ndk = $env:ANDROID_NDK_HOME
+if (-not $ndk) {
+    $cand = Get-ChildItem (Join-Path $sdk 'ndk') -Directory -ErrorAction SilentlyContinue |
+        Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } | Select-Object -Last 1
+    if ($cand) { $ndk = $cand.FullName }
+}
+if (-not $ndk) { throw '未找到 Android NDK，请设置 ANDROID_NDK_HOME' }
+
+switch ($Abi) {
+    'arm64-v8a' { $target = 'aarch64-linux-android21'; $goarch = 'arm64' }
+    'x86_64' { $target = 'x86_64-linux-android21'; $goarch = 'amd64' }
+}
+$cc = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\$target-clang.cmd"
+if (-not (Test-Path $cc)) { throw "NDK clang 不存在: $cc" }
+
+# 生成 overlay：往 cmd/mytray 里塞一个只在安卓生效的 init()
+# c-shared 模式不会自动调 main()，必须由 init 注册
+$genDir = Join-Path $androidDir '_gen'
+New-Item -ItemType Directory -Force -Path $genDir | Out-Null
+$genFile = Join-Path $genDir 'main_android.gen.go'
+$genSrc = @'
+//go:build android
+
+package main
+
+import "github.com/wailsapp/wails/v3/pkg/application"
+
+func init() {
+	application.RegisterAndroidMain(main)
+}
+'@
+[IO.File]::WriteAllText($genFile, $genSrc, (New-Object Text.UTF8Encoding($false)))
+
+$overlay = @{
+    Replace = @{
+        (Join-Path $root 'cmd\mytray\main_android.gen.go') = $genFile
+    }
+} | ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $androidDir 'overlay.json'), $overlay, (New-Object Text.UTF8Encoding($false)))
+
+$jniDir = Join-Path $androidDir "app\src\main\jniLibs\$Abi"
+New-Item -ItemType Directory -Force -Path $jniDir | Out-Null
+$so = Join-Path $jniDir 'libwails.so'
+
+Push-Location $root
+$oldCgo = $env:CGO_ENABLED
+$oldGoos = $env:GOOS
+$oldGoarch = $env:GOARCH
+$oldCC = $env:CC
+try {
+    Write-Host "编译 libwails.so (android/$goarch, $version)"
+    $env:CGO_ENABLED = '1'
+    $env:GOOS = 'android'
+    $env:GOARCH = $goarch
+    $env:CC = $cc
+    $tags = if ($Task -eq 'assembleRelease') { 'android,production' } else { 'android,debug' }
+    & go build -buildmode=c-shared -overlay (Join-Path $androidDir 'overlay.json') `
+        -tags $tags -o $so ./cmd/mytray
+    if ($LASTEXITCODE -ne 0) { throw "go build 失败: exit $LASTEXITCODE" }
+
+    if ($NoGradle) {
+        Write-Host "已生成 $so"
+        return
+    }
+
+    # Gradle 首次运行要下载发行包与依赖，走代理时由 -P 传进来
+    if ($Proxy) {
+        $env:GRADLE_OPTS = "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7890 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890"
+    }
+
+    Write-Host "Gradle $Task"
+    & (Join-Path $androidDir 'gradlew.bat') '-p' $androidDir $Task "-PappVersion=$version"
+    if ($LASTEXITCODE -ne 0) { throw "Gradle 失败: exit $LASTEXITCODE" }
+
+    $variant = if ($Task -eq 'assembleRelease') { 'release' } else { 'debug' }
+    $apk = Join-Path $androidDir "app\build\outputs\apk\$variant\app-$variant.apk"
+    if (-not (Test-Path $apk)) { throw "未找到 APK: $apk" }
+    $out = Join-Path $root "build\mytgfs-$version-android-$Abi.apk"
+    Copy-Item $apk $out -Force
+    Write-Host "APK: $out"
+}
+finally {
+    Pop-Location
+    $env:CGO_ENABLED = $oldCgo
+    $env:GOOS = $oldGoos
+    $env:GOARCH = $oldGoarch
+    $env:CC = $oldCC
+}

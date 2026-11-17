@@ -2,6 +2,13 @@
 //
 // 所有请求同源（桌面壳走 webview，网页版走 127.0.0.1），
 // 因此没有鉴权头；错误统一抛 ApiError，由调用方转成 toast。
+//
+// 安卓壳的 shouldInterceptRequest 拿不到请求体、也会丢 query 串，
+// 所以安卓上所有 /api/* 都经 Wails 服务方法 mytgfs/internal/web.Bridge.Do 转发，
+// 前端仍按 fetch/Response 的语义使用，调用方不需要区分平台。
+
+import { isAndroid } from './platform';
+import { wailsRuntime } from './runtime';
 
 export interface ApiFile {
   id: string;
@@ -105,8 +112,104 @@ function asMessage(payload: unknown): string {
   return '';
 }
 
+// ---- 安卓传输桥 ----
+
+/** BridgeReply 与 Go 侧 web.BridgeResponse 一一对应。 */
+interface BridgeReply {
+  status?: number;
+  type?: string;
+  body?: string;
+}
+
+// encodeBase64 把字节编成 base64，分段避免超长参数列表。
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+// decodeBase64 把 base64 还原成字节；空串返回空数组。
+function decodeBase64(text: string): Uint8Array {
+  if (!text) return new Uint8Array(0);
+  const raw = atob(text);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+// bodyToBytes 把 RequestInit.body 归一成字节。
+//
+// 输入：字符串 / ArrayBuffer / TypedArray / URLSearchParams / Blob
+// 输出：UTF-8 原始字节
+// 预期：面板只发这几种体；其它类型直接报错，不做静默降级
+async function bodyToBytes(body: BodyInit | null | undefined): Promise<Uint8Array> {
+  if (!body) return new Uint8Array(0);
+  if (typeof body === 'string') return new TextEncoder().encode(body);
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (ArrayBuffer.isView(body)) {
+    return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  }
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+    return new TextEncoder().encode(body.toString());
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    return new Uint8Array(await body.arrayBuffer());
+  }
+  throw new ApiError('unsupported request body', 0);
+}
+
+// responseFromBridge 把桥返回的字节包成标准 Response。
+//
+// 输入：BridgeReply
+// 输出：Response；无正文的状态码给 null body，避免构造器拒绝
+function responseFromBridge(reply: BridgeReply): Response {
+  const status = reply.status ?? 200;
+  const headers = new Headers();
+  if (reply.type) headers.set('Content-Type', reply.type);
+  const bytes = decodeBase64(reply.body ?? '');
+  const noBody = status === 204 || status === 205 || status === 304 || bytes.length === 0;
+  return new Response(noBody ? null : (bytes.buffer as ArrayBuffer), { status, headers });
+}
+
+// bridgeFetch 经 Wails 服务方法执行一次面板请求。
+//
+// 输入：path 带完整 query；init 与 fetch 同形
+// 输出：Response（状态码/头/正文由 Go 侧回填）
+// 预期：取消信号触发时调用 CancellablePromise.cancel，调用方按 aborted 处理
+async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> {
+  const call = wailsRuntime()?.Call?.ByName;
+  if (!call) throw new ApiError('desktop runtime unavailable', 0);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const body = encodeBase64(await bodyToBytes(init?.body));
+  const pending = call('mytgfs/internal/web.Bridge.Do', { method, path, body }) as Promise<unknown> & {
+    cancel?: () => void;
+  };
+  const signal = init?.signal;
+  if (signal) {
+    if (signal.aborted) {
+      pending.cancel?.();
+      throw new ApiError('aborted', 0);
+    }
+    signal.addEventListener('abort', () => pending.cancel?.(), { once: true });
+  }
+  try {
+    return responseFromBridge((await pending) as BridgeReply);
+  } catch (err) {
+    if (signal?.aborted) throw new ApiError('aborted', 0);
+    throw err;
+  }
+}
+
+// rawFetch 是 fetch 的平台分派：安卓走桥，其余照旧。
+function rawFetch(path: string, init?: RequestInit): Promise<Response> {
+  return isAndroid ? bridgeFetch(path, init) : fetch(path, init);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await rawFetch(path, init);
   const text = await res.text();
   let payload: unknown = null;
   if (text) {
@@ -171,7 +274,8 @@ export function removeItems(volume: string, paths: string[]): Promise<{ removed:
 // UPLOAD_CHUNK 是分片大小。内容一律以原始字节发送：
 // 桌面壳的 Wails AssetServer 收不到 FormData/Blob 请求体（官方 issue #5845、
 // #6068），multipart 上传在桌面端会变成 0 字节文件，所以这里走分片接口。
-const UPLOAD_CHUNK = 4 << 20;
+// 安卓分片走 base64 桥，1MiB 一片让单次桥调用的字符串与内存开销都可控。
+const UPLOAD_CHUNK = isAndroid ? 1 << 20 : 4 << 20;
 
 // putChunk 发送一段原始字节，返回服务端累计偏移。
 //
@@ -186,6 +290,7 @@ function putChunk(
   onProgress?: (ratio: number) => void,
   signal?: AbortSignal
 ): Promise<number> {
+  if (isAndroid) return putChunkBridge(id, offset, body, total, onProgress, signal);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const q = new URLSearchParams({ id, offset: String(offset) });
@@ -222,6 +327,42 @@ function putChunk(
     }
     xhr.send(body);
   });
+}
+
+// putChunkBridge 是安卓的分片上传实现。
+//
+// 输入：会话 id、起始偏移、这一段字节、文件总大小、进度回调、取消信号
+// 输出：服务端累计偏移
+// 预期：桥一次调用发完整个分片，进度按分片粒度上报（不伪造片内进度）
+async function putChunkBridge(
+  id: string,
+  offset: number,
+  body: ArrayBuffer,
+  total: number,
+  onProgress?: (ratio: number) => void,
+  signal?: AbortSignal
+): Promise<number> {
+  const q = new URLSearchParams({ id, offset: String(offset) });
+  const res = await rawFetch(`/api/upload/chunk?${q.toString()}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body,
+    signal,
+  });
+  const text = await res.text();
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+  if (!res.ok) {
+    throw new ApiError(asMessage(payload) || `upload failed (${res.status})`, res.status);
+  }
+  const next = (payload as { offset?: number } | null)?.offset;
+  const received = typeof next === 'number' ? next : offset + body.byteLength;
+  onProgress?.(Math.min(0.99, received / Math.max(1, total)));
+  return received;
 }
 
 // UploadPaused 表示上传被用户暂停：服务端会话与已传字节仍在。
@@ -437,7 +578,7 @@ export function coverURL(volume: string, version?: string): string {
 // setCover 上传一张原图并写成频道头像（服务端裁方压缩）。
 export async function setCover(volume: string, file: File): Promise<void> {
   const q = new URLSearchParams({ vol: volume });
-  const res = await fetch(`/api/cover?${q.toString()}`, {
+  const res = await rawFetch(`/api/cover?${q.toString()}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
@@ -450,7 +591,7 @@ export async function setCover(volume: string, file: File): Promise<void> {
 // setVolumeTitle 改频道标题（面板显示名）。
 export async function setVolumeTitle(volume: string, title: string): Promise<void> {
   const q = new URLSearchParams({ vol: volume });
-  const res = await fetch(`/api/cover?${q.toString()}`, {
+  const res = await rawFetch(`/api/cover?${q.toString()}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
@@ -634,7 +775,7 @@ export function getIdentity(kind: 'bot' | 'user'): Promise<{ user: ApiIdentity }
 // uploadPoster 上传浏览器从视频里抽出的封面 JPEG。
 export async function uploadPoster(volume: string, path: string, poster: Blob): Promise<void> {
   const q = new URLSearchParams({ vol: volume, path });
-  const res = await fetch(`/api/poster?${q.toString()}`, {
+  const res = await rawFetch(`/api/poster?${q.toString()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'image/jpeg' },
     body: poster,

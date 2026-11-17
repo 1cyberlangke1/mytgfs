@@ -1,4 +1,5 @@
 {
+  "android.fgs_text": "Syncing Telegram channels",
   "channel.ok": "channel created: channel_id=%d access_hash=%d chat_id=%d",
   "check_clean": "index matches the channel: %d entries",
   "check_fix_hint": "pass --fix to repair the index",

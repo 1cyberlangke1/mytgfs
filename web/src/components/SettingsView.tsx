@@ -20,6 +20,8 @@ interface SettingsViewProps {
   locale: Locale;
   settings: AppSettings;
   canAutostart: boolean;
+  /** 设备有硬件键盘：false 时整块快捷键设置不渲染 */
+  canUseShortcuts: boolean;
   shortcuts: ShortcutMap;
   onChangeShortcuts: (next: ShortcutMap) => void;
   onSaveSettings: (values: Record<string, string>) => Promise<void>;
@@ -123,6 +125,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   locale,
   settings,
   canAutostart,
+  canUseShortcuts,
   shortcuts,
   onChangeShortcuts,
   onSaveSettings,
@@ -434,12 +437,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         );
       })}
 
-      <section className="surface-card rounded-2xl p-6 space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
-              {t.settings.shortcutsTitle}
-            </h2>
+      {canUseShortcuts && (
+        <section className="surface-card rounded-2xl p-6 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">
+                {t.settings.shortcutsTitle}
+              </h2>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t.settings.shortcutsHint}</p>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={resetAllShortcuts}>
@@ -493,6 +497,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </p>
         )}
       </section>
+      )}
     </motion.div>
   );
 };

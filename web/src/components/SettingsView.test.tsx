@@ -47,6 +47,7 @@ const renderView = (overrides: Partial<Parameters<typeof SettingsView>[0]> = {})
       locale="zh"
       settings={settings}
       canAutostart={false}
+      canUseShortcuts
       shortcuts={{ ...DEFAULT_SHORTCUTS }}
       onChangeShortcuts={handlers.onChangeShortcuts}
       onSaveSettings={handlers.onSaveSettings}

@@ -47,6 +47,9 @@ type Options struct {
 	ConfigPath string // 配置文件路径，空则 config.toml
 	// SingleInstance 为 true 时启用进程级单实例锁；第二个实例只唤起已有窗口后退出
 	SingleInstance bool
+	// SetupAllowed 为 true 时，缺 API 凭证不再直接报错，只开登录面板；
+	// 安卓没有命令行先跑 auth，首次启动靠面板填凭证与 bot token
+	SetupAllowed bool
 }
 
 // volumeMenuLabel 返回托盘卷入口的文字。
@@ -60,10 +63,16 @@ func Run(opts Options) error {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
+		if opts.SetupAllowed {
+			return runSetupPanel(cfgPath)
+		}
 		return fmt.Errorf("%s: %w", i18n.T("err.config_read"), err)
 	}
 	apiHash := cfg.APIHash()
 	if apiHash == "" {
+		if opts.SetupAllowed {
+			return runSetupPanel(cfgPath)
+		}
 		return fmt.Errorf("%s", i18n.T("err.missing_api_hash"))
 	}
 	key, err := crypto.LoadOrCreateKey("secrets/session.key")
@@ -85,6 +94,13 @@ func Run(opts Options) error {
 		_, _ = w.Write([]byte("<!doctype html><meta charset=utf-8><body style=\"font:14px system-ui;padding:24px\">mytgfs</body>"))
 	}))
 	setHandler := func(h http.Handler) { hmu.Lock(); inner = h; hmu.Unlock() }
+	// 面板路由的唯一出口：静态资源与安卓桥共用同一份可热替换的 handler
+	assets := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hmu.RLock()
+		h := inner
+		hmu.RUnlock()
+		h.ServeHTTP(w, r)
+	})
 
 	// 单实例锁：第二个实例启动时唤起已有窗口后自行退出；CLI 子命令不经过这里
 	var win *application.WebviewWindow
@@ -100,21 +116,10 @@ func Run(opts Options) error {
 			},
 		}
 	}
-	wailsApp := application.New(application.Options{
-		Name:           "mytgfs",
-		Description:    "Telegram channel file volumes",
-		Icon:           brand.Large,
-		SingleInstance: single,
-		Windows:        application.WindowsOptions{AdditionalBrowserArgs: e2eBrowserArgs()},
-		Assets: application.AssetOptions{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				hmu.RLock()
-				h := inner
-				hmu.RUnlock()
-				h.ServeHTTP(w, r)
-			}),
-		},
-	})
+	wailsOpts := shellOptions(assets)
+	wailsOpts.SingleInstance = single
+	wailsOpts.Windows = application.WindowsOptions{AdditionalBrowserArgs: e2eBrowserArgs()}
+	wailsApp := application.New(wailsOpts)
 	win = wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:   "main",
 		Title:  "mytgfs",
@@ -825,6 +830,8 @@ func Run(opts Options) error {
 	// 主循环起来之后才能安全操作窗口与托盘对象
 	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		ready.Store(true)
+		// 安卓没有托盘：用前台服务把进程挂在后台，息屏后同步/上传才不会被回收
+		startForeground()
 		sysTray.SetMenu(buildMenu())
 		sysTray.SetTooltip(tooltipText())
 	})

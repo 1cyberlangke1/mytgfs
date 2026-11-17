@@ -42,6 +42,8 @@ export interface UploadMenuProps {
   onPickFolder: () => void;
   onNewText: () => void;
   onPasteClipboard: () => void;
+  /** 设备支持读剪贴板文件；false 时整个粘贴项不渲染 */
+  canPaste: boolean;
 }
 
 /**
@@ -61,6 +63,7 @@ export function UploadMenu({
   onPickFolder,
   onNewText,
   onPasteClipboard,
+  canPaste,
 }: UploadMenuProps) {
   const menuId = useId();
   const triggerId = useId();
@@ -281,16 +284,21 @@ export function UploadMenu({
             <FileText className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
             <span className="truncate">{t.files.newTextBtn}</span>
           </button>
-          <button
-            type="button"
-            data-menu-item
-            role={ITEM_ROLE}
-            className={ITEM_CLASS}
-            onClick={() => choose(onPasteClipboard)}
-          >
-            <ClipboardPaste className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
-            <span className="truncate">{t.files.pasteBtn}</span>
-          </button>
+          {canPaste && (
+            <button
+              type="button"
+              data-menu-item
+              role={ITEM_ROLE}
+              className={ITEM_CLASS}
+              onClick={() => choose(onPasteClipboard)}
+            >
+              <ClipboardPaste
+                className="h-4 w-4 shrink-0 text-zinc-500 dark:text-zinc-400"
+                aria-hidden="true"
+              />
+              <span className="truncate">{t.files.pasteBtn}</span>
+            </button>
+          )}
         </div>
       </div>
     </>
