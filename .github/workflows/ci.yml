@@ -152,6 +152,7 @@ jobs:
   # CDP 走 adb 转发的 WebView devtools 套接字，断言与桌面壳完全一致。
   # 只跑 x86_64 镜像：宿主是 amd64，arm64 镜像只能软件模拟，慢到没意义。
   android:
+    name: android (ubuntu-24.04, x86_64, e2e)
     # 同一账号下同时跑两个 KVM 模拟器会把 adb/CDP 拖到超时
     # （实测：master CI 与 tag Release 同时起模拟器，其中一个 Runtime.evaluate 超时）。
     # 全局并发组让后来的排队等前一个跑完，PR 与 master 之间也适用。

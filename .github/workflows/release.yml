@@ -173,6 +173,8 @@ jobs:
   # 没有 keystore 时 gradle 会回退 debug 签名，那种包每次 CI 机器都是新生成的
   # 随机密钥，签名一变用户就无法覆盖升级，所以这里直接拒绝缺密钥的构建。
   android:
+    # 与 build 矩阵的显示风格对齐：同名 job 一眼看出跑在哪个 runner、什么 ABI、出什么包
+    name: android (ubuntu-24.04, arm64-v8a, apk)
     needs: gate
     runs-on: ubuntu-24.04
     env:
