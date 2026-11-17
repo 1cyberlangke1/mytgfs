@@ -12,7 +12,12 @@ android {
 
     defaultConfig {
         applicationId "com.mytgfs.app"
-        minSdk 21
+        // 宿主 Java 代码（Wails 模板）直接调用 API 23/24 的接口：
+        // checkSelfPermission / requestPermissions（23）、
+        // ConnectivityManager.getActiveNetwork（23）、registerDefaultNetworkCallback（24）、
+        // CameraManager.setTorchMode（23）。minSdk 21 会让 lint 报 NewApi 且
+        // Android 5.x 上真的会崩，故最低版本定为 24（Android 7.0）
+        minSdk 24
         targetSdk 35
         versionCode 1
         // 版本号由 build-android.ps1 用 -PappVersion 传入，默认与当前发版一致

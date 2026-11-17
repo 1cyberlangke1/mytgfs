@@ -1,5 +1,6 @@
 package com.wails.app;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -933,7 +934,13 @@ public class WailsBridge {
     /**
      * Request a one-shot location fix. Emits "common:location"
      * {lat,lng,accuracy} or {error}. Requests ACCESS_FINE_LOCATION on first use.
+     *
+     * 输入：无（权限不足时先弹系统授权，结果回调 onRequestPermissionsResult）
+     * 输出：通过 "common:location" 事件回传坐标或错误
+     * 预期：权限已在下方 hasLocationPermission() 分支里检查过；lint 不跟踪跨方法
+     *       条件，故此处显式标注，外层 catch (Exception) 同时兜住 SecurityException
      */
+    @SuppressLint("MissingPermission")
     public void getLocation() {
         mainHandler.post(() -> {
             try {
