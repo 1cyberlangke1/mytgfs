@@ -3,6 +3,7 @@ package i18n
 // 语言选择与回落逻辑的单测：用内存文件系统模拟多语言包。
 
 import (
+	"slices"
 	"testing"
 	"testing/fstest"
 )
@@ -30,7 +31,7 @@ func TestMatchLanguage(t *testing.T) {
 		{"", "en"},
 	}
 	for _, c := range cases {
-		if got := loadFrom(fsys, c.want).tag; got != c.tag {
+		if got := match(listLocales(fsys), c.want); got != c.tag {
 			t.Errorf("want %q 得到 %q，期望 %q", c.want, got, c.tag)
 		}
 	}
@@ -52,15 +53,9 @@ func TestFallbackToEnglish(t *testing.T) {
 
 // TestAvailableListsEveryLocale 可用标签来自文件名，新增语言不改代码。
 func TestAvailableListsEveryLocale(t *testing.T) {
-	l := loadFrom(testFS(), "en")
 	want := []string{"en", "ja", "zh-CN"}
-	if len(l.available) != len(want) {
-		t.Fatalf("available = %v", l.available)
-	}
-	for i := range want {
-		if l.available[i] != want[i] {
-			t.Errorf("available[%d] = %q，期望 %q", i, l.available[i], want[i])
-		}
+	if got := listLocales(testFS()); !slices.Equal(got, want) {
+		t.Fatalf("listLocales = %v，期望 %v", got, want)
 	}
 }
 
@@ -70,7 +65,5 @@ func TestEmptyFSDoesNotPanic(t *testing.T) {
 	if got := tr(l, "hello"); got != "hello" {
 		t.Errorf("空语言包时 = %q", got)
 	}
-	if l.tag != "en" {
-		t.Errorf("tag = %q", l.tag)
-	}
+
 }

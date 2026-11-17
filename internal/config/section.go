@@ -119,11 +119,3 @@ func splitKeyValue(line string) (key, value string) {
 	}
 	return strings.TrimSpace(key), strings.TrimSpace(value)
 }
-
-// boolLiteral 输出 TOML 布尔字面量。
-func boolLiteral(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}

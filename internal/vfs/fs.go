@@ -419,17 +419,6 @@ func (d *FileSystem) Stat(ctx context.Context, name string) (fs.FileInfo, error)
 	return info{name: path.Base(name), size: n.Size, mod: unixTime(n.Mtime)}, nil
 }
 
-// dirPathOf 返回父目录的派生路径；卷根返回 "/"。
-func dirPathOf(ctx context.Context, idx *index.Index, parentID int) string {
-	if parentID <= 0 {
-		return "/"
-	}
-	if n, ok, err := idx.NodeByID(ctx, parentID); err == nil && ok {
-		return n.Path
-	}
-	return "/"
-}
-
 // joinPath 拼父路径与名字。
 func joinPath(parent, name string) string {
 	if parent == "" || parent == "/" {

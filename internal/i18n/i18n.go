@@ -23,37 +23,15 @@ var localeFS embed.FS
 
 // locale 是一次加载后的语言包快照。
 type locale struct {
-	tag  string
 	msgs map[string]string
 	// fallback 是 en 语言包，用于补齐当前语言缺失的 key
 	fallback map[string]string
-	// available 是当前二进制里所有可用标签
-	available []string
 }
 
 // load 只解析一次语言包，之后复用同一份快照。
 var load = sync.OnceValue(func() locale {
 	return loadFrom(localeFS, detect())
 })
-
-// Init 检测并加载语言包；多次调用只生效一次。
-func Init() {
-	load()
-}
-
-// Lang 返回当前语言标签。
-func Lang() string {
-	return load().tag
-}
-
-// Available 返回当前构建里可用的语言标签，按字典序排列。
-//
-// 输入：无
-// 输出：如 ["en", "ja", "zh-CN"]
-// 预期：供语言切换菜单与排查用；新增语言包后无需改代码
-func Available() []string {
-	return append([]string(nil), load().available...)
-}
 
 // T 按 key 取翻译。
 //
@@ -100,7 +78,7 @@ func loadFrom(fsys fs.FS, want string) locale {
 	if fb == nil {
 		fb = map[string]string{}
 	}
-	return locale{tag: tag, msgs: m, fallback: fb, available: available}
+	return locale{msgs: m, fallback: fb}
 }
 
 // listLocales 列出 locales/ 下所有语言包标签。
