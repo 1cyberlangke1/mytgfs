@@ -211,19 +211,6 @@ func Run(opts Options) error {
 
 	// 授权失效标记：Web 面板据此显示重新登录提示，并禁用写操作
 	var authLost atomic.Bool
-	// botUsername 在连接就绪后读取，建卷时用来拉 bot 进新频道
-	var botMu sync.Mutex
-	var botUsername string
-	setBotUsername := func(n string) {
-		botMu.Lock()
-		botUsername = n
-		botMu.Unlock()
-	}
-	getBotUsername := func() string {
-		botMu.Lock()
-		defer botMu.Unlock()
-		return botUsername
-	}
 
 	unmountAll := func() {
 		mu.Lock()
@@ -350,139 +337,40 @@ func Run(opts Options) error {
 				logging.SetLevel(cur.Log.Level)
 				pushHub.Publish(push.TopicStatus)
 			},
+			// 建卷：重名检查、读 bot 用户名、开 user 连接、写配置都在 app 装配根
 			CreateVolume: func(ctx context.Context, name, title string) (any, error) {
-				// 重名在建频道之前挡掉，避免建出孤儿频道
-				if _, _, exists := appRoot.Volume(name); exists {
-					return nil, config.ErrVolumeExists
-				}
-				bn := getBotUsername()
-				if bn == "" {
-					return nil, fmt.Errorf("%s", i18n.T("err.bot_not_ready"))
-				}
-				// 建频道/拉 bot 只有 user 会话能做：这里临时开一条 user 连接
-				uc := tgclient.New(cfg.Telegram.APIID, apiHash,
-					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-					tgclient.Options{})
-				var res volume.Result
-				rerr := uc.Run(ctx, func(ctx context.Context) error {
-					r, cerr := volume.Create(ctx, uc.API(), volume.Request{
-						Name: name, Title: title, BotUsername: bn,
-					})
-					res = r
-					if cerr != nil {
-						return cerr
+				res, err := appRoot.CreateVolume(ctx, name, title, "")
+				if err != nil {
+					if tgclient.IsAuthLost(err) {
+						return nil, fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), err)
 					}
-					// 建完频道后才发现已取消：先把频道删掉，不能写进配置留半挂状态
-					if ctx.Err() != nil {
-						_ = volume.CleanupCancelled(ctx, uc.API(), res)
-						return ctx.Err()
-					}
-					vol := config.Volume{
-						Name:    res.Name,
-						ChatID:  res.ChannelID,
-						Enabled: true,
-					}
-					return appRoot.MutateConfig(func(p string) error {
-						return config.AppendVolume(p, vol)
-					})
-				})
-				if rerr != nil {
-					if tgclient.IsAuthLost(rerr) {
-						return nil, fmt.Errorf("%s: %w", i18n.T("err.auth_lost_hint"), rerr)
-					}
-					return nil, rerr
-				}
-				if res.AvatarErr != nil {
-					logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
+					return nil, err
 				}
 				// 建完立即挂载并推送：新卷不出现在面板就是这类前后端脱节
 				reconcileVolumes()
-				out := map[string]any{
-					"name":       res.Name,
-					"channel_id": res.ChannelID,
-					"chat_id":    res.ChatID,
-					"muted":      res.Muted,
-				}
-				if res.MuteErr != nil {
-					out["mute_error"] = res.MuteErr.Error()
-				}
-				return out, nil
+				return res, nil
 			},
-			// 删卷：删 Telegram 频道 → 移出配置 → 删本地索引
+			// 删卷：删频道 → 移出配置 → 清缓存与索引（实现在 app 装配根）
 			DeleteVolume: func(ctx context.Context, name string) error {
-				var target config.Volume
-				found := false
-				for _, v := range appRoot.Config().Volumes {
-					if strings.EqualFold(v.Name, name) {
-						target, found = v, true
-						break
-					}
-				}
-				if !found {
-					return config.ErrVolumeNotFound
-				}
-				uc := tgclient.New(cfg.Telegram.APIID, apiHash,
-					&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-					tgclient.Options{})
-				rerr := uc.Run(ctx, func(ctx context.Context) error {
-					res, e := channel.Resolve(ctx, uc.API(), target.ChatID)
-					if e != nil {
-						return e
-					}
-					return channel.Delete(ctx, uc.API(), res)
-				})
-				// 频道已经不存在：删卷的目的就是清掉这条引用，继续清理本地
-				if rerr != nil && !channel.IsStale(rerr) {
-					return rerr
-				}
-				if rerr := appRoot.MutateConfig(func(p string) error {
-					return config.RemoveVolume(p, name)
-				}); rerr != nil {
-					return rerr
+				res, derr := appRoot.DeleteVolume(ctx, name)
+				if derr != nil {
+					return derr
 				}
 				// 运行时对齐配置：停同步、关索引、摘注册表，一次完成（内部会等卸载完再推送）
 				reconcileVolumes()
-				// 缓存清理：缩略图按卷分目录整块删，封面按频道 id 前缀删
-				web.PurgeVolumeCache(datadir.Path("thumbs"), name)
-				coverProvider.PurgeChat(volume.NormalizeChatID(target.ChatID))
-				for _, suffix := range []string{"", "-wal", "-shm"} {
-					_ = os.Remove(datadir.Path("index-" + name + ".db" + suffix))
-				}
+				// 磁盘缓存已由删卷流程清掉，这里只清进程内的头像缓存
+				coverProvider.Forget(volume.NormalizeChatID(res.ChannelID))
 				return nil
 			},
 			// 添加已有频道：bot 只读校验频道可见与发言权，然后写配置
+			// 挂载已有频道：只读校验与写配置都在 app 装配根
 			AttachVolume: func(ctx context.Context, name string, chatID int64) (any, error) {
-				if _, _, exists := appRoot.Volume(name); exists {
-					return nil, config.ErrVolumeExists
-				}
-				norm := volume.NormalizeChatID(chatID)
-				for _, v := range appRoot.Config().Volumes {
-					if v.ChatID == norm {
-						return nil, config.ErrChannelAttached
-					}
-				}
-				res, aerr := volume.Attach(ctx, client.API(), volume.AttachRequest{Name: name, ChatID: chatID})
-				if aerr != nil {
-					return nil, aerr
-				}
-				vol := config.Volume{
-					Name:    res.Name,
-					ChatID:  res.ChannelID,
-					Enabled: true,
-				}
-				// attach 唯一写入口：写盘与内存副本一步完成，随后立即挂载推送
-				if werr := appRoot.MutateConfig(func(p string) error {
-					return config.AppendVolume(p, vol)
-				}); werr != nil {
-					return nil, werr
+				res, err := appRoot.AttachVolume(ctx, name, chatID)
+				if err != nil {
+					return nil, err
 				}
 				reconcileVolumes()
-				return map[string]any{
-					"name":       res.Name,
-					"channel_id": res.ChannelID,
-					"chat_id":    res.ChatID,
-					"title":      res.Title,
-				}, nil
+				return res, nil
 			},
 			// 列频道：getDialogs 只有 user 会话能做，复用装配根开临时连接
 			Channels: func(ctx context.Context) ([]channel.Item, error) {
@@ -704,10 +592,6 @@ func Run(opts Options) error {
 	// 连接循环：断网由 gotd 内部无限重连；Run 只在永久错误或 ctx 取消时返回
 	wg.Go(func() {
 		rerr := client.Run(rootCtx, func(ctx context.Context) error {
-			// 连接就绪后读一次 bot 用户名，建卷时用它拉 bot 进新频道
-			if self, serr := client.Self(ctx); serr == nil {
-				setBotUsername(self.Username)
-			}
 			mountUntilAll(ctx)
 			<-ctx.Done()
 			return nil

@@ -15,17 +15,14 @@ import (
 	"os/signal"
 	"strings"
 
-	"mytgfs/internal/auth"
+	"mytgfs/internal/app"
 	"mytgfs/internal/channel"
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
-	"mytgfs/internal/datadir"
 	"mytgfs/internal/i18n"
-	"mytgfs/internal/logging"
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
 	"mytgfs/internal/ui"
-	"mytgfs/internal/volume"
 )
 
 // runVolume 分发卷相关子命令。
@@ -124,7 +121,7 @@ func runVolumeCheck(args []string) {
 // 输出：可直接展示的 error；非频道失效类错误原样返回
 // 预期：只改写 access_hash 类错误，避免把限流、权限等原因误报成频道已删
 func checkFailure(channelID int64, err error) error {
-	if channel.IsStale(err) {
+	if channel.IsStale(err) || errors.Is(err, channel.ErrChannelNotVisible) {
 		return errors.New(i18n.T("err.channel_unusable", channelID))
 	}
 	return err
@@ -146,65 +143,27 @@ func runVolumeDelete(args []string) {
 		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
-	}
-	var target *config.Volume
-	for i := range cfg.Volumes {
-		if strings.EqualFold(cfg.Volumes[i].Name, volName) {
-			target = &cfg.Volumes[i]
-			break
-		}
-	}
-	if target == nil {
-		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
-	}
-
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	channelID := target.ChatID
-
-	client := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
-	err = client.Run(ctx, func(ctx context.Context) error {
-		res, rerr := channel.Resolve(ctx, client.API(), channelID)
-		if rerr != nil {
-			return rerr
-		}
-		return channel.Delete(ctx, client.API(), res)
-	})
+	res, err := appRoot.DeleteVolume(ctx, volName)
 	switch {
-	case err == nil:
-		ui.Out(i18n.T("volume.channel_deleted", channelID))
-	case channel.IsStale(err):
-		// 频道已经不存在：删卷的目的就是清掉这条引用，继续清理本地
-		ui.Out(i18n.T("volume.channel_already_gone", channelID))
-	default:
+	case errors.As(err, new(app.ErrVolumeNotFound)):
+		fatalCode("volume_not_found", i18n.T("err.volume_not_found", volName))
+	case err != nil:
 		failErr(i18n.T("err.volume_delete_prefix"), err)
+	case res.ChannelDeleted:
+		ui.Out(i18n.T("volume.channel_deleted", res.ChannelID))
+	default:
+		// 频道本来就不存在：删卷把它们清掉就完事
+		ui.Out(i18n.T("volume.channel_already_gone", res.ChannelID))
 	}
-
-	if err := config.RemoveVolume(*cfgPath, volName); err != nil {
-		failErr(i18n.T("err.volume_config_remove_prefix"), err)
-	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		p := datadir.Path("index-" + volName + ".db" + suffix)
-		if rmErr := os.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
-			ui.Out(i18n.T("volume.index_remove_failed", p, rmErr))
-		}
-	}
-	ui.Out(i18n.T("volume.deleted", volName))
+	ui.Out(i18n.T("volume.deleted", res.Name))
 }
 
 // runVolumeAttach 把已有频道挂成卷。
@@ -226,44 +185,21 @@ func runVolumeAttach(args []string) {
 	if volName == "" {
 		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
-	cfg, err := config.Load(*cfgPath)
+	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
-	}
-	for _, v := range cfg.Volumes {
-		if strings.EqualFold(v.Name, volName) {
-			fatalCode("volume_exists", i18n.T("err.volume_exists", volName))
-		}
-	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	botClient := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key}, tgclient.Options{})
-	var res volume.Result
-	err = botClient.Run(ctx, func(ctx context.Context) error {
-		r, aerr := volume.Attach(ctx, botClient.API(), volume.AttachRequest{Name: volName, ChatID: *chatID})
-		res = r
-		return aerr
-	})
-	if err != nil {
+	res, err := appRoot.AttachVolume(ctx, volName, *chatID)
+	switch {
+	case errors.Is(err, config.ErrVolumeExists):
+		fatalCode("volume_exists", i18n.T("err.volume_exists", volName))
+	case errors.Is(err, config.ErrChannelAttached):
+		fatalCode("channel_attached", err.Error())
+	case err != nil:
 		failErr(i18n.T("err.volume_attach_prefix"), err)
-	}
-	vol := config.Volume{
-		Name:    res.Name,
-		ChatID:  res.ChannelID,
-		Enabled: true,
-	}
-	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
-		failErr(i18n.T("err.volume_config_append_prefix"), aerr)
 	}
 	ui.Print(map[string]any{
 		"name":       res.Name,
@@ -293,67 +229,19 @@ func runVolumeCreate(args []string) {
 	if volName == "" {
 		fatalCode("volume_name_required", i18n.T("err.volume_name_required"))
 	}
-	// 先查配置里有没有重名，避免白建一个频道
-	if cfg, err := config.Load(*cfgPath); err == nil {
-		for _, v := range cfg.Volumes {
-			if strings.EqualFold(v.Name, volName) {
-				fatalCode("volume_exists", i18n.T("err.volume_exists"))
-			}
-		}
-	}
-
-	cfg, err := config.Load(*cfgPath)
+	appRoot, err := app.Load(app.Options{ConfigPath: *cfgPath})
 	if err != nil {
 		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_read"), err))
 	}
-	apiHash := cfg.APIHash()
-	if apiHash == "" {
-		fatal(i18n.T("err.missing_api_hash"))
-	}
-	key, err := crypto.LoadOrCreateKey("secrets/session.key")
-	if err != nil {
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.session_key_prefix"), err))
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	botName := strings.TrimPrefix(strings.TrimSpace(*bot), "@")
-	if botName == "" {
-		botName = readBotUsername(ctx, cfg, apiHash, key)
-	}
-
-	userClient := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/user.session", Key: key},
-		tgclient.Options{})
-
-	var res volume.Result
-	err = userClient.Run(ctx, func(ctx context.Context) error {
-		r, cerr := volume.Create(ctx, userClient.API(), volume.Request{
-			Name:        volName,
-			Title:       *title,
-			BotUsername: botName,
-		})
-		res = r
-		return cerr
-	})
-	if err != nil {
+	res, err := appRoot.CreateVolume(ctx, volName, *title, *bot)
+	switch {
+	case errors.Is(err, config.ErrVolumeExists):
+		fatalCode("volume_exists", i18n.T("err.volume_exists"))
+	case err != nil:
 		failErr(i18n.T("err.volume_create_prefix"), err)
-	}
-	if res.AvatarErr != nil {
-		logging.Warn("log.cover_set_failed", res.AvatarErr, res.Name)
-	}
-
-	vol := config.Volume{
-		Name:    res.Name,
-		ChatID:  res.ChannelID,
-		Enabled: true,
-	}
-	if aerr := config.AppendVolume(*cfgPath, vol); aerr != nil {
-		if errors.Is(aerr, config.ErrVolumeExists) {
-			fatalCode("volume_exists", i18n.T("err.volume_exists"))
-		}
-		fatal(fmt.Sprintf("%s: %v", i18n.T("err.config_write"), aerr))
 	}
 
 	ui.Out(i18n.T("volume.ok", res.Name, res.ChannelID, res.ChatID))
@@ -363,27 +251,6 @@ func runVolumeCreate(args []string) {
 	case res.MuteErr != nil:
 		ui.Out(i18n.T("volume.mute_failed", res.MuteErr))
 	}
-	ui.Out(i18n.T("volume.saved", vol.Name))
+	ui.Out(i18n.T("volume.saved", res.Name))
 	ui.Out(i18n.T("volume.restart_hint"))
-}
-
-// readBotUsername 用 bot 会话读取 bot 用户名。
-//
-// 输入：ctx；cfg 配置；apiHash；key 会话密钥
-// 输出：不含 @ 的用户名
-// 预期：bot 没登录/会话失效时直接退出，并提示重新 auth bot
-func readBotUsername(ctx context.Context, cfg config.Config, apiHash string, key []byte) string {
-	c := tgclient.New(cfg.Telegram.APIID, apiHash,
-		&sessionstore.Encrypted{Path: "secrets/bot.session", Key: key},
-		tgclient.Options{})
-	var name string
-	err := c.Run(ctx, func(ctx context.Context) error {
-		n, uerr := auth.Username(ctx, c.Client)
-		name = n
-		return uerr
-	})
-	if err != nil {
-		failErr(i18n.T("err.bot_login_prefix"), err)
-	}
-	return name
 }

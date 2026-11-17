@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/gotd/td/tgerr"
 
+	"mytgfs/internal/channel"
 	"mytgfs/internal/i18n"
 )
 
@@ -31,6 +33,12 @@ func TestCheckFailure(t *testing.T) {
 	plain := errors.New("boom")
 	if got := checkFailure(1, plain); got != plain {
 		t.Fatalf("非频道失效错误应原样返回, got %v", got)
+	}
+
+	// channel.Check 已经把 stale RPC 包成 ErrChannelNotVisible，两种形态都要认
+	notVisible := fmt.Errorf("%w: 频道 1 不可见", channel.ErrChannelNotVisible)
+	if got := checkFailure(1, notVisible); strings.Contains(got.Error(), "不可见") {
+		t.Fatalf("应换成带动作说明的文案, got %v", got)
 	}
 
 	flood := &tgerr.Error{Code: 420, Message: "FLOOD_WAIT_5", Type: "FLOOD_WAIT", Argument: 5}

@@ -8,6 +8,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gotd/td/tg"
@@ -29,6 +30,27 @@ type Health struct {
 	CanPost bool
 }
 
+// ErrChannelNotVisible 是「频道不可见」的标记错误。
+//
+// 只用于 errors.Is 判断，本身不作为展示文案；具体文案由 notVisibleError 提供。
+var ErrChannelNotVisible = errors.New("channel not visible")
+
+// notVisibleError 携带人话文案，同时让 errors.Is(err, ErrChannelNotVisible) 成立。
+type notVisibleError struct{ msg string }
+
+func (e notVisibleError) Error() string { return e.msg }
+
+func (e notVisibleError) Is(target error) bool { return target == ErrChannelNotVisible }
+
+// notVisible 构造一条「频道不可见」错误。
+//
+// 输入：channelID 频道号
+// 输出：带人话文案、可被 errors.Is 识别的 error
+// 预期：原始 RPC 文本不透出给用户
+func notVisible(channelID int64) error {
+	return notVisibleError{msg: i18n.T("err.channel_not_visible", channelID)}
+}
+
 // Check 检查 bot 对频道的可见性与发言权限。
 //
 // 输入：ctx；api bot 会话；channelID 频道 id
@@ -39,6 +61,10 @@ func Check(ctx context.Context, api CheckAPI, channelID int64) (*Health, error) 
 		&tg.InputChannel{ChannelID: channelID, AccessHash: 0},
 	})
 	if err != nil {
+		// access_hash 失效与频道被删返回同一个错误类型，统一说成「不可见」
+		if IsStale(err) {
+			return nil, notVisible(channelID)
+		}
 		return nil, err
 	}
 	var ch *tg.Channel
@@ -56,7 +82,7 @@ func Check(ctx context.Context, api CheckAPI, channelID int64) (*Health, error) 
 		}
 	}
 	if ch == nil {
-		return nil, fmt.Errorf("%s", i18n.T("err.channel_not_visible", channelID))
+		return nil, notVisible(channelID)
 	}
 
 	me, err := api.ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{

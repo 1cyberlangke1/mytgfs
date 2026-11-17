@@ -45,27 +45,6 @@ func TestPurgeEntryRemovesOnlyThatPath(t *testing.T) {
 	}
 }
 
-// PurgeVolumeCache 整块删掉一个卷的缓存目录，别的卷不受影响。
-func TestPurgeVolumeCacheRemovesWholeDirectory(t *testing.T) {
-	dir := t.TempDir()
-	writeFileForTest(t, posterPath(dir, "demo", "/a.mp4", "1"), "p")
-	writeFileForTest(t, posterPath(dir, "demo2", "/b.mp4", "1"), "p")
-
-	if !PurgeVolumeCache(dir, "demo") {
-		t.Fatal("删卷缓存应返回 true")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "demo")); !os.IsNotExist(err) {
-		t.Fatal("demo 的缓存目录应整体消失")
-	}
-	if _, err := os.Stat(posterPath(dir, "demo2", "/b.mp4", "1")); err != nil {
-		t.Fatal("demo2 缓存不应被动")
-	}
-	// 再删一次：目录已不存在，无害且返回 false
-	if PurgeVolumeCache(dir, "demo") {
-		t.Fatal("目录不存在时应返回 false")
-	}
-}
-
 // SweepFlatLegacy 只清根目录下的旧 flat 文件，子目录与新文件不动。
 func TestSweepFlatLegacyRemovesOnlyStaleFlatFiles(t *testing.T) {
 	dir := t.TempDir()

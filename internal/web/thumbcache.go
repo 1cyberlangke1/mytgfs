@@ -18,19 +18,6 @@ func PurgeEntry(dir, vol, p string) int {
 	return (&thumbCache{dir: dir}).purgeEntry(vol, p)
 }
 
-// PurgeVolumeCache 删掉一个卷的全部缓存目录。
-//
-// 输入：dir 缓存根目录；vol 卷名
-// 输出：true 表示目录存在且已删除；目录不存在为无害空操作返回 false
-// 预期：删卷时调用；别的卷不受影响
-func PurgeVolumeCache(dir, vol string) bool {
-	volDir := filepath.Join(dir, vol)
-	if _, err := os.Stat(volDir); err != nil {
-		return false
-	}
-	return os.RemoveAll(volDir) == nil
-}
-
 // SweepFlatLegacy 清理旧版 flat 布局的残留文件。
 //
 // 旧版本把缓存文件直接放在 thumbs 根目录，新布局按卷分目录；

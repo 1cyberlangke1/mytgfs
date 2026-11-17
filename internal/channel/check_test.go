@@ -106,12 +106,15 @@ func TestCheckChannelNotVisible(t *testing.T) {
 	}
 }
 
-// TestCheckListRPCError 列表 RPC 失败要原样返回。
+// TestCheckListRPCError 频道失效类错误要换成「不可见」的说明。
 func TestCheckListRPCError(t *testing.T) {
-	want := tgerr.New(400, "CHANNEL_INVALID")
-	api := &fakeCheckAPI{getErr: want}
-	if _, err := Check(context.Background(), api, 7); !errors.Is(err, want) {
-		t.Fatalf("错误 = %v，期望原样透传", err)
+	api := &fakeCheckAPI{getErr: tgerr.New(400, "CHANNEL_INVALID")}
+	_, err := Check(context.Background(), api, 7)
+	if !errors.Is(err, ErrChannelNotVisible) {
+		t.Fatalf("错误 = %v，期望 ErrChannelNotVisible", err)
+	}
+	if strings.Contains(err.Error(), "CHANNEL_INVALID") {
+		t.Fatalf("原始 RPC 文本不该透出: %v", err)
 	}
 }
 

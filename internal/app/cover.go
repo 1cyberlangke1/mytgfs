@@ -238,9 +238,7 @@ func (p *CoverProvider) InvalidateVolume(vol string) {
 // 输出：无
 // 预期：卷已删，缓存文件成为孤儿，必须清掉；磁盘文件按 chatID 前缀匹配
 func (p *CoverProvider) PurgeChat(chatID int64) {
-	p.mu.Lock()
-	delete(p.cache, chatID)
-	p.mu.Unlock()
+	p.Forget(chatID)
 	if p.cacheDir == "" {
 		return
 	}
@@ -248,6 +246,17 @@ func (p *CoverProvider) PurgeChat(chatID int64) {
 	for _, f := range stale {
 		_ = os.Remove(f)
 	}
+}
+
+// Forget 只清掉内存里的头像缓存。
+//
+// 输入：chatID 频道 id（非 -100... 形式）
+// 输出：无
+// 预期：磁盘文件归删卷流程统一清理，这里只防止已删卷的头像继续驻留内存
+func (p *CoverProvider) Forget(chatID int64) {
+	p.mu.Lock()
+	delete(p.cache, chatID)
+	p.mu.Unlock()
 }
 
 // SetCover 写入频道头像并让本卷的缓存立即换成新字节。

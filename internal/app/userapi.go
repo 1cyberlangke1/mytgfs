@@ -54,6 +54,36 @@ func (a *App) withUserAPI(ctx context.Context, fn func(ctx context.Context, api 
 	return runErr
 }
 
+// withBotAPI 用 bot 会话开一次临时连接执行 fn。
+//
+// 输入：ctx；fn 在连接就绪后拿到已登录的客户端
+// 输出：fn 的错误优先返回；否则返回连接错误
+// 预期：建卷读用户名、挂载已有频道这类一次性操作使用，不常驻连接
+func (a *App) withBotAPI(ctx context.Context, fn func(ctx context.Context, c *tgclient.Client) error) error {
+	apiHash := a.cfg.APIHash()
+	if apiHash == "" {
+		return ErrMissingAPIHash
+	}
+	key, err := crypto.LoadOrCreateKey(cmp.Or(a.opts.KeyPath, DefaultKeyPath))
+	if err != nil {
+		return fmt.Errorf("%s: %w", i18n.T("err.session_key_prefix"), err)
+	}
+	client := tgclient.New(a.cfg.Telegram.APIID, apiHash,
+		&sessionstore.Encrypted{Path: cmp.Or(a.opts.SessionPath, DefaultSessionPath), Key: key},
+		tgclient.Options{BotToken: a.cfg.BotToken()})
+
+	var fnErr error
+	runErr := client.Run(ctx, func(ctx context.Context) error {
+		fnErr = fn(ctx, client)
+		// 返回 nil 让 gotd 收尾退出，避免把业务错误包成连接错误
+		return nil
+	})
+	if fnErr != nil {
+		return fnErr
+	}
+	return runErr
+}
+
 // SetChannelPhoto 用 user 会话把 JPEG 写成频道头像。
 //
 // 输入：ctx；channelID 频道 id；accessHash 为 0 时自动解析；jpeg 512×512 JPEG
