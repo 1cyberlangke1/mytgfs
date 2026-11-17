@@ -35,6 +35,7 @@
   解压后在 PowerShell 里执行一次 `.\install.ps1`（装到 `%LOCALAPPDATA%\mytgfs`，创建开始菜单快捷方式）。
 - **从源码构建**：Windows 执行 `.\build.ps1`（产出 `build\mytgfs.exe`、`build\mytgfs-tray.exe` 与
   `build\mytgfs-cli.exe`，`-Package` 附带分发 zip）；其它平台 `go build -o mytgfs ./cmd/mytgfs`。
+- **安卓**：从 Releases 下载 `mytgfs-<版本>-android-arm64-v8a.apk`，装到 arm64 真机。
 
 `mytgfs-tray.exe` 是日常入口（GUI 子系统，全程无黑框）；`mytgfs.exe` 是命令行版，适合脚本与无界面环境；
 `mytgfs-cli.exe` 是纯命令行构建（`go build -tags noweb`），不含面板与托盘依赖，体积约为完整版三分之一，

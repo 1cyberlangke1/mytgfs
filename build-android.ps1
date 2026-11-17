@@ -3,6 +3,9 @@
 # 输入：-Abi 目标架构（arm64-v8a 真机 / x86_64 模拟器）；-Task Gradle 任务；
 #       -Proxy 走 HTTP 代理下载 Gradle 依赖；-NoGradle 只编 libwails.so；
 #       -E2E 编 e2e 包（假数据层，产物 build\mytgfs-e2e-android.apk）
+#       环境变量 ANDROID_KEYSTORE_FILE / _PASSWORD / ANDROID_KEY_ALIAS / _KEY_PASSWORD
+#       给出时 assembleRelease 用正式密钥签名，否则回退 debug 密钥
+# 环境：JDK 21（AGP 8.7.3 的 lint 在 22+ 上会直接失败，CI 已固定 21）
 # 输出：build\android\app\build\outputs\apk\<变体>\*.apk，并复制成
 #       build\mytgfs-<版本>-android-<abi>.apk（E2E 时是 build\mytgfs-e2e-android.apk）
 # 预期：Go 侧用 NDK clang 编成 libwails.so，Gradle 只负责打包；
@@ -95,6 +98,12 @@ $overlay = @{
 [IO.File]::WriteAllText((Join-Path $androidDir 'overlay.json'), $overlay, (New-Object Text.UTF8Encoding($false)))
 
 $jniDir = Join-Path $androidDir "app\src\main\jniLibs\$Abi"
+# abiFilters 里声明了两种架构，jniLibs 里残留的另一个架构会被一起打进 APK，
+# 体积翻倍且混进上一次构建的旧库；每次只保留本次目标架构
+$jniRoot = Join-Path $androidDir 'app\src\main\jniLibs'
+Get-ChildItem $jniRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne $Abi } |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 New-Item -ItemType Directory -Force -Path $jniDir | Out-Null
 $so = Join-Path $jniDir 'libwails.so'
 

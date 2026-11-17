@@ -170,6 +170,10 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: 构建安卓 e2e 包
         run: pwsh -NoProfile -File build-android.ps1 -Abi x86_64 -E2E
+      # lintVital 只在 release 构建里跑，debug 包（e2e 用）不触发，所以单独跑一次
+      # release 的 lint 当质量门：error 级问题直接失败，warning 不拦。
+      - name: 安卓 lint（release）
+        run: sh build/android/gradlew -p build/android lintRelease
       - name: 模拟器里跑键盘 e2e
         uses: reactivecircus/android-emulator-runner@v2
         with:
