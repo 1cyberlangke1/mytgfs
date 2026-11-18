@@ -192,6 +192,7 @@
     "uploadPlanConfirm": "开始上传",
     "folderImportedToast": "已导入 {n} 个文件",
     "folderImportFailed": "有 {n} 个文件导入失败",
+    "importFailedNames": "失败项：{names}",
     "uploadPlanEmpty": "列表里没有文件，点「恢复全选」可以放回来",
     "uploadPlanRename": "重命名",
     "uploadPlanNameEmpty": "文件名不能为空，也不能是 . 或 ..",

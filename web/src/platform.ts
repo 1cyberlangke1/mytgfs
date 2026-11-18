@@ -1,17 +1,28 @@
 // 运行平台能力：设备上做不到的功能整块不渲染，不做置灰或提示。
 //
-// 输入：window.wails.platform()（Wails 原生桥注入，安卓返回 "android"）
+// 输入：window.mytgfsNative.platform()（安卓宿主注入的 Java 桥，返回 "android"）
 // 输出：isAndroid 常量与 platformCaps
-// 预期：网页版与桌面端按全能力处理；平台只在模块加载时探测一次
+// 预期：网页版与桌面端按全能力处理；平台只在模块加载时探测一次；
+//       Wails 运行时加载后会把 window.wails 覆盖成自己的对象，所以桥必须走
+//       专属名 mytgfsNative，否则调用期拿不到 Java 方法
 
 interface WailsPlatformBridge {
   platform?: () => string;
 }
 
+// nativeBridge 取安卓宿主注入的 Java 桥对象。
+//
+// 输入：无
+// 输出：桥对象；纯浏览器里为 undefined
+// 预期：只认 mytgfsNative，不回退 window.wails（那个名字归 Wails 运行时）
+function nativeBridge<T>(): T | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return (window as unknown as { mytgfsNative?: T }).mytgfsNative;
+}
+
 // detectPlatform 读取平台名，取不到时返回空串。
 function detectPlatform(): string {
-  if (typeof window === 'undefined') return '';
-  const bridge = (window as unknown as { wails?: WailsPlatformBridge }).wails;
+  const bridge = nativeBridge<WailsPlatformBridge>();
   try {
     return typeof bridge?.platform === 'function' ? String(bridge.platform()) : '';
   } catch {
@@ -49,7 +60,7 @@ export const platformCaps = {
   coverPicker: isAndroid,
 } as const;
 
-// WailsJsBridge 是安卓宿主注入的 JavascriptInterface（window.wails）。
+// WailsJsBridge 是安卓宿主注入的 JavascriptInterface（window.mytgfsNative）。
 interface WailsJsBridge {
   openFile?: (path: string) => void;
   exportToDownloads?: (path: string) => boolean;
@@ -61,7 +72,7 @@ interface WailsJsBridge {
 // 输出：无；桥不可用或调用抛错时同步抛异常
 // 预期：安卓走 FileProvider + ACTION_VIEW，桌面端不该调用本函数
 export function openNativeFile(path: string): void {
-  const bridge = (window as unknown as { wails?: WailsJsBridge }).wails;
+  const bridge = nativeBridge<WailsJsBridge>();
   if (typeof bridge?.openFile !== 'function') {
     throw new Error('native open unavailable');
   }
@@ -74,7 +85,7 @@ export function openNativeFile(path: string): void {
 // 输出：true 表示已落进公共 Downloads，系统的文件管理器能看到
 // 预期：安卓走 MediaStore 的 IS_PENDING 两步写入；桌面端不该调用本函数
 export function exportNativeFile(path: string): boolean {
-  const bridge = (window as unknown as { wails?: WailsJsBridge }).wails;
+  const bridge = nativeBridge<WailsJsBridge>();
   if (typeof bridge?.exportToDownloads !== 'function') {
     throw new Error('native export unavailable');
   }

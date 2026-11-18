@@ -15,7 +15,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,7 +39,9 @@ func bodyFromSrc(r *http.Request) {
 		// 只接受调用方给出的绝对路径形态，不做相对路径解析
 		return
 	}
-	f, err := os.Open(abs)
+	// 安卓原生选择器给的是 /proc/self/fd/N，直接 open 会被系统拦下，
+	// 统一走 openHostFile（Linux 上 dup 后包成文件）。
+	f, err := openHostFile(abs)
 	if err != nil {
 		return
 	}

@@ -238,34 +238,36 @@ export function removeItems(volume: string, paths: string[]): Promise<{ removed:
 // 字节不进 JS，也不在应用 cache 留副本。
 //
 // 输入：zone=file|folder；卷名；卷内目标目录
-// 输出：{uploaded, failed}；用户取消时 {0,0}
-// 预期：桌面端不会调用；回调名与壳里的 evaluateJavascript 一一对应
+// 输出：{uploaded, failed, failedNames}；用户取消时 {0,0,[]}
+// 预期：桌面端不会调用；回调名与壳里的 evaluateJavascript 一一对应；
+//       失败项名字由壳按相对路径回传，前端据此逐条提示
 function nativeImport(
   zone: 'file' | 'folder',
   volume: string,
   dir: string
-): Promise<{ uploaded: number; failed: number }> {
+): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
   return new Promise((resolve, reject) => {
     const w = window as unknown as {
-      wails?: { pickFileImport?: (v: string, d: string) => void; pickFolderImport?: (v: string, d: string) => void };
-      _mytgfsFileImport?: (uploaded: number, failed: number) => void;
-      _mytgfsFolderImport?: (uploaded: number, failed: number) => void;
+      mytgfsNative?: { pickFileImport?: (v: string, d: string) => void; pickFolderImport?: (v: string, d: string) => void };
+      _mytgfsFileImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
+      _mytgfsFolderImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
     };
-    const pick = zone === 'file' ? w.wails?.pickFileImport : w.wails?.pickFolderImport;
+    const pick = zone === 'file' ? w.mytgfsNative?.pickFileImport : w.mytgfsNative?.pickFolderImport;
     if (!pick) {
       reject(new ApiError('native picker unavailable', 0));
       return;
     }
-    const done = (uploaded: number, failed: number) => resolve({ uploaded, failed });
+    const done = (uploaded: number, failed: number, failedNames?: string[]) =>
+      resolve({ uploaded, failed, failedNames: failedNames ?? [] });
     if (zone === 'file') {
-      w._mytgfsFileImport = (uploaded, failed) => {
+      w._mytgfsFileImport = (uploaded, failed, failedNames) => {
         delete w._mytgfsFileImport;
-        done(uploaded, failed);
+        done(uploaded, failed, failedNames);
       };
     } else {
-      w._mytgfsFolderImport = (uploaded, failed) => {
+      w._mytgfsFolderImport = (uploaded, failed, failedNames) => {
         delete w._mytgfsFolderImport;
-        done(uploaded, failed);
+        done(uploaded, failed, failedNames);
       };
     }
     pick(volume, dir);
@@ -275,24 +277,24 @@ function nativeImport(
 // importFileNative 用安卓原生单文件选择器（可多选）导入。
 //
 // 输入：卷名、卷内目标目录
-// 输出：{uploaded, failed}
+// 输出：{uploaded, failed, failedNames}
 // 预期：字节由壳按 fd 直接交给服务端，不复制到 cache
 export function importFileNative(
   volume: string,
   dir: string
-): Promise<{ uploaded: number; failed: number }> {
+): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
   return nativeImport('file', volume, dir);
 }
 
 // importFolderNative 用安卓原生目录选择器递归导入。
 //
 // 输入：卷名、卷内目标目录
-// 输出：{uploaded, failed}
-// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache
+// 输出：{uploaded, failed, failedNames}
+// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache；空目录也会在远端建出来
 export function importFolderNative(
   volume: string,
   dir: string
-): Promise<{ uploaded: number; failed: number }> {
+): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
   return nativeImport('folder', volume, dir);
 }
 
@@ -586,10 +588,10 @@ export function coverURL(volume: string, version?: string): string {
 export function pickCoverNative(volume: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const w = window as unknown as {
-      wails?: { pickCover?: (vol: string) => void };
+      mytgfsNative?: { pickCover?: (vol: string) => void };
       _mytgfsCoverPicked?: (ok: boolean) => void;
     };
-    if (!w.wails?.pickCover) {
+    if (!w.mytgfsNative?.pickCover) {
       reject(new ApiError('native cover picker unavailable', 0));
       return;
     }
@@ -597,7 +599,7 @@ export function pickCoverNative(volume: string): Promise<boolean> {
       delete w._mytgfsCoverPicked;
       resolve(ok);
     };
-    w.wails.pickCover(volume);
+    w.mytgfsNative.pickCover(volume);
   });
 }
 

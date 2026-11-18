@@ -383,7 +383,9 @@ func handleAPIMkdir(api *filesAPI) http.HandlerFunc {
 			return
 		}
 		target := path.Join(normalizeDir(body.Dir), name)
-		if err := m.Mkdir(r.Context(), target); err != nil {
+		// 已存在同名目录按成功返回：导入流程会对每个目录先建一次（空目录也要
+		// 在远端存在），重复导入同一棵树不该被当成失败。
+		if err := m.Mkdir(r.Context(), target); err != nil && !errors.Is(err, fm.ErrExists) {
 			replyJSONError(w, http.StatusBadGateway, fmError(err))
 			return
 		}

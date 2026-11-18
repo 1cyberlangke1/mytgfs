@@ -335,6 +335,9 @@ func (u *uploadAPI) handleAdopt(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(src, "/proc/self/fd/") {
 		tmp, _, cpErr := copyFdToTemp(u.tmpDir, src)
 		if cpErr != nil {
+			// 安卓的 SAF fd 可能不允许二次打开：这里必须留下系统错误，
+			// 否则前端只会看到一个笼统的 400。
+			slog.Warn("adopt copy failed", "src", src, "dir", u.tmpDir, "err", cpErr)
 			replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
 			return
 		}
@@ -384,11 +387,18 @@ func (u *uploadAPI) handleAdopt(w http.ResponseWriter, r *http.Request) {
 // 输出：新文件路径、字节数、error
 // 预期：调用返回后原 fd 可以关闭；目标文件已 fsync，避免队列读到短文件
 func copyFdToTemp(dir, src string) (string, int64, error) {
-	in, err := os.Open(src)
+	in, err := openHostFile(src)
 	if err != nil {
 		return "", 0, err
 	}
 	defer in.Close()
+	// 安卓宿主的 data/tmp 可能还没被创建：CreateTemp 在缺失目录上直接失败，
+	// 先把目录补出来，失败才算真正错误。
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", 0, err
+		}
+	}
 	out, err := os.CreateTemp(dir, ".mytgfs-dav-fd-*")
 	if err != nil {
 		return "", 0, err

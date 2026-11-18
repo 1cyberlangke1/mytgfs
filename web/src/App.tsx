@@ -1288,11 +1288,12 @@ export default function App() {
   // 预期：桌面端不会走到这里；文件字节全程不进 JS
   // runNativeImport 统一处理安卓原生导入结果：提示数量并刷新该卷。
   //
-  // 输入：run 发起一次原生选择并返回 {uploaded,failed}；volumeId 目标卷
+  // 输入：run 发起一次原生选择并返回 {uploaded,failed,failedNames}；volumeId 目标卷
   // 输出：无
-  // 预期：取消选择（0,0）不弹任何提示；异常转成 toast
+  // 预期：取消选择（0,0）不弹任何提示；有失败时先报数量，再逐条列出失败路径；
+  //       异常转成 toast
   const runNativeImport = async (
-    run: () => Promise<{ uploaded: number; failed: number }>,
+    run: () => Promise<{ uploaded: number; failed: number; failedNames?: string[] }>,
     volumeId: string,
     successKey: string,
     failKey: string
@@ -1305,6 +1306,14 @@ export default function App() {
       }
       if (res.failed > 0) {
         pushToast(interpolate(failKey, { n: String(res.failed) }, locale), 'error');
+        const names = res.failedNames ?? [];
+        if (names.length > 0) {
+          const sep = locale === 'zh-CN' ? '、' : ', ';
+          pushToast(
+            interpolate(t.files.importFailedNames, { names: names.join(sep) }, locale),
+            'error'
+          );
+        }
       }
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');

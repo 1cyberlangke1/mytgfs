@@ -192,6 +192,7 @@
     "uploadPlanConfirm": "Start upload",
     "folderImportedToast": "Imported {n} files",
     "folderImportFailed": "{n} files failed to import",
+    "importFailedNames": "Failed: {names}",
     "uploadPlanEmpty": "The list is empty. Use Restore all to bring the files back.",
     "uploadPlanRename": "Rename",
     "uploadPlanNameEmpty": "File name cannot be empty or . / ..",

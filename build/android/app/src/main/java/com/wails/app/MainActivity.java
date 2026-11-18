@@ -71,12 +71,14 @@ public class MainActivity extends AppCompatActivity {
     // The Go-side dialog ID of the in-flight file picker (-1 when idle)
     private int pendingFilePickerCallbackID = -1;
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
-    private static final int VIDEO_CAPTURE_REQUEST = 7003;
+    private static final int VIDEO_CAPTURE_REQUEST = 7007;
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
 
     // In-flight callback for an HTML <input type="file"> chooser opened by the
     // WebView's WebChromeClient (null when idle).
-    private static final int WEBVIEW_FILE_CHOOSER_REQUEST = 7004;
+    // 与 WailsJSBridge 的 7003/7004/7005 错开：撞码会让文件夹导入的回调
+    // 被当成 <input type="file"> 的选择结果，反之亦然
+    private static final int WEBVIEW_FILE_CHOOSER_REQUEST = 7006;
     private ValueCallback<Uri[]> webViewFileChooserCallback;
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
@@ -234,7 +236,12 @@ public class MainActivity extends AppCompatActivity {
 
         // Add JavaScript interface for Go communication
         jsBridge = new WailsJSBridge(bridge, webView);
+        // "wails" 供 Wails 运行时在加载瞬间取 androidBridge（它只认这个名字，
+        // 随后会把 window.wails 覆盖成自己的模块导出）。
         webView.addJavascriptInterface(jsBridge, "wails");
+        // "mytgfsNative" 是应用自己的稳定入口：运行时覆盖 window.wails 之后，
+        // 平台探测、文件选择器、打开/导出沙盒文件仍然要能拿到 Java 方法。
+        webView.addJavascriptInterface(jsBridge, "mytgfsNative");
 
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on

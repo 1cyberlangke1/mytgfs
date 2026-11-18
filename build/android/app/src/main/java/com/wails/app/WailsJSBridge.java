@@ -276,14 +276,15 @@ public class WailsJSBridge {
     private String folderVol = "";
     private String folderDir = "/";
     private boolean folderBusy = false;
-    private int folderFailed = 0;
+    /** 失败项的相对路径，按出现顺序记录，结束时整份回传前端。 */
+    private final java.util.List<String> folderFailedNames = new java.util.ArrayList<>();
 
     /** 打开系统目录选择器；完成后通过 window._mytgfsFolderImport(ok, failed) 回调。 */
     @JavascriptInterface
     public void pickFolderImport(String vol, String dir) {
         if (folderBusy) return;
         folderBusy = true;
-        folderFailed = 0;
+        folderFailedNames.clear();
         folderVol = vol == null ? "" : vol;
         folderDir = (dir == null || dir.isEmpty()) ? "/" : dir;
         try {
@@ -301,9 +302,11 @@ public class WailsJSBridge {
     /** 由 MainActivity 在 onActivityResult 转发。 */
     public void onFolderPicked(final android.net.Uri treeUri) {
         if (treeUri == null) {
+            Log.i(TAG, "folder import cancelled");
             finishFolderImport(0);
             return;
         }
+        Log.i(TAG, "folder import start: " + treeUri);
         executor.execute(() -> {
             int ok;
             try {
@@ -337,18 +340,107 @@ public class WailsJSBridge {
                 if (name == null || name.isEmpty()) name = "file";
                 String rel = relDir.isEmpty() ? name : relDir + "/" + name;
                 if (android.provider.DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    // 目录必须先建出来：空目录也要在远端存在，不能等第一个文件带出来
+                    if (!ensureDir(folderVol, relDir, name)) folderFailedNames.add(rel + "/");
                     ok += importChildren(tree, childrenOf(tree, id), rel);
                     continue;
                 }
                 android.net.Uri doc = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id);
                 if (adoptOne(folderVol, folderDir, doc, rel)) ok++;
-                else folderFailed++;
+                else folderFailedNames.add(rel);
             }
         } catch (Exception e) {
             Log.e(TAG, "enumerate failed", e);
-            folderFailed++;
+            folderFailedNames.add(relDir.isEmpty() ? "/" : relDir + "/");
         }
         return ok;
+    }
+
+    /**
+     * postViaRuntime 用 Wails 运行时通道发一次 POST。
+     *
+     * 输入：path 带 query；body 为 JSON 字符串（无请求体传 ""）
+     * 输出：true 表示 Go 侧返回 {"ok":true,...}
+     * 预期：asset 通道（serveAsset）只适用于 GET，POST 必须走 Bridge.Do RPC，
+     *       否则 Go 只能看到 GET，处理函数直接拒绝、正文为空
+     */
+    private boolean postViaRuntime(String path, String body) {
+        String payload = "{\"object\":0,\"method\":0,\"windowName\":\"\",\"args\":{\"call-id\":\""
+                + System.nanoTime()
+                + "\",\"methodName\":\"mytgfs/internal/web.Bridge.Do\",\"args\":[{\"method\":\"POST\""
+                + ",\"path\":" + json(path)
+                + ",\"body\":" + json(body) + "}]},\"clientId\":\"mytgfs-android\"}";
+        String resp = bridge.handleRuntimeCall(payload);
+        if (resp == null) {
+            Log.w(TAG, "runtime POST " + path + " -> null");
+            return false;
+        }
+        try {
+            org.json.JSONObject data = new org.json.JSONObject(resp).optJSONObject("data");
+            int status = data == null ? 0 : data.optInt("status", 0);
+            if (status != 200) {
+                String detail = data == null ? resp : data.optString("body");
+                Log.w(TAG, "runtime POST " + path + " -> " + status + " " + detail);
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "runtime POST parse failed: " + resp, e);
+            return false;
+        }
+    }
+
+    /**
+     * ensureDir 在卷内目录里建一个子目录。
+     *
+     * 输入：vol 卷名；parentRel 相对选中根的父目录（顶层为空串）；name 目录名
+     * 输出：true 建好或已存在；false 请求失败
+     * 预期：走 /api/files/mkdir，路径按「目标目录 + 相对父目录」拼；重复建目录由
+     *       Go 侧幂等处理，因此每次导入都安全
+     */
+    private boolean ensureDir(String vol, String parentRel, String name) {
+        String dir = joinDir(folderDir, parentRel);
+        String body = "{\"vol\":" + json(vol)
+                + ",\"dir\":" + json(dir)
+                + ",\"name\":" + json(name) + "}";
+        return postViaRuntime("/api/files/mkdir", body);
+    }
+
+    /**
+     * joinDir 拼卷内目录路径。
+     *
+     * 输入：base 卷内目录；rel 相对子目录（可为空、无前导斜杠）
+     * 输出：以 "/" 开头的绝对卷内路径
+     * 预期：base 为 "/" 时不产生双斜杠
+     */
+    private static String joinDir(String base, String rel) {
+        String b = (base == null || base.isEmpty()) ? "/" : base;
+        if (rel == null || rel.isEmpty()) return b;
+        return b.endsWith("/") ? b + rel : b + "/" + rel;
+    }
+
+    /**
+     * json 把字符串编码成 JSON 字面量。
+     *
+     * 输入：任意字符串（可为 null）
+     * 输出：带引号的 JSON 字符串
+     * 预期：转义引号、反斜杠、换行、制表符与控制字符，避免拼出坏 JSON
+     */
+    private static String json(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char ch : (s == null ? "" : s).toCharArray()) {
+            switch (ch) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (ch < 0x20) sb.append(String.format("\\u%04x", (int) ch));
+                    else sb.append(ch);
+            }
+        }
+        return sb.append('"').toString();
     }
 
     private boolean adoptOne(String vol, String dir, android.net.Uri doc, String rel) {
@@ -360,8 +452,12 @@ public class WailsJSBridge {
                     + "&rel=" + enc(rel)
                     + "&name=" + enc(rel)
                     + "&path=" + enc("/proc/self/fd/" + pfd.getFd());
-            byte[] resp = bridge.serveAsset("/api/upload/adopt" + q, "POST", "{}");
-            return resp != null;
+            // 走 Bridge.Do RPC：asset 通道只转发 GET，POST 到不了 Go 的处理函数
+            boolean ok = postViaRuntime("/api/upload/adopt" + q, "");
+            if (!ok) {
+                Log.w(TAG, "adopt rejected: " + rel);
+            }
+            return ok;
         } catch (Exception e) {
             Log.e(TAG, "adopt failed: " + rel, e);
             return false;
@@ -376,10 +472,25 @@ public class WailsJSBridge {
         }
     }
 
+    /**
+     * finishFolderImport 把导入结果回传前端。
+     *
+     * 输入：ok 成功文件数
+     * 输出：无
+     * 预期：回调带成功数、失败数与失败相对路径数组，前端可逐条提示；
+     *       数组用同样的 json 转义，避免文件名里的引号破坏脚本
+     */
     private void finishFolderImport(int ok) {
         folderBusy = false;
+        Log.i(TAG, "folder import done ok=" + ok + " failed=" + folderFailedNames.size());
+        StringBuilder list = new StringBuilder("[");
+        for (int i = 0; i < folderFailedNames.size(); i++) {
+            if (i > 0) list.append(',');
+            list.append(json(folderFailedNames.get(i)));
+        }
+        list.append(']');
         final String js = "window._mytgfsFolderImport && window._mytgfsFolderImport("
-                + ok + "," + folderFailed + ");";
+                + ok + "," + folderFailedNames.size() + "," + list + ");";
         webView.post(() -> webView.evaluateJavascript(js, null));
     }
 
