@@ -265,7 +265,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                           </div>
                           <audio
                             controls
-                            preload="none"
+                            preload="metadata"
                             src={streamUrl}
                             aria-label={t.files.detailPlay}
                             className="w-full"
@@ -280,7 +280,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                         <div className="flex-1 flex flex-col rounded-lg bg-slate-900 border border-slate-800 overflow-hidden">
                           <video
                             controls
-                            preload="none"
+                            preload="metadata"
                             playsInline
                             src={streamUrl}
                             aria-label={t.files.detailPlay}
