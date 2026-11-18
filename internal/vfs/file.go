@@ -44,6 +44,24 @@ type file struct {
 	base int64
 	// sum 在写模式下累计内容 sha256，作为断点键与去重依据
 	sum hash.Hash
+	// stream 表示这次读取来自媒体播放：进度照记，但类型标成 stream，
+	// 前端操作队列据此过滤，不再显示成「下载」
+	stream bool
+}
+
+// MarkStream 把本次读取标记为媒体播放。
+//
+// 输入：无
+// 输出：无
+// 预期：只改进度条目的类型，不影响读取行为
+func (f *file) MarkStream() { f.stream = true }
+
+// transferKind 返回本次读取对应的进度类型。
+func (f *file) transferKind() string {
+	if f.stream {
+		return TransferStream
+	}
+	return TransferDownload
 }
 
 // Abort 丢弃写模式的临时文件，不提交上传。
@@ -343,7 +361,7 @@ func (f *file) readRange(ofst int64, length int) ([]byte, error) {
 	if ctx == nil {
 		ctx = f.d.ctx
 	}
-	prog := func(done int64) { f.d.track(f.name, done, f.node.Size) }
+	prog := func(done int64) { f.d.track(f.name, done, f.node.Size, f.transferKind()) }
 	data, err := f.d.store.ReadRange(ctx, partOf(*f.node), ofst, length, prog)
 	if err == nil {
 		return data, nil

@@ -39,6 +39,8 @@ export interface ApiTransfer {
   path: string;
   done: number;
   total: number;
+  /** 来源类型：download 是真正的下载任务，stream 是媒体播放读取 */
+  kind?: string;
 }
 
 export interface ApiAutostart {

@@ -15,7 +15,16 @@ type Transfer struct {
 	Path  string `json:"path"`
 	Done  int64  `json:"done"`
 	Total int64  `json:"total"`
+	// Kind 标明这条进度来自真正的下载任务还是媒体播放读取。
+	// 播放读取不属于操作队列，前端据此过滤，不再显示成「下载」。
+	Kind string `json:"kind,omitempty"`
 }
+
+// 传输类型：下载任务与播放读取。
+const (
+	TransferDownload = "download"
+	TransferStream   = "stream"
+)
 
 // transferMinSize 是进入进度列表的最小文件体积。
 //
@@ -53,14 +62,17 @@ func (d *FileSystem) reportUpload(path string, done, total int64) {
 	}
 }
 
-// track 记录一次下载进度。
+// track 记录一次传输进度。
 //
-// 输入：name 卷内路径；done 已取回字节；total 文件总大小
+// 输入：name 卷内路径；done 已取回字节；total 文件总大小；kind 来源类型
 // 输出：无
 // 预期：小于 transferMinSize 或已取完时移除记录；done 只增不减
-func (d *FileSystem) track(name string, done, total int64) {
+func (d *FileSystem) track(name string, done, total int64, kind string) {
 	if total < transferMinSize {
 		return
+	}
+	if kind == "" {
+		kind = TransferDownload
 	}
 	if done > total {
 		done = total
@@ -77,9 +89,12 @@ func (d *FileSystem) track(name string, done, total int64) {
 	}
 	t := d.tr[name]
 	if t == nil {
-		d.tr[name] = &Transfer{Path: name, Done: done, Total: total}
-	} else if done > t.Done {
-		t.Done = done
+		d.tr[name] = &Transfer{Path: name, Done: done, Total: total, Kind: kind}
+	} else {
+		t.Kind = kind
+		if done > t.Done {
+			t.Done = done
+		}
 	}
 	d.trMu.Unlock()
 	d.notifyProgress()

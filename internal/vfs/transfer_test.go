@@ -71,3 +71,25 @@ func TestTransfersSkipsSmallFile(t *testing.T) {
 	}
 	_ = f.Close()
 }
+
+// TestTransferKindMarksStream 播放读取与下载任务在进度表里带不同类型。
+//
+// 输入：同一路径先记 download，再记 stream
+// 输出：Transfers 返回的 Kind 跟着变
+// 预期：前端据此把播放读取从操作队列里过滤掉
+func TestTransferKindMarksStream(t *testing.T) {
+	fsys, _, done := newTestFS(t)
+	defer done()
+
+	fsys.track("/big.bin", 1<<20, 4<<20, TransferDownload)
+	got := fsys.Transfers()
+	if len(got) != 1 || got[0].Kind != TransferDownload {
+		t.Fatalf("下载类型不符: %+v", got)
+	}
+
+	fsys.track("/big.bin", 2<<20, 4<<20, TransferStream)
+	got = fsys.Transfers()
+	if len(got) != 1 || got[0].Kind != TransferStream {
+		t.Fatalf("播放类型不符: %+v", got)
+	}
+}

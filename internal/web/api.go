@@ -527,6 +527,12 @@ func handleAPIFile(api *filesAPI) http.HandlerFunc {
 			return
 		}
 		defer f.Close()
+		// inline=1 是内嵌预览/播放，不是下载任务；标记类型让前端操作队列跳过它
+		if q.Get("inline") == "1" {
+			if s, ok := f.(interface{ MarkStream() }); ok {
+				s.MarkStream()
+			}
+		}
 		st, err := f.Stat()
 		if err != nil {
 			// 底层错误里可能带内部路径，只给通用提示

@@ -706,16 +706,19 @@ export default function App() {
   const sampleDownloads = useCallback((items: ApiTransfer[]): TransferTask[] => {
     const now = performance.now();
     const seen = new Set<string>();
-    const out = items.map((t, i) => {
-      const task = transferFromServer(t, i);
-      seen.add(task.id);
-      const prev = downloadSpeed.current.get(task.id);
-      if (prev && now > prev.at && task.transferredBytes >= prev.bytes) {
-        task.speedBps = ((task.transferredBytes - prev.bytes) * 1000) / (now - prev.at);
-      }
-      downloadSpeed.current.set(task.id, { bytes: task.transferredBytes, at: now });
-      return task;
-    });
+    const out = items
+      // 播放读取（stream）不是操作队列里的任务，直接跳过
+      .filter((t) => t.kind !== 'stream')
+      .map((t, i) => {
+        const task = transferFromServer(t, i);
+        seen.add(task.id);
+        const prev = downloadSpeed.current.get(task.id);
+        if (prev && now > prev.at && task.transferredBytes >= prev.bytes) {
+          task.speedBps = ((task.transferredBytes - prev.bytes) * 1000) / (now - prev.at);
+        }
+        downloadSpeed.current.set(task.id, { bytes: task.transferredBytes, at: now });
+        return task;
+      });
     // 任务结束后采样表跟着收缩，长时间运行不会随历史任务无限增长
     for (const id of downloadSpeed.current.keys()) {
       if (!seen.has(id)) downloadSpeed.current.delete(id);

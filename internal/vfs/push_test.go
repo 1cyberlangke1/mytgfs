@@ -54,7 +54,7 @@ func TestReadProgressPushesProgressTopic(t *testing.T) {
 	defer cleanup()
 
 	rec.Reset()
-	fsys.track("/big.bin", 1<<20, 4<<20)
+	fsys.track("/big.bin", 1<<20, 4<<20, TransferDownload)
 	if got := rec.Count(push.TopicProgress); got == 0 {
 		t.Fatal("track 没有推送 progress")
 	}
