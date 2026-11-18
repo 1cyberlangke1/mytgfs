@@ -177,7 +177,7 @@ func (v *VolumeFS) VideoThumb(ctx context.Context, path string) ([]byte, string,
 //
 // 输入：ctx
 // 输出：删除条数
-// 预期：只删 done/failed；排队与执行中的任务不受影响，队列未接线时返回 0
+// 预期：只删 done/failed/cancelled；排队与执行中的任务不受影响，队列未接线时返回 0
 func (v *VolumeFS) ClearQueue(ctx context.Context) (int64, error) {
 	if v.FS == nil {
 		return 0, nil
@@ -187,6 +187,22 @@ func (v *VolumeFS) ClearQueue(ctx context.Context) (int64, error) {
 		return 0, nil
 	}
 	return q.ClearFinished(ctx)
+}
+
+// CancelQueue 取消本卷的一条排队中或执行中的任务。
+//
+// 输入：ctx；id 任务号
+// 输出：queue.ErrJobNotFound / queue.ErrJobFinished；队列未接线时返回 ErrJobNotFound
+// 预期：执行中的上传被打断后同时丢弃临时文件与 pending 账本，重启不会自己再传
+func (v *VolumeFS) CancelQueue(ctx context.Context, id int64) error {
+	if v.FS == nil {
+		return queue.ErrJobNotFound
+	}
+	q := v.FS.Queue()
+	if q == nil {
+		return queue.ErrJobNotFound
+	}
+	return q.Cancel(ctx, id)
 }
 
 // Close 先停队列再关索引；在跑任务被取消后等下次启动重排。

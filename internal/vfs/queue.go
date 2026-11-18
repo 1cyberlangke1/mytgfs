@@ -318,6 +318,13 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob, progress func(d
 	cerr := helper.commitAt(ctx, tmp, p, progress)
 	_ = tmp.Close()
 	if cerr != nil {
+		if ctx.Err() != nil {
+			// 用户取消：临时文件和账本一起清掉。
+			// 只清队列不改账本的话，下次启动 ResumePending 会把刚取消的任务又排回来
+			bg := context.WithoutCancel(ctx)
+			_ = d.idx.DeletePending(bg, p.Path)
+			_ = os.Remove(p.Temp)
+		}
 		return cerr
 	}
 	_ = d.idx.DeletePending(ctx, p.Path)

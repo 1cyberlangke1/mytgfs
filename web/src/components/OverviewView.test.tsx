@@ -4,7 +4,7 @@
 //
 // 输入：假的卷/文件/任务列表，回调都是 vi.fn()
 // 输出：断言渲染文本、进度条语义与回调参数
-// 预期：不碰网络；失败原因必须渲染；q- 前缀的队列任务不出现本地重试/取消按钮
+// 预期：不碰网络；失败原因必须渲染；q- 前缀的队列任务只能取消，没有本地重试/暂停
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
@@ -64,6 +64,7 @@ const renderView = (patch: {
     onToggleTransferPause: vi.fn(),
     onRetryTransfer: vi.fn(),
     onCancelTransfer: vi.fn(),
+    onCancelQueueJob: vi.fn(),
     onClearCompletedTransfers: vi.fn(),
   };
   render(
@@ -79,6 +80,7 @@ const renderView = (patch: {
       onToggleTransferPause={handlers.onToggleTransferPause}
       onRetryTransfer={handlers.onRetryTransfer}
       onCancelTransfer={handlers.onCancelTransfer}
+      onCancelQueueJob={handlers.onCancelQueueJob}
       onClearCompletedTransfers={handlers.onClearCompletedTransfers}
     />
   );
@@ -138,32 +140,53 @@ describe('OverviewView', () => {
     expect(handlers.onCancelTransfer).toHaveBeenCalledWith('fail-1');
   });
 
-  it('服务端队列任务（q- 前缀）不给本地重试/取消/暂停', () => {
+  it('服务端队列任务（q- 前缀）只能取消，不给本地重试/暂停', () => {
     const handlers = renderView({
       volumes: [volume('demo', 'demo')],
       transfers: [
         task({
           id: 'q-42',
           fileName: '/batch',
-          state: 'transferring',
+          state: 'queued',
           opKind: 'mkdir',
           size: 0,
           transferredBytes: 0,
+          queueVolume: 'demo',
+          queueJobId: 42,
         }),
       ],
     });
 
     expect(screen.getByText(t.overview.queueKind.mkdir)).toBeTruthy();
-    expect(screen.getByText(t.overview.queueRunning)).toBeTruthy();
+    expect(screen.getByText(t.overview.transferQueued)).toBeTruthy();
     expect(screen.queryByRole('button', { name: `${t.overview.retryBtn} /batch` })).toBeNull();
-    // 取消按钮仍在 DOM 里，但被 Tailwind 的 hidden 类藏起来（jsdom 不加载 CSS，只能看 class）
-    const cancel = screen.getByRole('button', { name: `${t.overview.cancelBtn} /batch` });
-    expect(cancel.className).toContain('hidden');
+    // 取消按钮直连服务端队列接口，携带卷名与任务号
+    fireEvent.click(screen.getByRole('button', { name: `${t.overview.cancelBtn} /batch` }));
+    expect(handlers.onCancelQueueJob).toHaveBeenCalledTimes(1);
+    expect((handlers.onCancelQueueJob.mock.calls[0]?.[0] as TransferTask).queueJobId).toBe(42);
+    expect(handlers.onCancelTransfer).not.toHaveBeenCalled();
     // 服务端队列任务没有本地暂停入口
     expect(screen.queryByRole('button', { name: `${t.overview.pauseBtn} /batch` })).toBeNull();
     // 大小未知时不渲染进度条，避免假装 0%
     expect(screen.queryByRole('progressbar', { name: '/batch' })).toBeNull();
-    expect(handlers.onRetryTransfer).not.toHaveBeenCalled();
+  });
+
+  it('已取消的队列任务显示「已取消」且不再给取消按钮', () => {
+    renderView({
+      volumes: [volume('demo', 'demo')],
+      transfers: [
+        task({
+          id: 'q-7',
+          fileName: 'x.bin',
+          state: 'cancelled',
+          queueVolume: 'demo',
+          queueJobId: 7,
+        }),
+      ],
+    });
+
+    expect(screen.getByText(t.overview.transferCancelled)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: `${t.overview.cancelBtn} x.bin` })).toBeNull();
   });
 
   it('清理已完成按钮只在有完成/失败任务时出现', () => {

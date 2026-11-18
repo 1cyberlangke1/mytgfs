@@ -56,6 +56,7 @@ import {
   UploadPaused,
   attachVolume,
   discardUpload,
+  cancelQueueJob,
   clearQueue,
   createVolume,
   deleteVolume,
@@ -84,6 +85,7 @@ import {
 import { AccountCard } from './components/AccountCard';
 import { TextFileDialog } from './components/TextFileDialog';
 import { UploadPlanDialog } from './components/UploadPlanDialog';
+import { ConflictDialog } from './components/ConflictDialog';
 import { ProblemBanner } from './components/ProblemBanner';
 import { ToastStack, type ToastMessage } from './components/ToastStack';
 import {
@@ -101,6 +103,13 @@ import {
   type StagedUpload,
   type UploadSource,
 } from './utils/uploadPlan';
+import {
+  buildDirIndex,
+  detectConflicts,
+  resolveUploadConflicts,
+  type ConflictAction,
+  type UploadConflict,
+} from './utils/uploadConflict';
 import { extractPasteContent, isEditableTarget, readClipboardContent } from './utils/paste';
 
 // 按页签懒加载：首屏只带壳与概览之外的公共部分，切换页签时再取对应 chunk。
@@ -229,8 +238,8 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
 // queueFromServer 把服务端队列快照转成传输任务。
 //
 // 输入：q 队列项（volume/kind/name/done/size 由服务端给出）；index 序号
-// 输出：按服务端 state 映射的传输任务（done→completed，failed 带原因），
-//       带已传字节与总字节，进度条据此显示真实百分比
+// 输出：按服务端 state 映射的传输任务（done→completed，failed 带原因，
+//       cancelled→已取消），带已传字节与总字节，进度条据此显示真实百分比
 // 预期：已完成的活儿必须显示「已完成」，不能一律当成排队中
 function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
   const volumeId = q.volume || '';
@@ -240,6 +249,8 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
       ? 'completed'
       : q.state === 'failed'
       ? 'failed'
+      : q.state === 'cancelled'
+      ? 'cancelled'
       : q.state === 'running'
       ? 'transferring'
       : 'queued';
@@ -261,6 +272,9 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     category: inferFileCategory(q.name, false),
     errorMessage: q.error,
     opKind: kind,
+    // 取消接口需要卷名与任务号，队列任务才带
+    queueVolume: q.volume,
+    queueJobId: q.id,
   };
 }
 
@@ -460,6 +474,11 @@ export default function App() {
   const [uploadTasks, setUploadTasks] = useState<TransferTask[]>([]);
   // stagedUploads 是「已选好、还没开始传」的清单：确认前不发任何请求
   const [stagedUploads, setStagedUploads] = useState<StagedUpload[]>([]);
+  // pendingConflicts 非空时先问同名文件怎么处理，再真正入队
+  const [pendingConflicts, setPendingConflicts] = useState<{
+    items: StagedUpload[];
+    conflicts: UploadConflict[];
+  } | null>(null);
   // textDraft 非空时打开「新建文本」弹窗，initial 可来自剪贴板的纯文本
   const [textDraft, setTextDraft] = useState<{ initial: string } | null>(null);
   const [serverTransfers, setServerTransfers] = useState<TransferTask[]>([]);
@@ -1182,19 +1201,19 @@ export default function App() {
     handleUploadSources(sourcesFromFiles(fileList), volumeId, parentId);
   };
 
-  // handleConfirmUpload 把确认后的草稿转成真正的上传任务。
+  // startUpload 把最终清单转成真正的上传任务并入队。
   //
-  // 输入：kept 清单里留下的草稿项（可能已在清单里改过名）
+  // 输入：items 已消解冲突、确定要传的草稿项
   // 输出：无
   // 预期：先清空清单再入队；改名写进 init 的 rel/name，不额外发重命名请求；
   //       并发上限、批次号与断点续传行为完全不变
-  const handleConfirmUpload = (kept: StagedUpload[]) => {
+  const startUpload = (items: StagedUpload[]) => {
     setStagedUploads([]);
-    if (kept.length === 0) return;
+    if (items.length === 0) return;
     // 同一次确认的文件共享批次号，概览页据此显示整批总进度
     const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const plan = toTransferTasks(kept, batchId);
-    kept.forEach((item, index) => {
+    const plan = toTransferTasks(items, batchId);
+    items.forEach((item, index) => {
       const task = plan[index]!;
       const target = uploadArgs(item);
       uploadInputs.current.set(task.id, {
@@ -1214,6 +1233,49 @@ export default function App() {
     );
     uploadQueue.current.push(...plan.map((task) => task.id));
     pumpUploads();
+  };
+
+  // handleConfirmUpload 确认清单：先查同名，再决定直接传还是先问处理方式。
+  //
+  // 输入：kept 清单里留下的草稿项（可能已在清单里改过名）
+  // 输出：无
+  // 预期：同名项一个都没有就直接开始上传；有同名则弹出冲突弹窗，
+  //       此时先把上传清单收起来，避免两个模态叠在一起
+  const handleConfirmUpload = (kept: StagedUpload[]) => {
+    if (kept.length === 0) {
+      setStagedUploads([]);
+      return;
+    }
+    const index = buildDirIndex(files);
+    const conflicts = detectConflicts(
+      kept.map((item) => ({ id: item.id, name: item.name, dirKey: index.keyOf(item) })),
+      index.namesByDir
+    );
+    if (conflicts.length === 0) {
+      startUpload(kept);
+      return;
+    }
+    setStagedUploads([]);
+    setPendingConflicts({ items: kept, conflicts });
+  };
+
+  // handleResolveConflicts 按用户选择处理同名项后开始上传。
+  //
+  // 输入：choices 每个冲突 id 的覆盖/改名/跳过
+  // 输出：无
+  // 预期：覆盖保留原名（后端按同路径覆盖），改名换成建议名，跳过整项丢弃
+  const handleResolveConflicts = (choices: Record<string, ConflictAction>) => {
+    const pending = pendingConflicts;
+    if (!pending) return;
+    setPendingConflicts(null);
+    startUpload(resolveUploadConflicts(pending.items, pending.conflicts, choices));
+  };
+
+  // handleCancelConflicts 关掉冲突弹窗：把清单放回来继续改，不丢已选文件。
+  const handleCancelConflicts = () => {
+    const pending = pendingConflicts;
+    setPendingConflicts(null);
+    if (pending) setStagedUploads(pending.items);
   };
 
   // handleCancelUploadPlan 放弃整批草稿：清单清空，服务端什么都不知道。
@@ -1321,6 +1383,28 @@ export default function App() {
     uploadInputs.current.delete(taskId);
     uploadQueue.current = uploadQueue.current.filter((id) => id !== taskId);
     setUploadTasks((prev) => prev.filter((tr) => tr.id !== taskId));
+  };
+
+  // handleCancelQueueJob 取消一条服务端队列任务（排队中或正在跑）。
+  //
+  // 输入：task 来自服务端队列快照，必须带 queueVolume/queueJobId
+  // 输出：无
+  // 预期：先本地落「已取消」让界面立刻响应，请求失败再提示；
+  //       真正的持久化与执行中断由后端负责，下一次状态推送会与本地对齐
+  const handleCancelQueueJob = (task: TransferTask) => {
+    if (!task.queueVolume || task.queueJobId === undefined) return;
+    const volume = task.queueVolume;
+    const id = task.queueJobId;
+    setServerQueue((prev) =>
+      prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'cancelled', speedBps: 0 } : tr))
+    );
+    cancelQueueJob(volume, id)
+      .then(() => pushToast(t.overview.queueCancelledToast, 'success'))
+      .catch((err) => {
+        pushToast(errText(err), 'error');
+        // 服务端没接受取消：拉一次快照回滚本地乐观更新
+        onConnectedRef.current();
+      });
   };
 
   const handleClearCompletedTransfers = () => {
@@ -1764,6 +1848,7 @@ export default function App() {
                 onToggleTransferPause={handleToggleTransferPause}
                 onRetryTransfer={handleRetryTransfer}
                 onCancelTransfer={handleCancelTransfer}
+            onCancelQueueJob={handleCancelQueueJob}
                 onClearCompletedTransfers={handleClearCompletedTransfers}
                 onSetCover={caps.cover ? handleSetCover : undefined}
               onSetTitle={caps.cover ? handleSetVolumeTitle : undefined}
@@ -1894,6 +1979,17 @@ export default function App() {
           items={stagedUploads}
           onConfirm={handleConfirmUpload}
           onCancel={handleCancelUploadPlan}
+        />
+      )}
+
+      {/* 同名冲突：确认处理后才会真正入队 */}
+      {pendingConflicts !== null && (
+        <ConflictDialog
+          t={t}
+          items={pendingConflicts.items}
+          conflicts={pendingConflicts.conflicts}
+          onConfirm={handleResolveConflicts}
+          onCancel={handleCancelConflicts}
         />
       )}
 

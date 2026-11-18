@@ -499,12 +499,22 @@ export function rebuildVolume(
   return request(`/api/rebuild?${q.toString()}`, { method: 'POST', signal });
 }
 
-// clearQueue 删除服务端已结束（成功/失败）的任务记录。
+// clearQueue 删除服务端已结束（成功/失败/已取消）的任务记录。
 //
 // 输出：删除条数
 // 预期：排队中与执行中的任务不受影响；前端收到 status 推送后重取快照
 export function clearQueue(): Promise<{ removed: number }> {
   return request('/api/queue', { method: 'DELETE' });
+}
+
+// cancelQueueJob 取消一条排队中/执行中的服务端队列任务。
+//
+// 输入：volume 卷名；id 任务号
+// 输出：{cancelled: true}；任务不存在 404、已结束 409
+// 预期：排队中立刻落 cancelled；执行中的上传被打断并丢弃临时文件，
+//       重启不会自己重传，前端刷新后该任务显示为已取消
+export function cancelQueueJob(volume: string, id: number): Promise<{ cancelled: boolean }> {
+  return request(`/api/queue/${encodeURIComponent(volume)}/${id}`, { method: 'DELETE' });
 }
 
 // createVolume 新建卷：后端建 Telegram 频道并写配置。

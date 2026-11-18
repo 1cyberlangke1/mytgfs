@@ -421,6 +421,14 @@ func Run(opts Options) error {
 				}
 				return total, nil
 			},
+			// 取消单条任务：按卷名找到队列；卷已不在时按「记录不存在」处理
+			CancelQueue: func(ctx context.Context, volume string, id int64) error {
+				v, ok := reg.Get(volume)
+				if !ok {
+					return queue.ErrJobNotFound
+				}
+				return v.vf.CancelQueue(ctx, id)
+			},
 			// 封面就是频道头像：按卷名找到对应 Store；字节缓存落 thumbs 目录
 			// 封面就是频道头像：复用装配层的封面服务
 			Cover: coverProvider,

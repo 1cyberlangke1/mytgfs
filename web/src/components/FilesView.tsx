@@ -878,7 +878,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5">
+            {/* 工具条：窄屏放不下时换行，避免最右侧视图切换按钮被裁掉 */}
+            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
               <label htmlFor="sort-field-select" className="sr-only">
                 {t.files.sortByLabel}
               </label>
@@ -886,7 +887,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
                 id="sort-field-select"
                 value={sortField}
                 onChange={(e) => setSortField(e.target.value as SortField)}
-                className="h-8 text-xs"
+                className="h-8 text-xs shrink-0"
               >
                 <option value="name" className="bg-white dark:bg-zinc-900">
                   {t.files.sortName}

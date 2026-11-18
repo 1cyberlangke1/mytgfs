@@ -80,8 +80,10 @@ type Options struct {
 	ThumbDir string
 	// Autostart 控制开机自启；nil 时接口返回 501、面板不显示开关
 	Autostart AutostartControl
-	// ClearQueue 删除所有已结束（成功/失败）的任务记录；nil 时接口返回 501
+	// ClearQueue 删除所有已结束（成功/失败/已取消）的任务记录；nil 时接口返回 501
 	ClearQueue func(ctx context.Context) (int64, error)
+	// CancelQueue 取消某个卷的一条排队中/执行中任务；nil 时接口返回 501
+	CancelQueue func(ctx context.Context, volume string, id int64) error
 	// Cover 读写频道头像；nil 时封面接口返回 501、面板不显示封面设置
 	Cover CoverSource
 	// Rebuild 按卷重建本地索引；nil 时接口返回 501
@@ -176,6 +178,7 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/autostart", handleAPIAutostart(opts))
 	rt.route("/api/sync", handleAPISync(opts))
 	rt.route("/api/queue", handleAPIQueue(opts))
+	rt.route("/api/queue/{vol}/{id}", handleAPIQueueCancel(opts))
 	rt.route("/api/events", handleAPIEvents(opts.Push))
 	// 网页版没有 Wails 框架默认链：给空运行时脚本，避免 index.html 里 script 报错；
 	// 桌面壳该路径由框架在进入 mux 之前处理，不会到这里。

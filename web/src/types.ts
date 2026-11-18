@@ -29,7 +29,15 @@ export interface VolumeInfo {
 }
 
 export type TransferDirection = 'upload' | 'download';
-export type TransferState = 'transferring' | 'queued' | 'paused' | 'completed' | 'failed';
+// cancelled 只出现在服务端队列任务上：用户主动取消后落这个终态，
+// 与 failed（错误）区分开，界面不给重试入口
+export type TransferState =
+  | 'transferring'
+  | 'queued'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface TransferTask {
   id: string;
@@ -52,6 +60,10 @@ export interface TransferTask {
   opKind?: 'upload' | 'download' | 'mkdir' | 'rename' | 'remove' | 'copy';
   /** 同一次「上传文件/上传文件夹」的批次号，用于汇总整批进度 */
   batchId?: string;
+  /** 服务端队列任务所属卷名；本地任务为空。取消接口需要它 */
+  queueVolume?: string;
+  /** 服务端队列任务号；本地任务为空 */
+  queueJobId?: number;
 }
 
 export interface AppSettingDef {

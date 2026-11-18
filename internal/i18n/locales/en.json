@@ -286,6 +286,9 @@
   "err.proxy_dialer": "proxy dialer unavailable: %s",
   "log.proxy_unavailable": "SOCKS5 proxy unavailable: %v",
   "err.queue_unavailable": "the task queue is unavailable here",
+  "err.queue_job_id": "invalid task id",
+  "err.queue_job_missing": "that task no longer exists",
+  "err.queue_job_finished": "that task already finished",
   "log.queue_claim_failed": "queue claim failed: %v",
   "log.queue_finish_failed": "queue finish update failed: %v"
 }

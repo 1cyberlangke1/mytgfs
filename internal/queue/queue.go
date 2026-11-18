@@ -43,17 +43,19 @@ const (
 // 输出：持久化与接口里出现的状态字符串
 // 预期：面板按这些字符串渲染，改动会同时影响两边
 const (
-	StateQueued  = "queued"
-	StateRunning = "running"
-	StateDone    = "done"
-	StateFailed  = "failed"
+	StateQueued    = "queued"
+	StateRunning   = "running"
+	StateDone      = "done"
+	StateFailed    = "failed"
+	StateCancelled = "cancelled"
 )
 
 const (
-	stateQueued  = StateQueued
-	stateRunning = StateRunning
-	stateDone    = StateDone
-	stateFailed  = StateFailed
+	stateQueued    = StateQueued
+	stateRunning   = StateRunning
+	stateDone      = StateDone
+	stateFailed    = StateFailed
+	stateCancelled = StateCancelled
 )
 
 // 运行参数。
@@ -105,6 +107,12 @@ func (errQueueFull) Error() string { return i18n.T("err.queue_full") }
 
 var ErrQueueFull error = errQueueFull{}
 
+// ErrJobNotFound 表示任务记录不存在（已被清理或从未存在）。
+var ErrJobNotFound error = errors.New(i18n.T("err.queue_job_missing"))
+
+// ErrJobFinished 表示任务已经结束（成功/失败/已取消），无需再取消。
+var ErrJobFinished error = errors.New(i18n.T("err.queue_job_finished"))
+
 // Handler 执行一条任务；必须能从 Job 的字段完全重建操作，不能依赖闭包。
 type Handler func(ctx context.Context, j Job) error
 
@@ -122,12 +130,16 @@ type Queue struct {
 	// 之后只读不增删，signal 广播不会与 worker 生命周期竞态
 	wakes []chan struct{}
 	// waitMu/waiters 保护任务完成通知：finish 关闭对应通道，Wait 不再轮询
-	waitMu   sync.Mutex
-	waiters  map[int64][]chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopOnce sync.Once
+	waitMu  sync.Mutex
+	waiters map[int64][]chan struct{}
+	// cancelMu 保护下面两张表：执行中任务的取消函数，以及「已请求取消但还没登记」的标记
+	cancelMu  sync.Mutex
+	cancels   map[int64]context.CancelFunc
+	cancelReq map[int64]struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	stopOnce  sync.Once
 
 	// progMu/progress 记录执行中任务的字节进度：键是任务 id。
 	// 只放内存、不落库：重启后任务重排，进度从 0 重新上报即可
@@ -187,12 +199,14 @@ func Open(db *sql.DB, workers int, onChange func()) (*Queue, error) {
 		wakes[i] = make(chan struct{}, 1)
 	}
 	return &Queue{
-		db:       db,
-		workers:  workers,
-		wakes:    wakes,
-		waiters:  make(map[int64][]chan struct{}),
-		progress: make(map[int64]progress),
-		onChange: onChange,
+		db:        db,
+		workers:   workers,
+		wakes:     wakes,
+		waiters:   make(map[int64][]chan struct{}),
+		progress:  make(map[int64]progress),
+		cancels:   make(map[int64]context.CancelFunc),
+		cancelReq: make(map[int64]struct{}),
+		onChange:  onChange,
 	}, nil
 }
 
@@ -367,13 +381,68 @@ func (q *Queue) checkCapacity(ctx context.Context) error {
 // 预期：排队中与执行中的任务保留；删完推一次状态，面板立即刷新
 func (q *Queue) ClearFinished(ctx context.Context) (int64, error) {
 	res, err := q.db.ExecContext(ctx,
-		`DELETE FROM jobs WHERE state IN (?, ?)`, stateDone, stateFailed)
+		`DELETE FROM jobs WHERE state IN (?, ?, ?)`, stateDone, stateFailed, stateCancelled)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
 	q.changed()
 	return n, nil
+}
+
+// Cancel 取消一条排队中或执行中的任务。
+//
+// 输入：ctx 仅用于数据库写入；id 任务 ID
+// 输出：ErrJobNotFound 记录不存在；ErrJobFinished 已经结束；nil 表示取消请求已生效
+// 预期：
+//   - 排队中的任务直接改写成 cancelled 终态，永远不会被 claim 到
+//   - 执行中的任务打断 handler 的 ctx；handler 返回后由 run 落 cancelled 终态，
+//     已发出去的消息与已完成的子操作不会回滚（取消只保证「不再继续」）
+//   - claim 与登记取消函数之间有一个极短窗口，落在这个窗口的请求记在 cancelReq 里，
+//     登记时立即生效，不会丢
+func (q *Queue) Cancel(ctx context.Context, id int64) error {
+	// 先看是否正在执行：能拿到取消函数就只打断它，状态由 run 收尾
+	q.cancelMu.Lock()
+	if fn, ok := q.cancels[id]; ok {
+		q.cancelMu.Unlock()
+		fn()
+		return nil
+	}
+	q.cancelMu.Unlock()
+
+	res, err := q.db.ExecContext(ctx, `
+UPDATE jobs SET state = ?, err = '', updated_at = ? WHERE id = ? AND state = ?`,
+		stateCancelled, nowUnix(), id, stateQueued)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		q.progMu.Lock()
+		delete(q.progress, id)
+		q.progMu.Unlock()
+		q.changed()
+		q.notifyDoneClose(id)
+		return nil
+	}
+
+	// 排队里没有：可能已经被 claim 成 running，也可能已经结束
+	var state string
+	err = q.db.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, id).Scan(&state)
+	isMissing := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !isMissing {
+		return err
+	}
+	if isMissing {
+		return ErrJobNotFound
+	}
+	if state != stateRunning {
+		return ErrJobFinished
+	}
+	// 正在执行但取消函数还没登记：登记时立即生效
+	q.cancelMu.Lock()
+	q.cancelReq[id] = struct{}{}
+	q.cancelMu.Unlock()
+	return nil
 }
 
 // Wait 等待一条任务结束。
@@ -420,7 +489,7 @@ func (q *Queue) Wait(ctx context.Context, id int64) error {
 		return err
 	}
 	switch state {
-	case stateDone:
+	case stateDone, stateCancelled:
 		return nil
 	case stateFailed:
 		return errors.New(msg)
@@ -437,7 +506,7 @@ func (q *Queue) Wait(ctx context.Context, id int64) error {
 		return err
 	}
 	switch state {
-	case stateDone:
+	case stateDone, stateCancelled:
 		return nil
 	case stateFailed:
 		return errors.New(msg)
@@ -688,11 +757,26 @@ func (q *Queue) run(ctx context.Context, job Job) {
 		q.finish(job.ID, errors.New(i18n.T("err.queue_no_handler")))
 		return
 	}
+	// 任务作用域 ctx：用户取消只打断这一条，不影响整个队列
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	q.armCancel(job.ID, cancelJob)
+	defer q.disarmCancel(job.ID)
+	defer cancelJob()
+
 	connRetries := 0
 	for {
-		err := handler(ctx, job)
+		err := handler(jobCtx, job)
 		if err == nil {
 			q.finish(job.ID, nil)
+			return
+		}
+		// 用户取消：落 cancelled 终态，不重试也不留 running 等重启重排
+		if jobCtx.Err() != nil {
+			if ctx.Err() != nil {
+				// 整个队列在关：留给下次启动重排
+				return
+			}
+			q.finishCancelled(job.ID)
 			return
 		}
 		// 进程退出导致的中断：不判失败，留给下次启动重排
@@ -727,12 +811,47 @@ func (q *Queue) run(ctx context.Context, job Job) {
 			wait = d + time.Second
 		}
 		slog.Debug(i18n.T("log.queue_retry", job.Name, job.Attempt, err), "task", job.Name, "kind", job.Kind)
-		if !sleep(ctx, wait) {
+		// 退避期间也必须能被取消打断，否则点了取消还要等一分钟
+		if !sleep(jobCtx, wait) {
+			if ctx.Err() == nil {
+				q.finishCancelled(job.ID)
+			}
 			return
 		}
 		job.Attempt++
 		q.bump(job.ID, job.Attempt)
 	}
+}
+
+// armCancel 登记执行中任务的取消函数。
+//
+// 输入：id 任务 ID；cancel 打断该任务 ctx 的函数
+// 输出：无
+// 预期：登记时若已有取消请求（落在 claim 与登记之间的窗口），立刻生效
+func (q *Queue) armCancel(id int64, cancel context.CancelFunc) {
+	q.cancelMu.Lock()
+	q.cancels[id] = cancel
+	pending := false
+	if _, ok := q.cancelReq[id]; ok {
+		pending = true
+		delete(q.cancelReq, id)
+	}
+	q.cancelMu.Unlock()
+	if pending {
+		cancel()
+	}
+}
+
+// disarmCancel 注销取消函数，避免表随任务数增长。
+//
+// 输入：id 任务 ID
+// 输出：无
+// 预期：任务结束后调用；未登记的 id 直接忽略
+func (q *Queue) disarmCancel(id int64) {
+	q.cancelMu.Lock()
+	delete(q.cancels, id)
+	delete(q.cancelReq, id)
+	q.cancelMu.Unlock()
 }
 
 // isConnInterrupted 判断错误是否来自传输层被上游打断。
@@ -791,6 +910,24 @@ func (q *Queue) finish(id int64, err error) {
 	if err != nil {
 		state, msg = stateFailed, err.Error()
 	}
+	q.finishState(id, state, msg)
+}
+
+// finishCancelled 把任务落成「已取消」终态。
+//
+// 输入：id 任务 ID
+// 输出：无
+// 预期：与失败区分开，面板不会显示成错误；清理与唤醒逻辑和 finish 完全一致
+func (q *Queue) finishCancelled(id int64) {
+	q.finishState(id, stateCancelled, "")
+}
+
+// finishState 写入终态、裁剪历史、推送状态并唤醒等待者。
+//
+// 输入：id 任务 ID；state 终态；msg 失败原因（成功/取消为空）
+// 输出：无
+// 预期：所有终态共用一条收尾路径，避免漏掉唤醒或裁剪
+func (q *Queue) finishState(id int64, state, msg string) {
 	if _, uerr := q.db.Exec(
 		`UPDATE jobs SET state = ?, err = ?, updated_at = ? WHERE id = ?`,
 		state, msg, nowUnix(), id); uerr != nil {
@@ -798,9 +935,9 @@ func (q *Queue) finish(id int64, err error) {
 		return
 	}
 	_, _ = q.db.Exec(`
-DELETE FROM jobs WHERE state IN (?, ?) AND id NOT IN (
-	SELECT id FROM jobs WHERE state IN (?, ?) ORDER BY id DESC LIMIT ?
-)`, stateDone, stateFailed, stateDone, stateFailed, keepFinished)
+DELETE FROM jobs WHERE state IN (?, ?, ?) AND id NOT IN (
+	SELECT id FROM jobs WHERE state IN (?, ?, ?) ORDER BY id DESC LIMIT ?
+)`, stateDone, stateFailed, stateCancelled, stateDone, stateFailed, stateCancelled, keepFinished)
 	// 结束（成功或失败）必须推一次：这是面板从「执行中」变成最终状态的唯一时点
 	q.changed()
 	// 进度只属于执行期，任务结束后不再保留

@@ -286,6 +286,9 @@
   "err.proxy_dialer": "代理拨号器不可用: %s",
   "log.proxy_unavailable": "SOCKS5 代理不可用: %v",
   "err.queue_unavailable": "当前入口不提供任务队列",
+  "err.queue_job_id": "任务号不合法",
+  "err.queue_job_missing": "这条任务已不存在",
+  "err.queue_job_finished": "任务已结束，无需取消",
   "log.queue_claim_failed": "队列领取任务失败: %v",
   "log.queue_finish_failed": "队列写回任务状态失败: %v"
 }

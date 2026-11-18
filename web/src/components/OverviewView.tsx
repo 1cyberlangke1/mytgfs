@@ -45,6 +45,8 @@ interface OverviewViewProps {
   onToggleTransferPause: (taskId: string) => void;
   onRetryTransfer: (taskId: string) => void;
   onCancelTransfer: (taskId: string) => void;
+  /** 取消服务端队列里的任务（排队中或执行中） */
+  onCancelQueueJob: (task: TransferTask) => void;
   onClearCompletedTransfers: () => void;
   /** 设置频道头像；nil 表示服务端不支持（面板隐藏入口） */
   onSetCover?: (volumeId: string, file: File) => Promise<void>;
@@ -75,6 +77,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onToggleTransferPause,
   onRetryTransfer,
   onCancelTransfer,
+  onCancelQueueJob,
   onClearCompletedTransfers,
   onSetCover,
   onSetTitle,
@@ -402,6 +405,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     ? t.overview.transferQueued
                     : task.state === 'paused'
                     ? t.overview.transferPaused
+                    : task.state === 'cancelled'
+                    ? t.overview.transferCancelled
                     : task.state === 'completed'
                     ? t.overview.transferCompleted
                     : t.overview.transferFailed;
@@ -448,6 +453,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                                 ? 'text-red-600 dark:text-red-400 font-medium'
                                 : task.state === 'transferring'
                                 ? 'text-[#007AFF] dark:text-[#0A84FF] font-medium'
+                                : task.state === 'cancelled'
+                                ? 'text-zinc-500 dark:text-zinc-400'
                                 : ''
                             }
                           >
@@ -504,6 +511,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                                   ? 'bg-red-500'
                                   : task.state === 'paused'
                                   ? 'bg-amber-500'
+                                  : task.state === 'cancelled'
+                                  ? 'bg-zinc-400 dark:bg-zinc-600'
                                   : 'bg-[#007AFF] dark:bg-[#0A84FF]'
                               }`}
                               style={{ transform: `scaleX(${pct / 100})` }}
@@ -557,18 +566,33 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           )}
                         </Button>
                       )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => onCancelTransfer(task.id)}
-                        aria-label={`${t.overview.cancelBtn} ${task.fileName}`}
-                        className={`text-zinc-400 hover:text-red-600 dark:hover:text-red-400 ${
-                          task.direction === 'download' || task.id.startsWith('q-') ? 'hidden' : ''
-                        }`}
-                      >
-                        <X className="w-4 h-4" />
-                      </Button>
+                      {/* 服务端队列任务：排队中/执行中给「取消」，结束后入口消失；
+                          本地任务只有上传能取消，下载走下载页自己的按钮 */}
+                      {task.id.startsWith('q-')
+                        ? (task.state === 'queued' || task.state === 'transferring') && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => onCancelQueueJob(task)}
+                              aria-label={`${t.overview.cancelBtn} ${task.fileName}`}
+                              className="text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          )
+                        : task.direction !== 'download' && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => onCancelTransfer(task.id)}
+                              aria-label={`${t.overview.cancelBtn} ${task.fileName}`}
+                              className="text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          )}
                     </div>
                   </motion.div>
                 );
