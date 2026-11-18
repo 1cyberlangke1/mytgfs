@@ -10,7 +10,15 @@ import (
 	"net/url"
 )
 
+// volumeMenuLabel 返回托盘卷入口的文字。
+//
+// 输入：name 卷名；used 已用字节（<0 表示读库失败，容量未知）
+// 输出：形如 "demo · 159.1 MB"；容量未知时只有卷名
+// 预期：托盘一眼看清是哪个盘、占多少；绝不把读取失败显示成 0 B
 func volumeMenuLabel(name string, used int64) string {
+	if used < 0 {
+		return name
+	}
 	return fmt.Sprintf("%s · %s", name, humanBytes(used))
 }
 
@@ -19,17 +27,15 @@ func volumeMenuLabel(name string, used int64) string {
 // 输入：name 卷名
 // 输出：带 tab/vol 查询参数的站内路径
 // 预期：前端首屏读参数直接切到该卷文件页；卷名做 URL 转义
-
 func volumeURL(name string) string {
 	return "/?tab=files&vol=" + url.QueryEscape(name)
 }
 
-// SyncInterval 把配置里的秒数换算成自动同步间隔。
+// humanBytes 把字节数格式化成人读文本。
 //
-// 输入：seconds 配置值
-// 输出：同步间隔；0 表示关闭
-// 预期：0 用默认 15 秒，负数关闭，正数按秒
-
+// 输入：n 字节数
+// 输出：带单位的两段式字符串
+// 预期：按 1024 进位，单位最大到 TB
 func humanBytes(n int64) string {
 	units := []string{"B", "KB", "MB", "GB", "TB"}
 	f := float64(n)

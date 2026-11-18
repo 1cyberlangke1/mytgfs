@@ -29,7 +29,8 @@ func plistPath() (string, error) {
 //
 // 输入：exe 可执行文件绝对路径
 // 输出：error
-// 预期：RunAtLoad=true；不设置 KeepAlive，用户主动退出后不复活；同目录有\n//       mytgfs-tray 时优先注册它
+// 预期：RunAtLoad=true；不设置 KeepAlive，用户主动退出后不复活；
+// 同目录有 mytgfs-tray 时优先注册它
 func Enable(exe string) error {
 	exe = PreferTray(exe)
 	p, err := plistPath()

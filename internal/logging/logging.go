@@ -5,7 +5,11 @@ package logging
 // 配置项缺失时使用安全默认值；日志不会无限增长。
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"strings"
 
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -33,9 +37,14 @@ func Warn(key string, err error, args ...any) {
 //
 // 输入：cfgPath 配置文件路径
 // 输出：无
-// 预期：配置缺失时用零值配置，Setup 内部回落安全默认；slog 只写轮转文件
+// 预期：配置缺失时用零值配置，Setup 内部回落安全默认；
+// 配置存在但读不动时先把原因写到 stderr（此时文件日志还没起），再按默认值建日志，
+// 不能静默当「没有配置」
 func SetupFromConfig(cfgPath string) {
-	cfg, _ := config.Load(cfgPath)
+	cfg, err := config.Load(cfgPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", i18n.T("err.config_read"), err)
+	}
 	_, _ = Setup(Config{
 		Level:      cfg.Log.Level,
 		File:       cfg.Log.File,

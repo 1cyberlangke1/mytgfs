@@ -95,7 +95,7 @@ func (a *App) adoptChannel(ctx context.Context, idx *index.Index, channelID int6
 //   - 没有 user 会话：跳过并返回 nil
 //   - 历史里没有节点消息：视为空卷，不写任何节点
 func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channelID int64) error {
-	n, err := idx.CountFiles(ctx)
+	n, err := idx.CountNodes(ctx)
 	if err != nil {
 		return err
 	}
@@ -124,14 +124,16 @@ func (a *App) RebuildIndexIfEmpty(ctx context.Context, idx *index.Index, channel
 // 输出：写入的节点数
 // 预期：远端为空时返回 0 且不改本地；没有 user 会话时返回错误，不静默成功
 func (a *App) RebuildIndex(ctx context.Context, idx *index.Index, channelID int64) (int, error) {
-	if _, serr := os.Stat(a.userSessionPath()); serr != nil {
-		return 0, ErrUserSessionMissing
-	}
 	nodes, err := a.AllNodes(ctx, channelID)
 	if err != nil {
 		return 0, err
 	}
 	if len(nodes) == 0 {
+		// AllNodes 在无 user 会话时只返回空列表：这里补判一次，
+		// 避免把「连不上/没会话」当成空频道而不报错
+		if _, serr := os.Stat(a.userSessionPath()); serr != nil {
+			return 0, ErrUserSessionMissing
+		}
 		return 0, nil
 	}
 	return tgsync.Rebuild(ctx, idx, nodes)

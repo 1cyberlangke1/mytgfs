@@ -203,17 +203,16 @@ type Session struct {
 	Client *tgclient.Client
 	API    telegramstore.API
 
-	app   *App
+	app *App
+	// mu 保护 own/extra 的惰性初始化：Session 会被队列 worker 与 HTTP handler 同时使用
+	mu    sync.Mutex
 	own   *telegramstore.Store
 	extra map[int64]*telegramstore.Store
 }
 
 // Store 返回本卷的 store（已配好并发、断点续传）。
 func (s *Session) Store() *telegramstore.Store {
-	if s.own == nil {
-		s.own = s.app.newStore(s.API, s.Volume.ChatID, s.Index)
-	}
-	return s.own
+	return s.storeFor(s.Volume.ChatID)
 }
 
 // StoreFor 返回任意频道的 store；与卷同频道时复用同一个实例。
@@ -221,8 +220,22 @@ func (s *Session) Store() *telegramstore.Store {
 // 输入：chatID 目标频道
 // 输出：可直接读写的 store
 func (s *Session) StoreFor(chatID int64) *telegramstore.Store {
+	return s.storeFor(chatID)
+}
+
+// storeFor 在持锁状态下取/建 store。
+//
+// 输入：chatID 目标频道
+// 输出：store
+// 预期：同一频道只建一次；同卷走 own，跨卷走 extra
+func (s *Session) storeFor(chatID int64) *telegramstore.Store {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if chatID == s.Volume.ChatID {
-		return s.Store()
+		if s.own == nil {
+			s.own = s.app.newStore(s.API, chatID, s.Index)
+		}
+		return s.own
 	}
 	if st, ok := s.extra[chatID]; ok {
 		return st

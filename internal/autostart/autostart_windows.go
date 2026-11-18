@@ -20,7 +20,8 @@ const (
 //
 // 输入：exe 可执行文件绝对路径
 // 输出：error
-// 预期：只影响当前用户；重复启用会覆盖旧命令；同目录有 mytgfs-tray.exe 时\n//       优先注册 GUI 版，登录时不弹控制台
+// 预期：只影响当前用户；重复启用会覆盖旧命令；
+// 同目录有 mytgfs-tray.exe 时优先注册 GUI 版，登录时不弹控制台
 func Enable(exe string) error {
 	exe = PreferTray(exe)
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)

@@ -70,7 +70,12 @@ type coverInvalidator interface {
 // 装配根用它失效头像缓存——事件驱动，不额外轮询 Telegram。
 
 func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool, onPtsMoved func()) {
-	tick := time.Tick(interval)
+	if interval <= 0 {
+		// 导出函数自己兜住非法间隔：time.NewTicker 对 <=0 会 panic
+		interval = time.Minute
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
 	syncOnce := func() (tgsync.ChannelSyncResult, error) {
 		if mu != nil {
 			mu.Lock()
@@ -109,7 +114,7 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick:
+		case <-tick.C:
 		}
 	}
 }

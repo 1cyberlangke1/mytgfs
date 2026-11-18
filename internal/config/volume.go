@@ -20,17 +20,52 @@ var ErrVolumeExists = errors.New(i18n.T("err.sentinel_volume_exists"))
 // ErrChannelAttached 表示这个频道已经挂成卷了。
 var ErrChannelAttached = errors.New(i18n.T("err.sentinel_channel_attached"))
 
+// maxVolumeNameBytes 是卷名允许的最大字节数（UTF-8）。
+const maxVolumeNameBytes = 64
+
+// ValidVolumeName 校验卷名能否安全用作文件名的一部分。
+//
+// 输入：name 用户输入的卷名（已 TrimSpace 由调用方决定）
+// 输出：nil 表示可用；否则是可展示的错误
+// 预期：
+//   - 卷名会拼进 data/index-<name>.db 与 data/thumbs/<name>，
+//     所以必须排除路径分隔符、父目录、盘符与 Windows 保留字符；
+//   - 允许中文等非 ASCII 名字，只要不含上述危险字符
+func ValidVolumeName(name string) error {
+	if name == "" {
+		return errors.New(i18n.T("err.volume_name_empty"))
+	}
+	if name == "." || name == ".." {
+		return errors.New(i18n.T("err.volume_name_invalid"))
+	}
+	if len(name) > maxVolumeNameBytes {
+		return errors.New(i18n.T("err.volume_name_too_long"))
+	}
+	for _, r := range name {
+		switch {
+		case r < 0x20, r == 0x7f, r == '/', r == '\\', r == ':',
+			r == '<', r == '>', r == '"', r == '|', r == '?', r == '*':
+			return errors.New(i18n.T("err.volume_name_invalid"))
+		}
+	}
+	// Windows 会把结尾的空格/点静默去掉，导致配置里的名字与磁盘目录不一致
+	if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
+		return errors.New(i18n.T("err.volume_name_invalid"))
+	}
+	return nil
+}
+
 // AppendVolume 在配置文件末尾追加一个 [[volumes]] 条目。
 //
 // 输入：path 配置文件；v 卷（Name 必填，ChatID 为频道 id）
-// 输出：error；同名卷返回 ErrVolumeExists
+// 输出：error；同名卷返回 ErrVolumeExists；名字不安全时返回校验错误
 // 预期：保留原有内容与注释，只在末尾追加；文件不存在时新建；
 //
 //	写入走临时文件 + rename，不会出现半截配置
 func AppendVolume(path string, v Volume) error {
 	name := strings.TrimSpace(v.Name)
-	if name == "" {
-		return errors.New(i18n.T("err.volume_name_empty"))
+	if err := ValidVolumeName(name); err != nil {
+		return err
 	}
 	if strings.ContainsAny(name, "\r\n") {
 		return errors.New(i18n.T("err.volume_name_newline"))

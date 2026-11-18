@@ -133,3 +133,78 @@ func TestListDedupes(t *testing.T) {
 		t.Fatalf("items=%d, 期望 1", len(items))
 	}
 }
+
+// pagedListAPI 按 OffsetID 返回不同的页，用来验证「满页继续拉」。
+type pagedListAPI struct {
+	pages   map[int][]tg.ChatClass
+	msgs    map[int][]tg.MessageClass
+	offsets []int
+}
+
+func (p *pagedListAPI) MessagesGetDialogs(_ context.Context, req *tg.MessagesGetDialogsRequest) (tg.MessagesDialogsClass, error) {
+	folder, _ := req.GetFolderID()
+	if folder == 1 {
+		return &tg.MessagesDialogsSlice{}, nil
+	}
+	p.offsets = append(p.offsets, req.OffsetID)
+	return &tg.MessagesDialogsSlice{Chats: p.pages[req.OffsetID], Messages: p.msgs[req.OffsetID]}, nil
+}
+
+func (p *pagedListAPI) ChannelsCreateChannel(context.Context, *tg.ChannelsCreateChannelRequest) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) ContactsResolveUsername(context.Context, *tg.ContactsResolveUsernameRequest) (*tg.ContactsResolvedPeer, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) ChannelsEditAdmin(context.Context, *tg.ChannelsEditAdminRequest) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) AccountUpdateNotifySettings(context.Context, *tg.AccountUpdateNotifySettingsRequest) (bool, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) ChannelsGetChannels(context.Context, []tg.InputChannelClass) (tg.MessagesChatsClass, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) ChannelsEditPhoto(context.Context, *tg.ChannelsEditPhotoRequest) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) ChannelsDeleteChannel(context.Context, tg.InputChannelClass) (tg.UpdatesClass, error) {
+	panic("unused")
+}
+func (p *pagedListAPI) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequest) (bool, error) {
+	panic("unused")
+}
+
+// TestListPaginatesDialogs 满页后用最后一条消息号续拉，直到不足一页。
+//
+// 输入：第一页 200 条频道 + 消息号 1000..1199；第二页 1 条频道
+// 输出：201 条；第二次请求 OffsetID=1199
+// 预期：超过 200 个频道的账号不会漏掉后面的频道
+func TestListPaginatesDialogs(t *testing.T) {
+	var page0 []tg.ChatClass
+	var msgs0 []tg.MessageClass
+	for i := 0; i < dialogPageSize; i++ {
+		page0 = append(page0, mkChannel(int64(i+1), true, false))
+		msgs0 = append(msgs0, &tg.Message{ID: 1000 + i})
+	}
+	api := &pagedListAPI{
+		pages: map[int][]tg.ChatClass{
+			0:    page0,
+			1199: {mkChannel(201, true, false)},
+		},
+		msgs: map[int][]tg.MessageClass{
+			0:    msgs0,
+			1199: {&tg.Message{ID: 1100}},
+		},
+	}
+	items, err := List(context.Background(), api)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != dialogPageSize+1 {
+		t.Fatalf("items=%d，期望 %d", len(items), dialogPageSize+1)
+	}
+	if len(api.offsets) != 2 || api.offsets[0] != 0 || api.offsets[1] != 1199 {
+		t.Fatalf("OffsetID 序列 = %v，期望 [0 1199]", api.offsets)
+	}
+}

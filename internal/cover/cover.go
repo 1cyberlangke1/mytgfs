@@ -23,6 +23,13 @@ import (
 // Side 是输出头像的边长（像素）。
 const Side = 512
 
+// maxPixels 是允许解码的最大像素数。
+//
+// 输入：无
+// 输出：宽×高的上限
+// 预期：挡住解压炸弹（小体积、巨尺寸），正常头像远小于这个量级
+const maxPixels = 40_000_000
+
 // ErrNoImage 表示输入不是可解码的图片。
 //
 // 输入：无（哨兵）
@@ -43,6 +50,13 @@ func (errNoImage) Error() string { return i18n.T("err.cover_decode") }
 //   - 小图放大到 Side，大图缩小，最终尺寸恒为 Side×Side
 //   - 无法解码时返回 ErrNoImage，绝不返回半成品
 func SquareJPEG(raw []byte) ([]byte, error) {
+	// 先只读文件头拿尺寸：几 MB 的高压缩比 PNG 能解出上亿像素，
+	// 直接 Decode 等于让一张头像把内存打满
+	if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr != nil {
+		return nil, ErrNoImage
+	} else if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return nil, ErrNoImage
+	}
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return nil, ErrNoImage

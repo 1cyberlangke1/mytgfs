@@ -8,6 +8,13 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+const (
+	// dialogPageSize 是单次 getDialogs 请回的最大对话条数（Telegram 上限 200）。
+	dialogPageSize = 200
+	// maxDialogPages 防止异常响应导致无限翻页；200×50 覆盖一万条对话。
+	maxDialogPages = 50
+)
+
 // Item 是一个频道摘要。
 //
 // 字段说明：ID 是频道原始 id；ChatID 是 Bot API 风格的 -100... 形式，
@@ -32,26 +39,45 @@ func List(ctx context.Context, api API) ([]Item, error) {
 	// 只查主文件夹会让它们凭空消失。
 	var chats []tg.ChatClass
 	for _, folder := range []int{0, 1} {
-		req := &tg.MessagesGetDialogsRequest{
-			OffsetPeer: &tg.InputPeerEmpty{},
-			Limit:      200,
-		}
-		if folder > 0 {
-			req.SetFolderID(folder)
-		}
-		res, err := api.MessagesGetDialogs(ctx, req)
-		if err != nil {
-			// 没有归档文件夹的账号调用会报错，忽略即可，不影响主文件夹结果
-			if folder > 0 {
-				continue
+		// 单次 getDialogs 最多回 200 条；账号拥有的频道可能更多，
+		// 用 offset_id 续拉，直到返回条数不足一页。
+		offsetID := 0
+		for page := 0; page < maxDialogPages; page++ {
+			req := &tg.MessagesGetDialogsRequest{
+				OffsetPeer: &tg.InputPeerEmpty{},
+				OffsetID:   offsetID,
+				Limit:      dialogPageSize,
 			}
-			return nil, err
-		}
-		switch m := res.(type) {
-		case *tg.MessagesDialogs:
-			chats = append(chats, m.Chats...)
-		case *tg.MessagesDialogsSlice:
-			chats = append(chats, m.Chats...)
+			if folder > 0 {
+				req.SetFolderID(folder)
+			}
+			res, err := api.MessagesGetDialogs(ctx, req)
+			if err != nil {
+				// 没有归档文件夹的账号调用会报错，忽略即可，不影响主文件夹结果
+				if folder > 0 {
+					break
+				}
+				return nil, err
+			}
+			var (
+				pageChats []tg.ChatClass
+				messages  []tg.MessageClass
+			)
+			switch m := res.(type) {
+			case *tg.MessagesDialogs:
+				pageChats, messages = m.Chats, m.Messages
+			case *tg.MessagesDialogsSlice:
+				pageChats, messages = m.Chats, m.Messages
+			}
+			chats = append(chats, pageChats...)
+			if len(pageChats) < dialogPageSize || len(messages) == 0 {
+				break
+			}
+			last := messages[len(messages)-1].GetID()
+			if last <= offsetID {
+				break
+			}
+			offsetID = last
 		}
 	}
 

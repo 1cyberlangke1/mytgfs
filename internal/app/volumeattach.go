@@ -36,6 +36,10 @@ func (a *App) AttachVolume(ctx context.Context, name string, chatID int64) (Volu
 	if name == "" {
 		return VolumeAttachResult{}, errors.New(i18n.T("err.volume_name_required"))
 	}
+	// 与建卷用同一套校验：挂载的名字同样会拼进索引文件名与缩略图目录
+	if err := config.ValidVolumeName(name); err != nil {
+		return VolumeAttachResult{}, err
+	}
 	if _, ok := a.findConfiguredVolume(name); ok {
 		return VolumeAttachResult{}, config.ErrVolumeExists
 	}

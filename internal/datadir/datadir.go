@@ -8,6 +8,7 @@
 package datadir
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -19,8 +20,12 @@ const Dir = "data"
 //
 // 输入：name 文件名或子路径
 // 输出：相对路径；目录创建失败时仍返回路径，由使用方报错
+// 预期：建目录失败不静默吞掉——此时文件日志可能还没起来，
+// 直接写 stderr 提示，避免错误点远离根因
 func Path(name string) string {
 	p := filepath.Join(Dir, name)
-	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
+	}
 	return p
 }

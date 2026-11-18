@@ -74,10 +74,9 @@ func Create(ctx context.Context, api channel.API, req Request) (Result, error) {
 
 	botID, err := channel.AddBot(ctx, api, ch, req.BotUsername)
 	if err != nil {
-		// 请求被取消：把刚建出来的空频道删掉，避免留下孤儿频道
-		if ctx.Err() != nil {
-			_ = CleanupCancelled(ctx, api, partial)
-		}
+		// 拉 bot 失败（权限不足、用户名不存在、请求被取消）：频道刚建好还没进配置，
+		// 留着就是用户既看不到也用不上的孤儿频道，统一删掉
+		_ = CleanupCancelled(ctx, api, partial)
 		return partial, fmt.Errorf(i18n.T("err.channel_created_bot_failed")+": %w", ch.ChannelID, err)
 	}
 	partial.BotID = botID

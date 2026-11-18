@@ -27,11 +27,16 @@ func desktopPath() (string, error) {
 //
 // 输入：exe 可执行文件绝对路径
 // 输出：error
-// 预期：文件已存在时覆盖；桌面环境登录后自动拉托盘；同目录有 mytgfs-tray\n//       时优先注册它
+// 预期：目标目录不存在时先建（全新用户没有 ~/.config/autostart）；
+// 文件已存在时覆盖；桌面环境登录后自动拉托盘；
+// 同目录有 mytgfs-tray 时优先注册它
 func Enable(exe string) error {
 	exe = PreferTray(exe)
 	p, err := desktopPath()
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
 	return atomic.WriteFile(p, strings.NewReader(desktopEntry(exe)))

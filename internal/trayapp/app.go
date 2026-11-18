@@ -84,7 +84,8 @@ func Run(opts Options) error {
 	defer rootCancel()
 
 	var mu sync.Mutex
-	var cancels []context.CancelFunc
+	// cancels 按卷名存放：卷卸载时摘掉，反复建/删卷不会让切片无限增长
+	var cancels = map[string]context.CancelFunc{}
 	var wg sync.WaitGroup
 
 	// ---- 桌面壳（Wails）：窗口 + 托盘，不监听端口、不打开浏览器 ----
@@ -215,7 +216,7 @@ func Run(opts Options) error {
 	unmountAll := func() {
 		mu.Lock()
 		cs := cancels
-		cancels = nil
+		cancels = map[string]context.CancelFunc{}
 		mu.Unlock()
 		for _, c := range cs {
 			c()
@@ -459,22 +460,29 @@ func Run(opts Options) error {
 	}
 
 	// openVolume 把一个卷接进托盘：索引、存储与文件管理都由装配根给出
-	mountOne := func(name string, channelID int64) {
+	// openVolume 把一个卷接进托盘：索引、存储与文件管理都由装配根给出。
+	// 返回 true 表示挂载成功；失败时已在内部记日志并推送状态。
+	// lastMountErr 是最近一次挂载失败的原因：mountOne 在对账锁内写，
+	// 重试日志读它，才能说明「为什么还在重试」而不只是报卷名
+	var lastMountErr error
+	mountOne := func(name string, channelID int64) bool {
 		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
 		if perr != nil {
+			lastMountErr = perr
 			logging.Warn("tray.volume.open_failed", perr, name)
 			pushHub.Publish(push.TopicStatus)
-			return
+			return false
 		}
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、文件系统语义与文件管理统一由装配根给出
 		vf, oerr := appRoot.OpenVolume(vctx, name, api)
 		if oerr != nil {
+			lastMountErr = oerr
 			logging.Warn("log.index_open_failed", oerr)
 			vcancel()
 			closePool()
 			pushHub.Publish(push.TopicStatus)
-			return
+			return false
 		}
 		idx, store, fsys, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
 		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
@@ -500,7 +508,7 @@ func Run(opts Options) error {
 		})
 
 		mu.Lock()
-		cancels = append(cancels, vcancel)
+		cancels[name] = vcancel
 		mu.Unlock()
 
 		// 卷常驻到退出或被删卷：vctx 取消后清理资源并把自己从账本摘除
@@ -510,9 +518,13 @@ func Run(opts Options) error {
 			_ = vf.Close()
 			closePool()
 			reg.Delete(name)
+			mu.Lock()
+			delete(cancels, name)
+			mu.Unlock()
 			close(tv.done)
 			rebuildMenu()
 		})
+		return true
 	}
 
 	// isMounted 判断卷是否已经在托盘里。
@@ -531,6 +543,7 @@ func Run(opts Options) error {
 	reconcileVolumes = func() {
 		reconcileMu.Lock()
 		defer reconcileMu.Unlock()
+		lastMountErr = nil
 		cur, err := config.Load(cfgPath)
 		if err != nil {
 			logging.Warn("log.volume_warn", err)
@@ -575,6 +588,23 @@ func Run(opts Options) error {
 		}
 		return true
 	}
+	// pendingVolumes 返回配置里启用但还没挂上的卷名，供重试日志说明原因。
+	pendingVolumes := func() []string {
+		cur := appRoot.Config()
+		var names []string
+		if len(cur.Volumes) == 0 {
+			if !isMounted(app.DefaultVolumeName) && cur.Telegram.ChannelID != 0 {
+				names = append(names, app.DefaultVolumeName)
+			}
+			return names
+		}
+		for _, v := range cur.Volumes {
+			if v.Enabled && !isMounted(v.Name) {
+				names = append(names, v.Name)
+			}
+		}
+		return names
+	}
 	// mountUntilAll 反复重试直到全部卷挂载成功或进程退出。
 	mountUntilAll := func(ctx context.Context) {
 		wait := 2 * time.Second
@@ -583,7 +613,11 @@ func Run(opts Options) error {
 			if allMounted() || ctx.Err() != nil {
 				return
 			}
-			logging.Warn("log.mount_retry", nil)
+			// 卷名 + 最近一次失败原因：只说「还在重试谁」会丢掉为什么
+			reconcileMu.Lock()
+			cause := lastMountErr
+			reconcileMu.Unlock()
+			logging.Warn("log.mount_retry", cause, pendingVolumes())
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():
@@ -634,7 +668,12 @@ func Run(opts Options) error {
 			menu.AddSeparator()
 			// 每卷一项：名字 + 已用容量，点击直接打开该卷文件页
 			for _, v := range vs {
-				used, _ := v.idx.Used(rootCtx)
+				used, uerr := v.idx.Used(rootCtx)
+				if uerr != nil {
+					// 读库失败不冒充 0 字节：日志留痕，菜单文案退化成「未知」
+					logging.Warn("log.volume_warn", uerr, v.name)
+					used = -1
+				}
 				menu.Add(volumeMenuLabel(v.name, used)).OnClick(func(*application.Context) {
 					openVolume(v.name)
 				})
@@ -691,8 +730,17 @@ func Run(opts Options) error {
 		var downloads, queued int
 		for _, v := range vs {
 			if children, lerr := v.idx.Children(rootCtx, 0); lerr == nil {
-				used, _ := v.idx.Used(rootCtx)
-				lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol"), v.name, len(children), humanBytes(used)))
+				used, uerr := v.idx.Used(rootCtx)
+				if uerr != nil {
+					// 读库失败不冒充 0 字节：日志留痕，提示里容量显示「未知」
+					logging.Warn("log.volume_warn", uerr, v.name)
+					used = -1
+				}
+				if used < 0 {
+					lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol_unknown"), v.name, len(children)))
+				} else {
+					lines = append(lines, fmt.Sprintf(i18n.T("tray.tip.vol"), v.name, len(children), humanBytes(used)))
+				}
 			}
 			if v.fsys == nil {
 				continue
@@ -722,8 +770,6 @@ func Run(opts Options) error {
 	// 主循环起来之后才能安全操作窗口与托盘对象
 	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		ready.Store(true)
-		// 安卓没有托盘：用前台服务把进程挂在后台，息屏后同步/上传才不会被回收
-		startForeground()
 		sysTray.SetMenu(buildMenu())
 		sysTray.SetTooltip(tooltipText())
 	})

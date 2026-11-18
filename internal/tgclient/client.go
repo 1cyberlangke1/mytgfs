@@ -102,6 +102,10 @@ type Client struct {
 	*telegram.Client
 	waiter   *floodwait.Waiter
 	botToken string
+	// initErr 记录构造期的致命错误（例如代理地址非法）。
+	// 配置了代理却连不上时绝不能静默直连：那等于把流量从代理泄漏出去，
+	// 所以这里把错误留到 Run 里返回，让入口明确失败并提示改配置。
+	initErr error
 }
 
 // New 创建带 floodwait 中间件的客户端。
@@ -154,7 +158,7 @@ func New(apiID int, apiHash string, sess session.Storage, opts Options) *Client 
 		// Resolver 显式走 SOCKS5 时由代理建立 MTProto 的 TCP
 		Resolver: resolver,
 	})
-	return &Client{Client: client, waiter: waiter, botToken: opts.BotToken}
+	return &Client{Client: client, waiter: waiter, botToken: opts.BotToken, initErr: rerr}
 }
 
 // mapConnState 把 gotd 的连接状态映射成本包的精简枚举。
@@ -182,8 +186,12 @@ func mapConnState(fn func(ConnState)) func(telegram.ConnectionState) {
 //
 // 输入：ctx；f 业务回调
 // 输出：error
-// 预期：ctx 取消时一起退出；flood 等待期间不会阻塞调度器
+// 预期：构造期错误（代理地址非法）在此直接返回，绝不静默改成直连；
+// ctx 取消时一起退出；flood 等待期间不会阻塞调度器
 func (c *Client) Run(ctx context.Context, f func(context.Context) error) error {
+	if c.initErr != nil {
+		return fmt.Errorf("%s: %w", i18n.T("err.proxy_unavailable"), c.initErr)
+	}
 	return c.waiter.Run(ctx, func(ctx context.Context) error {
 		return c.Client.Run(ctx, func(ctx context.Context) error {
 			if err := c.ensureLogin(ctx); err != nil {

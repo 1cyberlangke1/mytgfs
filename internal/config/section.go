@@ -43,7 +43,8 @@ func rewriteSection(path, name string, kv []string, drop []string) error {
 		}
 		lines = append(lines, header)
 		lines = append(lines, kv...)
-		return atomic.WriteFile(path, strings.NewReader(strings.Join(lines, "\n")))
+		// 新建段后补结尾换行：否则下一次追加内容会粘在最后一行后面
+		return atomic.WriteFile(path, strings.NewReader(strings.Join(lines, "\n")+"\n"))
 	}
 
 	// 段尾：下一个以 [ 开头的行
@@ -117,5 +118,35 @@ func splitKeyValue(line string) (key, value string) {
 	if !ok || key == "" {
 		return "", ""
 	}
-	return strings.TrimSpace(key), strings.TrimSpace(value)
+	return strings.TrimSpace(key), stripInlineComment(strings.TrimSpace(value))
+}
+
+// stripInlineComment 去掉值后面的行内注释。
+//
+// 输入：TOML 值（可能带 ` # 注释`）
+// 输出：去掉注释并 TrimSpace 后的值
+// 预期：
+//   - 只在引号外把 `#` 当注释起点：`path = "a#b"` 的值保持 `"a#b"`
+//   - 支持 TOML 的多行字符串起始（""" / ”'）时不做剥离，交给调用方原样处理
+func stripInlineComment(v string) string {
+	if v == "" {
+		return v
+	}
+	if strings.HasPrefix(v, `"""`) || strings.HasPrefix(v, "'''") {
+		return v
+	}
+	var quote rune
+	for i, r := range v {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#':
+			return strings.TrimSpace(v[:i])
+		}
+	}
+	return v
 }

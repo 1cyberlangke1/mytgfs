@@ -123,12 +123,15 @@ func New(p Paths) *Service {
 // 预期：只做本地文件检查，不连 Telegram
 func (s *Service) Status() Status {
 	var st Status
-	cfg, err := config.Load(s.p.ConfigPath)
-	if err == nil {
-		st.APIID = cfg.Telegram.APIID
-		st.APIHashSet = readTrim(cmp.Or(cfg.Telegram.APIHashFile, s.p.APIHashFile)) != ""
-		st.BotTokenSet = readTrim(cmp.Or(cfg.Telegram.BotTokenFile, s.p.BotTokenFile)) != ""
+	// 配置读不到时也要用 Paths 里的会话路径判断登录态：
+	// 否则面板会把「有会话」误报成未登录
+	cfg := config.Config{}
+	if c, err := config.Load(s.p.ConfigPath); err == nil {
+		cfg = c
 	}
+	st.APIID = cfg.Telegram.APIID
+	st.APIHashSet = readTrim(cmp.Or(cfg.Telegram.APIHashFile, s.p.APIHashFile)) != ""
+	st.BotTokenSet = readTrim(cmp.Or(cfg.Telegram.BotTokenFile, s.p.BotTokenFile)) != ""
 	st.BotSession = fileExists(s.p.BotSession)
 	st.UserSession = fileExists(s.p.UserSession)
 	return st
@@ -146,7 +149,12 @@ func (s *Service) SaveCredentials(ctx context.Context, apiID int, apiHash, botTo
 			return Status{}, err
 		}
 	}
-	cfg, _ := config.Load(s.p.ConfigPath)
+	cfg, err := config.Load(s.p.ConfigPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// 配置语法坏掉时不能静默回落到默认密钥路径：否则会写到一个
+		// 用户并不知道的新文件里，面板显示「已保存」但登录仍失败
+		return Status{}, fmt.Errorf("%s: %w", i18n.T("err.config_read"), err)
+	}
 	if v := strings.TrimSpace(apiHash); v != "" {
 		if err := writeSecret(cmp.Or(cfg.Telegram.APIHashFile, s.p.APIHashFile), v); err != nil {
 			return Status{}, err

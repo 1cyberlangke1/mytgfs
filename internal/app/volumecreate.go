@@ -50,6 +50,11 @@ func (a *App) CreateVolume(ctx context.Context, name, title, botUsername string)
 	if name == "" {
 		return VolumeCreateResult{}, errors.New(i18n.T("err.volume_name_required"))
 	}
+	// 卷名会拼进索引文件名与缩略图目录：先挡住路径分隔符与父目录，
+	// 否则建一个名字带 .. 的卷，删卷时会把上层目录整棵删掉
+	if err := config.ValidVolumeName(name); err != nil {
+		return VolumeCreateResult{}, err
+	}
 	if _, ok := a.findConfiguredVolume(name); ok {
 		return VolumeCreateResult{}, config.ErrVolumeExists
 	}
@@ -86,6 +91,12 @@ func (a *App) CreateVolume(ctx context.Context, name, title, botUsername string)
 		})
 	})
 	if err != nil {
+		// 配置没写进去时频道已经建好：删掉，不留用户看不见也用不上的孤儿频道
+		if res.ChannelID != 0 && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			_ = a.withUserAPI(context.WithoutCancel(ctx), func(cctx context.Context, api *tg.Client) error {
+				return volume.CleanupCancelled(cctx, api, res)
+			})
+		}
 		return VolumeCreateResult{}, authLostHint(err)
 	}
 	if res.AvatarErr != nil {

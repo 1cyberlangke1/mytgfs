@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mytgfs/internal/channel"
+	"mytgfs/internal/logging"
 	"mytgfs/internal/push"
 	"mytgfs/internal/telegramstore"
 	"mytgfs/internal/volume"
@@ -63,6 +64,13 @@ type CoverProvider struct {
 
 	mu    sync.Mutex
 	cache map[int64]coverEntry
+
+	// verifyMu/verifying 去重后台版本核对：面板反复刷新不该叠加多个 15s 协程
+	verifyMu  sync.Mutex
+	verifying map[int64]struct{}
+	// setMu 串行化「写头像 + 读新 version + 记缓存」，
+	// 两次并发换头像不会配成「新版本号 + 旧字节」
+	setMu sync.Mutex
 }
 
 // NewCoverProvider 构造封面路由。
@@ -86,9 +94,10 @@ func NewCoverProvider(a *App, lookup func(name string) (*VolumeFS, bool), cacheD
 		grant: func(ctx context.Context, channelID, accessHash int64, botUsername string) error {
 			return a.GrantChannelBot(ctx, channelID, accessHash, botUsername)
 		},
-		cacheDir: cacheDir,
-		bus:      a.Bus(),
-		cache:    make(map[int64]coverEntry),
+		cacheDir:  cacheDir,
+		bus:       a.Bus(),
+		cache:     make(map[int64]coverEntry),
+		verifying: map[int64]struct{}{},
 	}
 }
 
@@ -265,6 +274,10 @@ func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) e
 	if !ok {
 		return ErrVolumeNotFound{Name: vol}
 	}
+	// 写头像、读新版本、记缓存必须是一个整体：并发换两次头像时，
+	// 否则可能出现「新版本号 + 旧字节」的组合直到下次失效
+	p.setMu.Lock()
+	defer p.setMu.Unlock()
 	if err := p.set(ctx, v.chatID, data); err != nil {
 		return err
 	}
@@ -283,8 +296,29 @@ func (p *CoverProvider) SetCover(ctx context.Context, vol string, data []byte) e
 }
 
 // verifyLater 异步核对磁盘缓存的版本：外部换头像后被纠正并推送面板。
+//
+// 输入：cv 卷信息；cachedVersion 当前缓存的版本
+// 输出：无
+// 预期：同一频道同时只跑一个核对，重复调用直接返回
 func (p *CoverProvider) verifyLater(cv coverVolume, cachedVersion string) {
+	p.verifyMu.Lock()
+	if p.verifying == nil {
+		// 零值构造（测试/嵌入式装配）时惰性初始化，避免往 nil map 写入
+		p.verifying = map[int64]struct{}{}
+	}
+	if _, busy := p.verifying[cv.chatID]; busy {
+		p.verifyMu.Unlock()
+		return
+	}
+	p.verifying[cv.chatID] = struct{}{}
+	p.verifyMu.Unlock()
+
 	go func() {
+		defer func() {
+			p.verifyMu.Lock()
+			delete(p.verifying, cv.chatID)
+			p.verifyMu.Unlock()
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if !p.verifyDisk(ctx, cv, cachedVersion) {
@@ -323,12 +357,19 @@ func (p *CoverProvider) remember(chatID int64, version string, jpeg []byte) {
 		return
 	}
 	target := filepath.Join(p.cacheDir, p.fileName(chatID, version))
+	// 缓存目录可能在首次写入时尚不存在（全新安装、刚清过缓存）：
+	// 不建就直接写会把封面缓存永久性关掉，且此前没有任何日志
+	if err := os.MkdirAll(p.cacheDir, 0o700); err != nil {
+		logging.Warn("log.cover_set_failed", err, "cacheDir", p.cacheDir)
+		return
+	}
 	tmp := target + ".tmp"
 	if err := os.WriteFile(tmp, jpeg, 0o600); err != nil {
 		return
 	}
 	if err := os.Rename(tmp, target); err != nil {
 		_ = os.Remove(tmp)
+		logging.Warn("log.cover_set_failed", err, "path", target)
 		return
 	}
 	// 只留最新版本：旧 photo id 的文件删掉防堆积

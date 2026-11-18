@@ -18,6 +18,10 @@ import (
 var (
 	mu       sync.RWMutex
 	jsonMode bool
+	// outputMu/outputErr 记录「结果没能写出去」：编码失败时 main 要返回非零退出码，
+	// 否则脚本会把写失败当成成功
+	outputMu  sync.Mutex
+	outputErr error
 )
 
 // EnableJSON 打开 JSON 输出。
@@ -46,11 +50,22 @@ func DisableJSON() {
 	mu.Unlock()
 }
 
+// OutputFailed 报告最近一次 JSON 输出是否编码失败。
+//
+// 输入：无
+// 输出：true 表示有结果没能写出去
+// 预期：main 据此返回非零退出码，脚本不会把「写失败」当成成功
+func OutputFailed() bool {
+	outputMu.Lock()
+	defer outputMu.Unlock()
+	return outputErr != nil
+}
+
 // Print 在 JSON 模式下输出一条成功结果。
 //
 // 输入：data 可序列化的结果
 // 输出：一行 JSON（默认模式下什么都不做）
-// 预期：序列化失败时退回错误输出，不 panic
+// 预期：序列化失败时退回错误输出并记下失败状态，不 panic
 func Print(data any) {
 	if !JSONMode() {
 		return
@@ -58,6 +73,9 @@ func Print(data any) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(map[string]any{"ok": true, "data": data}); err != nil {
+		outputMu.Lock()
+		outputErr = err
+		outputMu.Unlock()
 		Error("encode", err)
 	}
 }
