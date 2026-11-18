@@ -35,6 +35,9 @@ type file struct {
 	perm  os.FileMode
 	// node 是读模式下打开的文件或目录节点
 	node *index.Node
+	// ctx 是打开句柄时的调用方 ctx：读远端数据与回写索引都用它，
+	// 请求取消后不该继续在后台写库；为零值时退回进程级 ctx
+	ctx context.Context
 
 	off  int64
 	buf  []byte
@@ -135,6 +138,17 @@ func (f *file) record(ctx context.Context, submitted string, parent int, base, s
 	if gerr != nil {
 		return gerr
 	}
+	// 失败路径要把刚写的 pending_done 撤掉：它指向的节点还没进 nodes 表，
+	// 留着会让下一次同 sha 上传走「只补登记」分支，登记到旧消息上
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if derr := f.d.idx.DeletePendingDone(context.WithoutCancel(ctx), name); derr != nil {
+			slog.Debug(i18n.T("log.cleanup_acked"), "path", name, "err", derr)
+		}
+	}()
 	// 先删旧的本地节点，再写新的：nodes 表对 (parent_id, name) 唯一，
 	// 同路径覆盖写若先插新行会撞约束。
 	if hadOld && old.ID > 0 && old.ID != part.MessageID {
@@ -165,6 +179,7 @@ func (f *file) record(ctx context.Context, submitted string, parent int, base, s
 	if err := f.d.idx.DeletePendingDone(ctx, name); err != nil {
 		slog.Debug(i18n.T("log.cleanup_acked"), "path", name, "err", err)
 	}
+	committed = true
 	f.d.notify()
 	return nil
 }
@@ -263,28 +278,58 @@ func (f *file) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if f.buf == nil || f.off < f.base || f.off >= f.base+int64(len(f.buf)) {
-		length := f.d.chunk.Load()
-		if length <= 0 {
-			length = 1 << 20
-		}
-		if f.off+length > f.node.Size {
-			length = f.node.Size - f.off
-		}
-		data, err := f.readRange(f.off, int(length))
+		data, base, err := f.blockAt(f.off)
 		if err != nil {
 			// 消息在 Telegram 侧被删了：本地这条已经没有意义，删掉并按文件不存在处理
 			if telegramstore.IsMessageGone(err) {
 				slog.Debug(i18n.T("log.remote_gone"), "path", f.name, "msg", f.node.ID)
 				_ = f.d.idx.DeleteNode(f.d.ctx, f.node.ID)
+				f.d.cache.Drop(f.node.ID)
 				return 0, os.ErrNotExist
 			}
 			return 0, err
 		}
-		f.buf, f.base = data, f.off
+		f.buf, f.base = data, base
+	}
+	if f.off-f.base >= int64(len(f.buf)) {
+		// 短读（远端只给了块的一部分）：按读到文件尾处理，不能让切片越界
+		return 0, io.EOF
 	}
 	n := copy(p, f.buf[f.off-f.base:])
 	f.off += int64(n)
 	return n, nil
+}
+
+// blockAt 取包含 off 的读块，命中共享缓存时不再访问远端。
+//
+// 输入：off 文件内偏移
+// 输出：块数据、块起点偏移、error
+// 预期：块按 chunk 对齐且不超过文件尾；同一节点同一块只下载一次，
+// 这样每个 /api/file 窗口新开句柄也不会重复拉同一段
+func (f *file) blockAt(off int64) ([]byte, int64, error) {
+	size := f.d.chunk.Load()
+	if size <= 0 {
+		size = 1 << 20
+	}
+	blockIdx := off / size
+	base := blockIdx * size
+	want := f.node.Size - base
+	if want > size {
+		want = size
+	}
+	if want <= 0 {
+		return nil, base, io.EOF
+	}
+	key := blockKey{id: f.node.ID, index: blockIdx, length: int(want)}
+	if data, ok := f.d.cache.Get(key); ok && off < base+int64(len(data)) {
+		return data, base, nil
+	}
+	data, err := f.readRange(base, int(want))
+	if err != nil {
+		return nil, 0, err
+	}
+	f.d.cache.Put(key, data)
+	return data, base, nil
 }
 
 // readRange 读取一块远端数据；file_reference 过期时刷新元数据并重试一次。
@@ -294,35 +339,39 @@ func (f *file) Read(p []byte) (int, error) {
 // 预期：刷新成功时只把新引用字段写回本地节点，名字/父号/路径保持库里现有值，
 // 避免用打开句柄时的旧快照覆盖同步循环刚应用的改名；不改动其它消息。
 func (f *file) readRange(ofst int64, length int) ([]byte, error) {
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = f.d.ctx
+	}
 	prog := func(done int64) { f.d.track(f.name, done, f.node.Size) }
-	data, err := f.d.store.ReadRange(f.d.ctx, partOf(*f.node), ofst, length, prog)
+	data, err := f.d.store.ReadRange(ctx, partOf(*f.node), ofst, length, prog)
 	if err == nil {
 		return data, nil
 	}
 	if !telegramstore.IsFileReferenceError(err) {
 		return nil, err
 	}
-	part, rerr := f.d.store.Refresh(f.d.ctx, f.node.ID)
+	part, rerr := f.d.store.Refresh(ctx, f.node.ID)
 	if rerr != nil {
 		return nil, rerr
 	}
-	updated, perr := f.d.applyRefreshed(f.node.ID, part)
+	updated, perr := f.d.applyRefreshed(ctx, f.node.ID, part)
 	if perr != nil {
 		return nil, perr
 	}
 	f.node = updated
-	return f.d.store.ReadRange(f.d.ctx, partOf(*updated), ofst, length, prog)
+	return f.d.store.ReadRange(ctx, partOf(*updated), ofst, length, prog)
 }
 
 // applyRefreshed 把刷新到的文档引用写回本地节点，返回最新节点。
 //
-// 输入：id 节点消息号；part 远端最新元数据
+// 输入：ctx 请求作用域；id 节点消息号；part 远端最新元数据
 // 输出：写回后的节点；error
 // 预期：只更新 document/access_hash/file_reference/size；
 // 名字、父号、路径、时间、摘要以库里现有值为准（可能已被同步循环改过），
 // 否则打开句柄时的旧快照会把刚应用的改名覆盖回去
-func (d *FileSystem) applyRefreshed(id int, part *telegramstore.Part) (*index.Node, error) {
-	cur, ok, err := d.idx.NodeByID(d.ctx, id)
+func (d *FileSystem) applyRefreshed(ctx context.Context, id int, part *telegramstore.Part) (*index.Node, error) {
+	cur, ok, err := d.idx.NodeByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +382,7 @@ func (d *FileSystem) applyRefreshed(id int, part *telegramstore.Part) (*index.No
 	cur.AccessHash = part.AccessHash
 	cur.FileReference = part.FileReference
 	cur.Size = part.Size
-	if err := d.idx.PutNode(d.ctx, cur); err != nil {
+	if err := d.idx.PutNode(ctx, cur); err != nil {
 		return nil, err
 	}
 	return &cur, nil

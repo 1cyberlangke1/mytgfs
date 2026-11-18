@@ -12,6 +12,7 @@ package vfs
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -38,16 +39,31 @@ func (d *FileSystem) ResumePending() error {
 			_ = tmp.Close()
 			_ = d.idx.DeletePending(d.ctx, p.Path)
 			_ = os.Remove(p.Temp)
+			slog.Info(i18n.T("log.resume_delete"), "path", p.Path)
 			continue
 		}
-		// 摘要按临时文件实际内容计算，作为断点键与去重依据
-		h := sha256.New()
-		if _, cerr := io.Copy(h, tmp); cerr != nil {
+		// 上次已上传成功只是没写成节点：直接复用断点里记录的摘要。
+		// 只有临时文件大小与断点一致时才可信，否则仍按实际内容重算
+		done, dok, derr := d.idx.GetPendingDone(d.ctx, p.Path)
+		if derr != nil {
 			_ = tmp.Close()
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, derr), "path", p.Path)
 			continue
+		}
+		var sha string
+		if dok && done.Sha256 != "" && done.Size == p.Size {
+			sha = done.Sha256
+		} else {
+			// 摘要按临时文件实际内容计算，作为断点键与去重依据
+			h := sha256.New()
+			if _, cerr := io.Copy(h, tmp); cerr != nil {
+				_ = tmp.Close()
+				slog.Warn(i18n.T("log.pending_resume_failed", p.Path, cerr), "path", p.Path)
+				continue
+			}
+			sha = hex.EncodeToString(h.Sum(nil))
 		}
 		_ = tmp.Close()
-		sha := hex.EncodeToString(h.Sum(nil))
 		parent, base, ok, perr := d.parentOf(d.ctx, p.Path)
 		if perr != nil || !ok {
 			// 父目录还没重建出来：留着账本，下次启动再试
@@ -56,9 +72,11 @@ func (d *FileSystem) ResumePending() error {
 		}
 		body, berr := nodeBody(base, parent.ID, false, sha)
 		if berr != nil {
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, berr), "path", p.Path)
 			continue
 		}
 		if d.q == nil {
+			slog.Warn(i18n.T("log.pending_resume_failed", p.Path, errors.New("queue not attached")), "path", p.Path)
 			continue
 		}
 		if _, err := d.q.EnqueueOnce(d.ctx, queue.Job{

@@ -6,12 +6,14 @@ package vfs
 // 删除只给节点自己那条消息打删除标记；本地索引里的 path 只是派生缓存。
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -29,7 +31,6 @@ import (
 // Store 是本层需要的存储能力。
 type Store interface {
 	ReadRange(ctx context.Context, p *telegramstore.Part, offset int64, length int, progress func(done int64)) ([]byte, error)
-	Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*telegramstore.Part, error)
 	// UploadResumable 按内容 key 断点续传，中断后能跳过已上传分片
 	UploadResumable(ctx context.Context, r io.ReaderAt, size int64, key, name, mime, caption string, opts ...telegramstore.UploadOption) (*telegramstore.Part, error)
 	// Refresh 按消息 ID 重新拉取 document 元数据（file_reference 过期时用）
@@ -68,6 +69,9 @@ type FileSystem struct {
 	upProg atomic.Pointer[UploadProgressFunc]
 	// copySource 解析跨卷复制的源卷；未接入时跨卷复制任务直接失败
 	copySource CopySource
+	// cache 是跨句柄共享的读块缓存：每个 /api/file 窗口都会新开句柄，
+	// 若块缓存只挂在句柄上，同一段数据会被反复从 Telegram 重下
+	cache *blockCache
 }
 
 // notify 推送一次「卷内容变了」。
@@ -102,7 +106,7 @@ func (d *FileSystem) notifyProgress() {
 // 输出：*FileSystem
 // 预期：所有路径都相对于卷根 "/"；events 为 nil 表示当前进程没有面板可通知
 func New(ctx context.Context, idx *index.Index, store Store, chunk int64, events push.Events) *FileSystem {
-	d := &FileSystem{ctx: ctx, idx: idx, store: store, events: events}
+	d := &FileSystem{ctx: ctx, idx: idx, store: store, events: events, cache: newBlockCache(blockCacheBytes)}
 	d.SetChunk(chunk)
 	return d
 }
@@ -128,7 +132,27 @@ func (d *FileSystem) SetQueue(q *queue.Queue) { d.q = q }
 func (d *FileSystem) SetVolume(name string) { d.volume = name }
 
 // SetTempDir 指定上传临时文件目录。
-func (d *FileSystem) SetTempDir(dir string) { d.tmpDir = dir }
+// SetTempDir 设置上传临时目录，并在启动时清扫一次上次进程的残留。
+//
+// 输入：dir 临时目录（空则系统临时目录）
+// 输出：无
+// 预期：
+//   - 清扫放在设置目录时做：进程启动后即使没有任何上传，异常中断留下的
+//     临时文件也会被清掉（早先只挂在首次 newTemp 里）
+func (d *FileSystem) SetTempDir(dir string) {
+	d.tmpDir = dir
+	dir = cmp.Or(dir, os.TempDir())
+	d.tmpOnce.Do(func() {
+		n, err := SweepTemp(dir, tempMaxAge)
+		if err != nil {
+			slog.Warn(i18n.T("log.tmp_sweep_failed"), "dir", dir, "err", err)
+			return
+		}
+		if n > 0 {
+			slog.Info(i18n.T("log.tmp_sweep"), "count", n, "dir", dir)
+		}
+	})
+}
 
 // Queue 返回挂上的队列，未设置时为 nil。
 func (d *FileSystem) Queue() *queue.Queue { return d.q }
@@ -271,7 +295,7 @@ func (d *FileSystem) OpenFile(ctx context.Context, name string, flag int, perm o
 		if err != nil {
 			return nil, err
 		}
-		return &file{d: d, name: name, tmp: tmp, write: true, perm: perm, sum: sha256.New()}, nil
+		return &file{d: d, ctx: ctx, name: name, tmp: tmp, write: true, perm: perm, sum: sha256.New()}, nil
 	}
 	n, ok, err := d.nodeAt(ctx, name)
 	if err != nil {
@@ -281,9 +305,9 @@ func (d *FileSystem) OpenFile(ctx context.Context, name string, flag int, perm o
 		return nil, os.ErrNotExist
 	}
 	if n.IsDir {
-		return &file{d: d, name: name, node: &n, dir: true}, nil
+		return &file{d: d, ctx: ctx, name: name, node: &n, dir: true}, nil
 	}
-	return &file{d: d, name: name, node: &n}, nil
+	return &file{d: d, ctx: ctx, name: name, node: &n}, nil
 }
 
 // RemoveAll 删除文件或目录。
@@ -350,58 +374,6 @@ func (d *FileSystem) Rename(ctx context.Context, oldName, newName string) error 
 		return os.ErrExist
 	}
 	return d.enqueue(ctx, jobRename, newName, renameJob{ID: src.ID, Parent: newParent.ID, Name: newBase})
-}
-
-// NodeBody 生成把已有消息挂到 dst 路径上的节点正文。
-//
-// 输入：ctx；dst 卷内目标路径；sha 文件内容摘要
-// 输出：JSON 正文；error
-// 预期：供跨卷复制在发引用消息之前确定 caption，名字/父号一次写对
-func (d *FileSystem) NodeBody(ctx context.Context, dst, sha string) (string, error) {
-	parent, base, ok, err := d.parentOf(ctx, dst)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", os.ErrNotExist
-	}
-	return nodeBody(base, parent.ID, false, sha)
-}
-
-// Import 把已存在于频道的消息登记到本卷路径。
-//
-// 输入：dst 目标路径；part 已有消息；sha 内容摘要；mtime 修改时间；overwrite 目标已存在时是否替换
-// 输出：error
-// 预期：只写本地节点记录，不发送任何消息字节（跨卷复制用，节点正文由调用方写进消息）
-func (d *FileSystem) Import(ctx context.Context, dst string, part *telegramstore.Part, sha string, mtime int64, overwrite bool) error {
-	dst = clean(dst)
-	parent, base, ok, err := d.parentOf(ctx, dst)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return os.ErrNotExist
-	}
-	if _, exists, cerr := d.idx.Child(ctx, parent.ID, base); cerr != nil {
-		return cerr
-	} else if exists {
-		if !overwrite {
-			return os.ErrExist
-		}
-		if rerr := d.RemoveAll(ctx, dst); rerr != nil {
-			return rerr
-		}
-	}
-	if err := d.idx.PutNode(ctx, index.Node{
-		ID: part.MessageID, ParentID: parent.ID, Name: base, Path: dst,
-		DocumentID: part.DocumentID, AccessHash: part.AccessHash,
-		FileReference: part.FileReference, Size: part.Size, Mtime: mtime, Sha256: sha,
-		Thumb: part.Thumb,
-	}); err != nil {
-		return err
-	}
-	d.notify()
-	return nil
 }
 
 // Stat 返回文件或目录信息。

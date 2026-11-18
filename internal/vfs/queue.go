@@ -83,6 +83,8 @@ func (d *FileSystem) AttachQueue(ctx context.Context) (*queue.Queue, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 字节进度单独一条通道：上传每落一个分片都要报，不该触发整份状态推送
+	q.SetProgressNotifier(d.notifyProgress)
 	q.SetHandler(d.handleJob)
 	d.q = q
 	q.Start(ctx)
@@ -145,7 +147,7 @@ func (d *FileSystem) handleJob(ctx context.Context, job queue.Job) error {
 		}
 		return d.copyNow(ctx, p)
 	default:
-		return fmt.Errorf("%s: %s", job.Volume, job.Kind)
+		return fmt.Errorf("%s: %s: %w", i18n.T("err.queue_unknown_kind"), job.Volume, errors.New(job.Kind))
 	}
 }
 
@@ -153,6 +155,31 @@ func (d *FileSystem) handleJob(ctx context.Context, job queue.Job) error {
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// enqueueAsync 落库后立即返回任务 id，不等待执行。
+//
+// 输入：ctx；kind 类型；name 展示名；payload 参数结构
+// 输出：任务 id（无队列时为 0）；error
+// 预期：
+//   - 调用方只关心「任务已持久化」，不关心这次执行是否成功
+//   - 没有队列时只能同步跑一遍，保持 CLI/测试的单次调用语义
+func (d *FileSystem) enqueueAsync(ctx context.Context, kind, name string, payload any) (int64, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	if d.q == nil {
+		if err := d.handleJob(ctx, queue.Job{
+			Volume: d.volume, Kind: kind, Name: name, Payload: string(raw),
+		}); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	return d.q.EnqueueOnce(ctx, queue.Job{
+		Volume: d.volume, Kind: kind, Name: name, Payload: string(raw),
+	})
 }
 
 // enqueue 落库并等待任务结束。
@@ -298,7 +325,14 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob, progress func(d
 	}
 	// 上次已经上传成功但没写成节点：只补登记，不重传
 	helper := &file{d: d, name: p.Path}
-	if done, ok, derr := d.idx.GetPendingDone(ctx, p.Path); derr == nil && ok && done.Sha256 == p.Sha {
+	done, ok, derr := d.idx.GetPendingDone(ctx, p.Path)
+	if derr != nil {
+		// 查库失败不等于「没有记录」：直接重传会重复占用频道空间，
+		// 交给队列重试，让错误暴露出来
+		_ = tmp.Close()
+		return derr
+	}
+	if ok && done.Sha256 == p.Sha {
 		err = helper.record(ctx, p.Path, p.Parent, p.Base, p.Sha, &telegramstore.Part{
 			MessageID:     done.MessageID,
 			DocumentID:    done.DocumentID,
