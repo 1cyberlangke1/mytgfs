@@ -37,6 +37,7 @@ import (
 	"mytgfs/internal/web"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 )
@@ -61,13 +62,15 @@ func runWeb(args []string) {
 		portNum = *port
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", portNum)
+	var listener net.Listener
 	if portNum == 0 {
+		// 先真正绑定再报地址：探测后关闭再重绑会被别的进程抢端口
 		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
 		if lerr != nil {
 			fatal(lerr.Error())
 		}
+		listener = ln
 		addr = ln.Addr().String()
-		_ = ln.Close()
 	}
 	url := "http://" + addr
 	ui.Out(i18n.T("cli.web_url", url))
@@ -77,6 +80,9 @@ func runWeb(args []string) {
 
 	// 面板资源由前端构建产物内嵌，启停状态全部走 web.Options
 	serve := func(opts web.Options) error {
+		if listener != nil {
+			return web.ServeListener(ctx, listener, cfgPath, opts)
+		}
 		return web.ServeWith(ctx, addr, cfgPath, opts)
 	}
 
@@ -155,9 +161,10 @@ func runWeb(args []string) {
 		// reconcileMu 串行化对账：面板建卷/删卷与周期对账可能同时进来，
 		// 并发挂载会把同一个卷挂两次（两份队列抢同一个索引库）
 		var reconcileMu sync.Mutex
-		reconcile := func() {
+		reconcile := func(force bool) {
 			reconcileMu.Lock()
 			defer reconcileMu.Unlock()
+			before := reg.Names()
 			cur, err := config.Load(cfgPath)
 			if err != nil {
 				logging.Warn("log.volume_warn", err)
@@ -179,25 +186,32 @@ func runWeb(args []string) {
 				_ = wv.vf.Close() // 关队列与索引
 				reg.Delete(name)
 			}
+			// 卷集合没变就不推：周期对账每 15 秒一次，无条件推等于定时全量刷新
+			if !force && slices.Equal(before, reg.Names()) {
+				return
+			}
 			// 全部对齐完再推：面板一次刷新就能看到最终卷列表
 			pushHub.Publish(push.TopicStatus)
 		}
 		// 启动即对齐：配置里启用的卷全部挂上
-		reconcile()
+		reconcile(true)
 		// 断点断片超过一天就清：Telegram 服务端临时区约一天过期，续不上的断点只会堆积
 		uploadcache.Sweep(datadir.Path("uploads"), 24*time.Hour)
-		// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编
+		// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编。
+		// 只有卷集合真的变了才推状态，否则等于每 15 秒给前端一次全量刷新
 		go func() {
 			interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
 			if interval <= 0 {
 				interval = trayapp.SyncInterval(0)
 			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.Tick(interval):
-					reconcile()
+				case <-ticker.C:
+					reconcile(false)
 				}
 			}
 		}()
@@ -238,7 +252,7 @@ func runWeb(args []string) {
 				if err != nil {
 					return nil, err
 				}
-				reconcile()
+				reconcile(true)
 				return res, nil
 			},
 			// 删卷：删频道 → 移出配置 → 清缓存与索引（实现在 app 装配根）
@@ -248,7 +262,7 @@ func runWeb(args []string) {
 					return err
 				}
 				// 运行时账本对齐配置：停同步、关队列与索引、从注册表摘除，一次完成
-				reconcile()
+				reconcile(true)
 				// 磁盘缓存已由删卷流程清掉，这里只清进程内的头像缓存
 				coverProvider.Forget(volume.NormalizeChatID(res.ChannelID))
 				return nil
@@ -259,7 +273,7 @@ func runWeb(args []string) {
 				if err != nil {
 					return nil, err
 				}
-				reconcile()
+				reconcile(true)
 				return res, nil
 			},
 			// 列频道：getDialogs 只有 user 会话能做，走装配根开临时连接
@@ -274,10 +288,12 @@ func runWeb(args []string) {
 				}
 				files, ferr := v.idx.CountFiles(ctx)
 				if ferr != nil {
+					logging.Warn("log.volume_warn", ferr, name)
 					return 0, 0, false
 				}
 				used, uerr := v.idx.Used(ctx)
 				if uerr != nil {
+					logging.Warn("log.volume_warn", uerr, name)
 					return 0, 0, false
 				}
 				return int64(files), used, true

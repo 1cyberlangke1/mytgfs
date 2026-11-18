@@ -9,6 +9,7 @@ package main
 //   mytgfs sync [--limit N]                拉频道历史重建本地索引
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -138,21 +139,6 @@ func runChannelInit(args []string) {
 	ui.Out(i18n.T("channel.ok", res.ChannelID, res.AccessHash, chatID(res.ChannelID)))
 }
 
-// resolveVolumeName 决定命令作用于哪个卷。
-//
-// 输入：cfg 配置；name 命令行 --name（可为空）
-// 输出：卷名
-// 预期：显式 --name 原样返回；留空时取第一个卷，没有卷配置时用默认名 mytgfs
-func resolveVolumeName(cfg config.Config, name string) string {
-	if name != "" {
-		return name
-	}
-	if len(cfg.Volumes) > 0 {
-		return cfg.Volumes[0].Name
-	}
-	return "mytgfs"
-}
-
 // chatID 把频道 id 转成 Bot API 的 -100... 形式。
 //
 // 输入：channelID 原始频道 id
@@ -187,6 +173,10 @@ func loadAPI() (int, string) {
 		fatal(i18n.T("err.missing_api_id"))
 	}
 	apiHash := readTrim(config.DefaultAPIHashFile)
+	if cfg, err := config.Load(config.DefaultConfigPath); err == nil {
+		// 尊重配置里的自定义路径：凭据文件与 config.toml 放一起是常见部署
+		apiHash = readTrim(cmp.Or(cfg.Telegram.APIHashFile, config.DefaultAPIHashFile))
+	}
 	if apiHash == "" {
 		fatal(i18n.T("err.missing_api_hash"))
 	}

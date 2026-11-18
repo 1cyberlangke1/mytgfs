@@ -66,7 +66,9 @@ type putPlan struct {
 func runPut(args []string) {
 	fs := flag.NewFlagSet("put", flag.ExitOnError)
 	name := fs.String("name", "", i18n.T("cli.flag.volume"))
-	remote := fs.String("remote", "/", i18n.T("cli.flag.remote_base"))
+	// 默认空串 = 走全局 --dir / MYTGFS_DIR 的基准目录，与 ls/tree/get 一致；
+	// 以前写死 "/" 会让 put 无视 --dir
+	remote := fs.String("remote", "", i18n.T("cli.flag.remote_base"))
 	dryRun := fs.Bool("dry-run", false, i18n.T("cli.flag.dry_run"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -74,7 +76,11 @@ func runPut(args []string) {
 		os.Exit(2)
 	}
 
-	items, err := collectPutItems(fs.Args(), *remote)
+	target := *remote
+	if target == "" {
+		target = baseDir()
+	}
+	items, err := collectPutItems(fs.Args(), target)
 	if err != nil {
 		fatal(err.Error())
 	}
@@ -249,7 +255,10 @@ func mkdirAll(ctx context.Context, fsys *vfs.FileSystem, dir string) error {
 //
 // 输入：args 本地路径；remoteBase 远程根目录
 // 输出：待上传列表，按远程路径排序（顺序稳定，便于阅读日志）
-// 预期：目录递归展开，符号链接不跟随；空目录跳过
+// 预期：
+//   - 目录递归展开，并保留目录自身的名字（与前端目录上传一致）：
+//     put ./photos --remote /base → /base/photos/…
+//   - 符号链接不跟随；空目录跳过
 func collectPutItems(args []string, remoteBase string) ([]putItem, error) {
 	var items []putItem
 	base := volPath(remoteBase)
@@ -276,7 +285,7 @@ func collectPutItems(args []string, remoteBase string) ([]putItem, error) {
 			}
 			items = append(items, putItem{
 				local:  p,
-				remote: path.Join(base, filepath.ToSlash(rel)),
+				remote: path.Join(base, filepath.Base(root), filepath.ToSlash(rel)),
 			})
 			return nil
 		})

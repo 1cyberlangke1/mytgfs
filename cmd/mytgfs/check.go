@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 
@@ -57,6 +58,11 @@ func runCheck(args []string) {
 	nodes, err := a.AllNodes(ctx, volume.ChatID)
 	if err != nil {
 		failErr(i18n.T("err.check_prefix"), err)
+	}
+	// 没有 user 会话时 AllNodes 只会返回空列表（messages.getHistory 是 user-only）。
+	// 空远端会被 fsck 判成「整卷都缺失」，--fix 就会把本地索引清空，所以先拒绝。
+	if len(nodes) == 0 {
+		failErr(i18n.T("err.check_prefix"), errors.New(i18n.T("err.check_needs_user_session")))
 	}
 	err = a.Run(ctx, volName, func(ctx context.Context, s *app.Session) error {
 		var xerr error

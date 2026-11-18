@@ -79,10 +79,11 @@ func runConfigGet(args []string) {
 	if err != nil {
 		fatal(err.Error())
 	}
-	ui.Print(map[string]any{"key": key, "value": value, "found": found})
+	// 失败时 stdout 不能先出现一条 ok:true：只走 stderr 的结构化错误
 	if !found {
-		fatal(i18n.T("err.config_key_missing", key))
+		fatalCode("config_key_missing", i18n.T("err.config_key_missing", key))
 	}
+	ui.Print(map[string]any{"key": key, "value": value, "found": true})
 	ui.Printf("%s = %s\n", key, value)
 }
 

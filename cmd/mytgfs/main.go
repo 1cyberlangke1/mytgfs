@@ -25,6 +25,12 @@ import (
 
 func main() {
 	logging.SetupFromConfig(config.DefaultConfigPath)
+	// JSON 输出失败（编码错误）时必须让脚本看到非零退出码
+	defer func() {
+		if ui.OutputFailed() {
+			os.Exit(1)
+		}
+	}()
 	if cfg, err := config.Load(config.DefaultConfigPath); err == nil {
 		tgclient.SetDefaultProxy(cfg.Telegram.Proxy)
 	}

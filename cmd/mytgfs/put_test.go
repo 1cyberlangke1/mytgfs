@@ -40,12 +40,13 @@ func TestCollectPutItems(t *testing.T) {
 		t.Fatalf("本地路径 = %q", one[0].local)
 	}
 
-	// 递归目录：只收普通文件，按远程路径升序
+	// 递归目录：保留目录自身名字，只收普通文件，按远程路径升序
 	tree, err := collectPutItems([]string{root}, "/base")
 	if err != nil {
 		t.Fatalf("目录: %v", err)
 	}
-	want := []string{"/base/a.txt", "/base/sub/b.txt"}
+	dirName := filepath.Base(root)
+	want := []string{"/base/" + dirName + "/a.txt", "/base/" + dirName + "/sub/b.txt"}
 	if len(tree) != len(want) {
 		t.Fatalf("目录展开 = %+v，期望 %v", tree, want)
 	}

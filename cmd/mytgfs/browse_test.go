@@ -71,7 +71,7 @@ func (f *fakeFiles) Mkdir(_ context.Context, p string) error {
 
 func (f *fakeFiles) Upload(context.Context, string, io.Reader) error { panic("unexpected Upload") }
 
-func (f *fakeFiles) AdoptUpload(context.Context, string, string, int64, string) error {
+func (f *fakeFiles) AdoptUpload(context.Context, string, string, int64, string) (int64, error) {
 	panic("unexpected AdoptUpload")
 }
 

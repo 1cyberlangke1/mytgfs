@@ -67,6 +67,37 @@ func fatal(msg string) {
 	fatalCode("fatal", msg)
 }
 
+// codeError 是带机器可读错误码的错误。
+//
+// 输入：code 机器可读错误码；err 人读错误
+// 输出：error
+// 预期：在 Run 回调里返回它而不是直接 os.Exit，让 defer 有机会关索引/连接；
+// 回调退出后再由 reportCodeError 按码退出
+type codeError struct {
+	code string
+	err  error
+}
+
+func (e codeError) Error() string { return e.err.Error() }
+func (e codeError) Unwrap() error { return e.err }
+
+// newCodeError 构造带错误码的错误。
+func newCodeError(code, msg string) error {
+	return codeError{code: code, err: errors.New(msg)}
+}
+
+// reportCodeError 若 err 带错误码就按码退出，否则按 failErr 处理。
+//
+// 输入：prefix 错误前缀；err 原始错误
+// 输出：无（进程退出 1）
+func reportCodeError(prefix string, err error) {
+	var ce codeError
+	if errors.As(err, &ce) {
+		fatalCode(ce.code, ce.Error())
+	}
+	failErr(prefix, err)
+}
+
 // fatalCode 以指定错误码退出。
 //
 // 输入：code 机器可读错误码；msg 人读信息

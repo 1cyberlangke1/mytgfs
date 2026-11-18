@@ -228,7 +228,7 @@ func runVolumeCreate(args []string) {
 	res, err := appRoot.CreateVolume(ctx, volName, *title, *bot)
 	switch {
 	case errors.Is(err, config.ErrVolumeExists):
-		fatalCode("volume_exists", i18n.T("err.volume_exists"))
+		fatalCode("volume_exists", i18n.T("err.volume_exists", *name))
 	case err != nil:
 		failErr(i18n.T("err.volume_create_prefix"), err)
 	}

@@ -25,7 +25,6 @@ import (
 	"strings"
 
 	"mytgfs/internal/app"
-	"mytgfs/internal/config"
 	"mytgfs/internal/i18n"
 	"mytgfs/internal/index"
 	"mytgfs/internal/ui"
@@ -88,7 +87,7 @@ func runCopy(args []string) {
 			return gerr
 		}
 		if !found {
-			fatalCode("cp_src_missing", i18n.T("err.cp_src_missing", src))
+			return newCodeError("cp_src_missing", i18n.T("err.cp_src_missing", src))
 		}
 		old, hadOld, gerr := dstIdx.NodeByPath(ctx, dst)
 		if gerr != nil {
@@ -111,7 +110,7 @@ func runCopy(args []string) {
 					volName, src, dstName, dst, old.DocumentID, old.Size)
 				return nil
 			}
-			fatalCode("cp_dst_exists", i18n.T("err.cp_dst_exists", dst))
+			return newCodeError("cp_dst_exists", i18n.T("err.cp_dst_exists", dst))
 		}
 
 		srcVol := volName
@@ -162,7 +161,7 @@ func runCopy(args []string) {
 		return nil
 	})
 	if err != nil {
-		failErr(i18n.T("err.cp_prefix"), err)
+		reportCodeError(i18n.T("err.cp_prefix"), err)
 	}
 }
 
@@ -176,23 +175,3 @@ func sameContent(dst, src index.Node) bool {
 }
 
 // volPath 见 pathbase.go：相对路径按 --dir / MYTGFS_DIR 拼接。
-
-// volumeByName 按卷名取频道 ID。
-//
-// 输入：cfg 配置；name 卷名
-// 输出：卷信息、是否存在
-// 预期：没有 volumes 配置时把默认频道当作名为 mytgfs 的卷
-func volumeByName(cfg config.Config, name string) (config.Volume, bool) {
-	if len(cfg.Volumes) == 0 {
-		if name != "mytgfs" {
-			return config.Volume{}, false
-		}
-		return config.Volume{Name: "mytgfs", ChatID: cfg.Telegram.ChannelID}, true
-	}
-	for _, v := range cfg.Volumes {
-		if v.Name == name {
-			return v, true
-		}
-	}
-	return config.Volume{}, false
-}

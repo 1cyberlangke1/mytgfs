@@ -35,6 +35,20 @@ import (
 // errShellQuit 表示用户输入了退出命令。
 var errShellQuit = errors.New("quit")
 
+// outln 把一行人读结果写到 shell 自己的 stdout。
+//
+// 输入：args 任意可打印值
+// 输出：写入 sh.out
+// 预期：嵌入场景可重定向；不使用进程级 os.Stdout
+func (sh *shell) outln(args ...any) {
+	fmt.Fprintln(sh.out, args...)
+}
+
+// outf 把格式化结果写到 shell 自己的 stdout。
+func (sh *shell) outf(format string, args ...any) {
+	fmt.Fprintf(sh.out, format, args...)
+}
+
 // shell 是一次交互式会话的状态。
 type shell struct {
 	ctx  context.Context
@@ -72,6 +86,11 @@ func runShell(args []string) {
 			ctx: ctx, a: a, vol: volName, s: s, fsys: fsys, f: f,
 			cwd: baseDir(), out: os.Stdout, errw: os.Stderr,
 			reporter: newUploadReporter(os.Stderr),
+		}
+		// 队列默认只往面板推进度；shell 要把同一份进度打到 stderr
+		if sh.reporter != nil {
+			fsys.SetUploadProgress(sh.reporter.report)
+			defer fsys.SetUploadProgress(nil)
 		}
 		return sh.loop(os.Stdin)
 	})
@@ -117,12 +136,12 @@ func (sh *shell) loop(in io.Reader) error {
 func (sh *shell) dispatch(args []string) error {
 	switch args[0] {
 	case "help":
-		ui.Out(i18n.T("shell.help"))
+		sh.outln(i18n.T("shell.help"))
 		return nil
 	case "quit", "exit":
 		return errShellQuit
 	case "pwd":
-		ui.Out(sh.cwd)
+		sh.outln(sh.cwd)
 		return nil
 	case "cd":
 		return sh.cd(args[1:])
@@ -256,7 +275,7 @@ func (sh *shell) ls(args []string) error {
 	if err != nil {
 		return err
 	}
-	printLs(dir, entries)
+	printLsTo(sh.out, dir, entries)
 	return nil
 }
 
@@ -355,7 +374,7 @@ func (sh *shell) get(args []string) error {
 	if err != nil {
 		return err
 	}
-	ui.Outf("GET %s -> %s bytes=%d resumed=%d\n", remote, local, written, resumed)
+	sh.outf("GET %s -> %s bytes=%d resumed=%d\n", remote, local, written, resumed)
 	return nil
 }
 
@@ -394,7 +413,7 @@ func (sh *shell) put(args []string) error {
 		return errors.New(i18n.T("err.put_no_files"))
 	}
 	uploaded, failed := putMany(sh.ctx, sh.fsys, items, sh.reporter)
-	ui.Out(i18n.T("put.summary", len(uploaded), len(failed)))
+	sh.outln(i18n.T("put.summary", len(uploaded), len(failed)))
 	return nil
 }
 
@@ -408,7 +427,7 @@ func (sh *shell) rm(args []string) error {
 		if err := sh.f.Remove(sh.ctx, p); err != nil {
 			return err
 		}
-		ui.Outf("RM %s:%s\n", sh.vol, p)
+		sh.outf("RM %s:%s\n", sh.vol, p)
 	}
 	return nil
 }
@@ -422,7 +441,7 @@ func (sh *shell) mkdir(args []string) error {
 	if err := sh.f.Mkdir(sh.ctx, p); err != nil {
 		return err
 	}
-	ui.Outf("MKDIR %s:%s\n", sh.vol, p)
+	sh.outf("MKDIR %s:%s\n", sh.vol, p)
 	return nil
 }
 
@@ -443,7 +462,7 @@ func (sh *shell) mv(args []string) error {
 	if err := sh.f.Move(sh.ctx, from, to); err != nil {
 		return err
 	}
-	ui.Outf("MV %s:%s -> %s\n", sh.vol, from, to)
+	sh.outf("MV %s:%s -> %s\n", sh.vol, from, to)
 	return nil
 }
 
@@ -482,7 +501,7 @@ func (sh *shell) search(args []string) error {
 	if err != nil {
 		return err
 	}
-	printSearch(hits)
+	printSearchTo(sh.out, hits)
 	return nil
 }
 
@@ -531,7 +550,7 @@ func (sh *shell) sync(args []string) error {
 		if err != nil {
 			return err
 		}
-		ui.Out(i18n.T("cli.rebuild_stats", n))
+		sh.outln(i18n.T("cli.rebuild_stats", n))
 		return nil
 	}
 	d := &tgsync.TelegramChannelDiffer{API: sh.s.Client.API(), ChannelID: sh.s.Volume.ChatID}
@@ -540,8 +559,8 @@ func (sh *shell) sync(args []string) error {
 		return err
 	}
 	if res.Truncated {
-		ui.Out(i18n.T("warn.diff_too_long"))
+		sh.outln(i18n.T("warn.diff_too_long"))
 	}
-	ui.Out(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
+	sh.outln(i18n.T("cli.sync_stats", res.Pulled, res.Deleted, res.Pts, res.Rounds))
 	return nil
 }

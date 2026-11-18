@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"mytgfs/internal/config"
 	"mytgfs/internal/fm"
 	"mytgfs/internal/ui"
 )
@@ -41,28 +40,6 @@ func TestVolPath(t *testing.T) {
 		if got := volPath(in); got != want {
 			t.Errorf("volPath(%q) = %q，期望 %q", in, got, want)
 		}
-	}
-}
-
-// TestVolumeByName 有 volumes 时按名字查，没有时退化成默认频道。
-func TestVolumeByName(t *testing.T) {
-	withVols := config.Config{Volumes: []config.Volume{
-		{Name: "demo", ChatID: 11},
-		{Name: "demo2", ChatID: 22},
-	}}
-	if v, ok := volumeByName(withVols, "demo2"); !ok || v.ChatID != 22 {
-		t.Fatalf("demo2 解析失败: %+v ok=%v", v, ok)
-	}
-	if _, ok := volumeByName(withVols, "nope"); ok {
-		t.Fatal("未知名不应命中")
-	}
-
-	legacy := config.Config{Telegram: config.Telegram{ChannelID: 99}}
-	if v, ok := volumeByName(legacy, "mytgfs"); !ok || v.ChatID != 99 {
-		t.Fatalf("默认卷解析失败: %+v ok=%v", v, ok)
-	}
-	if _, ok := volumeByName(legacy, "demo"); ok {
-		t.Fatal("无 volumes 时只应有 mytgfs")
 	}
 }
 

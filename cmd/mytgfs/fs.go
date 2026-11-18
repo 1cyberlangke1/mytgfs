@@ -27,6 +27,19 @@ import (
 	"mytgfs/internal/vfs"
 )
 
+// uiOutput 返回命令行的人读输出目标。
+//
+// 输入：无
+// 输出：写 os.Stdout 的 writer；JSON 模式下吞掉所有写入
+// 预期：命令行保留「--json 时只输出结构化结果」的语义，
+// 而 shell 这类嵌入场景可以直接传自己的 writer
+func uiOutput() io.Writer {
+	if ui.JSONMode() {
+		return io.Discard
+	}
+	return os.Stdout
+}
+
 // withVolume 打开指定卷并执行 fn，按需启动持久化队列。
 //
 // 输入：name 卷名（空则第一个卷）；attachQueue 是否启动上传/删改队列；
@@ -117,13 +130,20 @@ func lsEntries(dir string, entries []fm.Entry) []lsEntry {
 // 输入：dir 目录路径；entries 目录项
 // 输出：每行「类型 大小 修改时间 完整路径」
 // 预期：--json 模式下自动静默（ui.Printf 自身判断）
-func printLs(dir string, entries []fm.Entry) {
+func printLs(dir string, entries []fm.Entry) { printLsTo(uiOutput(), dir, entries) }
+
+// printLsTo 把目录内容写到指定 writer。
+//
+// 输入：w 输出目标；dir 目录；entries 条目
+// 输出：每行「类型 大小 修改时间 路径」
+// 预期：命令行走 uiOutput（JSON 模式静默），shell 走自己的 out
+func printLsTo(w io.Writer, dir string, entries []fm.Entry) {
 	for _, e := range entries {
 		kind := "f"
 		if e.Dir {
 			kind = "d"
 		}
-		ui.Printf("%s %12d %s %s\n", kind, e.Size, e.Mod.Format("2006-01-02 15:04"), path.Join(dir, e.Name))
+		fmt.Fprintf(w, "%s %12d %s %s\n", kind, e.Size, e.Mod.Format("2006-01-02 15:04"), path.Join(dir, e.Name))
 	}
 }
 
@@ -157,7 +177,7 @@ func runLs(args []string) {
 //
 // 输入：--name 卷名；位置参数目录路径
 // 输出：MKDIR 行
-// 预期：父目录不存在时按上游报错；目录已存在视为成功（与面板一致）
+// 预期：父目录不存在时按上游报错；目录已存在时报错（与面板一致，不静默成功）
 func runMkdir(args []string) {
 	fset := flag.NewFlagSet("mkdir", flag.ExitOnError)
 	name := fset.String("name", "", "volume name (default: first volume)")
@@ -362,13 +382,19 @@ func getFile(ctx context.Context, f fm.Files, remote, local string) (written, re
 // 输入：hits 命中项（Path 已是卷内绝对路径）
 // 输出：每行「类型 大小 路径」
 // 预期：--json 模式下自动静默
-func printSearch(hits []fm.SearchHit) {
+func printSearch(hits []fm.SearchHit) { printSearchTo(uiOutput(), hits) }
+
+// printSearchTo 把搜索命中写到指定 writer。
+//
+// 输入：w 输出目标；hits 命中项
+// 输出：每行「类型 大小 路径」
+func printSearchTo(w io.Writer, hits []fm.SearchHit) {
 	for _, h := range hits {
 		kind := "f"
 		if h.Dir {
 			kind = "d"
 		}
-		ui.Printf("%s %12d %s\n", kind, h.Size, h.Path)
+		fmt.Fprintf(w, "%s %12d %s\n", kind, h.Size, h.Path)
 	}
 }
 

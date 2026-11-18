@@ -20,12 +20,14 @@ const progressInterval = 200 * time.Millisecond
 // 输入：dst 真实写入目标；errw 进度输出（通常是 stderr）；total 文件总大小；
 // resumed 断点续传已存在的字节数
 // 输出：Write 原样转发并累计 done
-// 预期：done 从 resumed 起算，百分比按 total 计算
+// 预期：done 从 resumed 起算，百分比按 total 计算；
+// 速度只按本次新增字节算，不能把续传前的老数据算进带宽
 type progressWriter struct {
 	dst     io.Writer
 	errw    io.Writer
 	total   int64
 	done    int64
+	resumed int64
 	start   time.Time
 	last    time.Time
 	enabled bool
@@ -38,7 +40,7 @@ type progressWriter struct {
 // 预期：done 初值是 resumed，速度从创建时刻开始算
 func newProgressWriter(dst, errw io.Writer, total, resumed int64, enabled bool) *progressWriter {
 	now := time.Now()
-	return &progressWriter{dst: dst, errw: errw, total: total, done: resumed, start: now, last: now, enabled: enabled}
+	return &progressWriter{dst: dst, errw: errw, total: total, done: resumed, resumed: resumed, start: now, last: now, enabled: enabled}
 }
 
 // Write 写入数据并择机刷新进度。
@@ -71,7 +73,7 @@ func (p *progressWriter) render(final bool) {
 	elapsed := time.Since(p.start).Seconds()
 	var rate int64
 	if elapsed > 0 {
-		rate = int64(float64(p.done) / elapsed)
+		rate = int64(float64(p.done-p.resumed) / elapsed)
 	}
 	if final {
 		fmt.Fprintf(p.errw, "\r%s / %s  %s/s\n", humanBytes(p.done), humanBytes(p.total), humanBytes(rate))
