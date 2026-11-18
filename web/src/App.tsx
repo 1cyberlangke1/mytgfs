@@ -509,6 +509,8 @@ export default function App() {
     cover: false,
     rebuild: false,
   });
+  // 首次配置状态：null 表示还没拿到 /api/state，false 表示缺凭证
+  const [loginReady, setLoginReady] = useState<boolean | null>(null);
 
   const t: Translations = DICTIONARY[locale] ?? DICTIONARY.zh!;
   const localeMeta = getLocaleMeta(locale);
@@ -717,6 +719,7 @@ export default function App() {
         cover: Boolean(st.caps?.cover),
         rebuild: Boolean(st.caps?.rebuild),
       });
+      setLoginReady(typeof st.login_ready === 'boolean' ? st.login_ready : null);
       clearProblem('state');
       return names;
     } catch (err) {
@@ -826,6 +829,12 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'downloads') void reloadDownloads();
   }, [activeTab, reloadDownloads]);
+
+  // 首次配置（还没有 api_id / api_hash）：直接落到设置页，
+  // 登录卡是唯一能继续往下走的东西，不能让用户自己找
+  useEffect(() => {
+    if (loginReady === false && caps.login) setActiveTab('settings');
+  }, [loginReady, caps.login]);
 
   // retryLoad 手动重试全部后台加载；失败会在各自回调里重新写回横幅
   const retryLoad = () => {
@@ -1804,6 +1813,7 @@ export default function App() {
 
             {activeTab === 'settings' && (
               <div className="space-y-8">
+                {caps.login && <AccountCard t={t} onNotify={pushToast} />}
                 <SettingsView
                   t={t}
                   locale={locale}
@@ -1815,7 +1825,6 @@ export default function App() {
                   onSaveSettings={handleSaveSettings}
                   onNotifyError={(msg) => pushToast(msg, 'error')}
                 />
-                {caps.login && <AccountCard t={t} onNotify={pushToast} />}
               </div>
             )}
 

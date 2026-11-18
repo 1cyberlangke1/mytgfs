@@ -140,6 +140,7 @@
   "err.list_channels": "list channels",
   "err.login_unavailable": "signing in from the panel is unavailable here",
   "err.missing_api_hash": "missing secrets/api_hash",
+  "err.credentials_missing": "Credentials are not saved yet: fill in api_id and api_hash, click Save, then log in",
   "err.missing_api_id": "Missing api_id: set it in config.toml [telegram] or MYTGFS_API_ID",
   "err.mute_channel": "mute channel notifications",
   "err.name_too_long": "file or folder name is too long (max %d bytes)",

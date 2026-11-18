@@ -214,6 +214,12 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 			}
 		}
 		resp := map[string]any{"volumes": vols}
+		// 首次安装（安卓全新包）还没有凭证：面板据此直接落到账号设置页，
+		// 不能让用户先看到一堆空数据再自己找登录入口
+		if opts.Auth != nil {
+			st := opts.Auth.Status()
+			resp["login_ready"] = st.APIID > 0 && st.APIHashSet
+		}
 		resp["caps"] = map[string]bool{
 			"createVolume": opts.CreateVolume != nil,
 			"deleteVolume": opts.DeleteVolume != nil,

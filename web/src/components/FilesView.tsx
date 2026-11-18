@@ -672,8 +672,8 @@ export const FilesView: React.FC<FilesViewProps> = ({
       />
 
       {/* Top Row: Volume Switcher + Volume Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
+      {/* 卷下拉与卷操作同一个换行容器：宽屏一行排开，窄屏自然折行，右侧不留空档 */}
+      <div className="flex flex-wrap items-center gap-2">
         <label
           htmlFor="volume-select-control"
           className="text-xs font-medium text-zinc-500 dark:text-zinc-400 shrink-0"
@@ -684,7 +684,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
           id="volume-select-control"
           value={activeVolumeId}
           onChange={(e) => handleVolumeSelect(e.target.value)}
-          className="min-w-0 max-w-full sm:w-auto font-semibold"
+          className="min-w-0 max-w-[55%] sm:max-w-none sm:w-auto font-semibold"
         >
           {volumes.map((v) => (
             <option
@@ -696,85 +696,82 @@ export const FilesView: React.FC<FilesViewProps> = ({
             </option>
           ))}
         </Select>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={refreshing}
+          onClick={async () => {
+            setRefreshing(true);
+            try {
+              await onRefresh();
+            } finally {
+              setRefreshing(false);
+            }
+          }}
+          aria-label={t.files.refreshBtn}
+          title={t.files.refreshBtn}
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          <span>{t.files.refreshBtn}</span>
+        </Button>
+        {onRebuildVolume && (
           <Button
             type="button"
             variant="outline"
-            disabled={refreshing}
-            onClick={async () => {
-              setRefreshing(true);
-              try {
-                await onRefresh();
-              } finally {
-                setRefreshing(false);
-              }
-            }}
-            aria-label={t.files.refreshBtn}
-            title={t.files.refreshBtn}
+            disabled={rebuilding || !activeVolumeId}
+            onClick={() => setShowRebuildConfirm(true)}
+            aria-label={t.files.rebuildBtn}
+            title={t.files.rebuildBtn}
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>{t.files.refreshBtn}</span>
+            <Database className={`w-3.5 h-3.5 ${rebuilding ? 'animate-pulse' : ''}`} />
+            <span>{t.files.rebuildBtn}</span>
           </Button>
-          {onRebuildVolume && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={rebuilding || !activeVolumeId}
-              onClick={() => setShowRebuildConfirm(true)}
-              aria-label={t.files.rebuildBtn}
-              title={t.files.rebuildBtn}
-            >
-              <Database className={`w-3.5 h-3.5 ${rebuilding ? 'animate-pulse' : ''}`} />
-              <span>{t.files.rebuildBtn}</span>
-            </Button>
-          )}
-          {canCreateVolume && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setNewVolume({ name: '', title: '' });
-                setVolumeFormError('');
-                setShowCreateVolume(true);
-              }}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{t.volume.createBtn}</span>
-            </Button>
-          )}
+        )}
+        {canCreateVolume && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setNewVolume({ name: '', title: '' });
+              setVolumeFormError('');
+              setShowCreateVolume(true);
+            }}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{t.volume.createBtn}</span>
+          </Button>
+        )}
 
-          {canAttachVolume && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setAttachForm({ name: '', chatId: '' });
-                setAttachFormError('');
-                setChannels([]);
-                setChannelsState('idle');
-                setChannelsError('');
-                setShowAttachVolume(true);
-              }}
-            >
-              <Link2 className="w-3.5 h-3.5" />
-              <span>{t.volume.attachBtn}</span>
-            </Button>
-          )}
+        {canAttachVolume && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setAttachForm({ name: '', chatId: '' });
+              setAttachFormError('');
+              setChannels([]);
+              setChannelsState('idle');
+              setChannelsError('');
+              setShowAttachVolume(true);
+            }}
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            <span>{t.volume.attachBtn}</span>
+          </Button>
+        )}
 
-          {canDeleteVolume && currentVolume && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setShowDeleteVolume(true)}
-              className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>{t.volume.deleteBtn}</span>
-            </Button>
-          )}
-        </div>
+        {canDeleteVolume && currentVolume && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowDeleteVolume(true)}
+            className="border-red-300/80 text-red-600 dark:border-red-500/40 dark:text-red-400 hover:bg-red-500/10"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{t.volume.deleteBtn}</span>
+          </Button>
+        )}
       </div>
 
       {/* Unified File Workbench Container */}

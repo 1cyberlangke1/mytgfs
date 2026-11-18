@@ -140,6 +140,7 @@
   "err.list_channels": "列出频道失败",
   "err.login_unavailable": "当前入口不支持在面板里登录",
   "err.missing_api_hash": "缺少 secrets/api_hash",
+  "err.credentials_missing": "还没有保存凭证：先填 api_id 和 api_hash，点「保存凭证」再登录",
   "err.missing_api_id": "缺少 api_id：请在 config.toml 的 [telegram] 里填写，或设置 MYTGFS_API_ID",
   "err.mute_channel": "关闭频道通知",
   "err.name_too_long": "文件或文件夹名字过长（最多 %d 字节）",

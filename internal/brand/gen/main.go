@@ -94,18 +94,50 @@ func renderPaths(svg string, size int) (*image.RGBA, error) {
 //
 // 输入：size 像素边长
 // 输出：RGBA 图；失败返回 error
+// 预期：桌面 / 托盘 / 旧版安卓位图共用这一份几何
 func render(size int) (image.Image, error) {
-	plate, err := renderPaths(plateSVG, size)
-	if err != nil {
-		return nil, err
-	}
-	plane, err := renderPaths(planeSVG, size)
-	if err != nil {
-		return nil, err
+	return renderIcon(size, 11.0/40.0*float64(size), true, true)
+}
+
+// renderRound 合成圆形底图标（安卓旧版 ic_launcher_round）。
+//
+// 输入：size 像素边长
+// 输出：RGBA 图；失败返回 error
+// 预期：底色外接圆内不透明，圆外全透明，避免被系统再裁一次时出现方角
+func renderRound(size int) (image.Image, error) {
+	return renderIcon(size, float64(size)/2, false, true)
+}
+
+// renderBackground 只铺渐变底，不画图案（安卓自适应图标背景层）。
+//
+// 输入：size 像素边长
+// 输出：RGBA 图；失败返回 error
+// 预期：整格不透明；图案由前景层叠加
+func renderBackground(size int) (image.Image, error) {
+	return renderIcon(size, 0, false, false)
+}
+
+// renderIcon 合成图标：渐变底 + 文件夹 + 纸飞机。
+//
+// 输入：size 像素边长；radius 底色圆角半径（0 表示铺满整格）；border 是否描白色内边；
+// withShapes 是否叠加文件夹与纸飞机
+// 输出：RGBA 图；失败返回 error
+// 预期：
+//   - 安卓自适应图标的背景层用 radius=0、border=false、withShapes=false，铺满 108dp 画布
+//   - 其余尺寸沿用圆角 + 描边，保持与桌面图标一致
+func renderIcon(size int, radius float64, border, withShapes bool) (image.Image, error) {
+	var plate, plane *image.RGBA
+	if withShapes {
+		var err error
+		if plate, err = renderPaths(plateSVG, size); err != nil {
+			return nil, err
+		}
+		if plane, err = renderPaths(planeSVG, size); err != nil {
+			return nil, err
+		}
 	}
 
 	s := float64(size)
-	radius := 11.0 / 40.0 * s
 	// 描边带宽：随尺寸缩放，最小 1px，保证 16px 托盘图标也看得出边框
 	strokeW := math.Max(1, s*0.012)
 	innerRadius := math.Max(radius-strokeW, 0)
@@ -113,18 +145,25 @@ func render(size int) (image.Image, error) {
 	for y := range size {
 		for x := range size {
 			fx, fy := float64(x)+0.5, float64(y)+0.5
-			cover := roundedCoverage(fx, fy, s, radius)
+			// radius<=0 表示铺满整格：roundedCoverage 在半径 0 时会退化成亚像素边，
+			// 这里直接给满覆盖率，避免整张自适应图标背景变成半透明白
+			cover := 1.0
+			if radius > 0 {
+				cover = roundedCoverage(fx, fy, s, radius)
+			}
 			if cover <= 0 {
 				continue
 			}
-			// cover-inner = 落在描边带内的比例
-			inner := roundedCoverage(fx-strokeW, fy-strokeW, s-2*strokeW, innerRadius)
-			if inner < 1 {
-				band := math.Min(1, cover-inner)
-				// image.RGBA 是预乘 alpha：白色必须写成 R=G=B=A，否则编码时溢出发黑
-				a := uint8(205 * band)
-				out.SetRGBA(x, y, color.RGBA{R: a, G: a, B: a, A: a})
-				continue
+			if border {
+				// cover-inner = 落在描边带内的比例
+				inner := roundedCoverage(fx-strokeW, fy-strokeW, s-2*strokeW, innerRadius)
+				if inner < 1 {
+					band := math.Min(1, cover-inner)
+					// image.RGBA 是预乘 alpha：白色必须写成 R=G=B=A，否则编码时溢出发黑
+					a := uint8(205 * band)
+					out.SetRGBA(x, y, color.RGBA{R: a, G: a, B: a, A: a})
+					continue
+				}
 			}
 			t := (fx + fy) / (2 * s)
 			r, g, b := lerpStops(t)
@@ -138,7 +177,37 @@ func render(size int) (image.Image, error) {
 		}
 	}
 
-	// 叠加文件夹（带 alpha）与纸飞机
+	if withShapes {
+		blitShapes(out, plate, plane, size)
+	}
+	return out, nil
+}
+
+// renderForeground 只画文件夹与纸飞机，透明底（安卓自适应图标前景层）。
+//
+// 输入：size 像素边长
+// 输出：RGBA 图；失败返回 error
+// 预期：图案位于画布中心约一半半径内，落在自适应图标的安全区里
+func renderForeground(size int) (image.Image, error) {
+	plate, err := renderPaths(plateSVG, size)
+	if err != nil {
+		return nil, err
+	}
+	plane, err := renderPaths(planeSVG, size)
+	if err != nil {
+		return nil, err
+	}
+	out := image.NewRGBA(image.Rect(0, 0, size, size))
+	blitShapes(out, plate, plane, size)
+	return out, nil
+}
+
+// blitShapes 把文件夹（带 alpha）与纸飞机叠到 out 上。
+//
+// 输入：out 目标图；plate/plane 已渲染的图层；size 边长
+// 输出：无（原地修改 out）
+// 预期：只影响 alpha>0 的像素，透明区域保持原样
+func blitShapes(out, plate, plane *image.RGBA, size int) {
 	for y := range size {
 		for x := range size {
 			if c := plate.RGBAAt(x, y); c.A > 0 {
@@ -149,7 +218,6 @@ func render(size int) (image.Image, error) {
 			}
 		}
 	}
-	return out, nil
 }
 
 // blend 把颜色 src 按 alpha 叠到 dst 上并写回。
@@ -258,6 +326,103 @@ func writeSYSO(dst, icoPath string) error {
 	return err
 }
 
+// writePNG 把图像编码成 PNG 并写盘。
+//
+// 输入：path 目标路径；img 图像
+// 输出：写盘或编码错误
+// 预期：父目录由调用方保证已存在
+func writePNG(path string, img image.Image) error {
+	data, err := pngBytes(img)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// writeAndroidIcons 生成安卓启动器图标。
+//
+// 输入：root 安卓 res 目录
+// 输出：写盘错误
+// 预期：
+//   - mipmap-<density>/ic_launcher.png 与 ic_launcher_round.png 给 API<26 的旧系统
+//   - 同目录的 ic_launcher_background/foreground.png 加 mipmap-anydpi-v26/*.xml
+//     给 API>=26 的自适应图标：背景铺满整格，前景图案落在中间安全区
+func writeAndroidIcons(root string) error {
+	// 旧版图标：48dp 起的五档位图
+	legacy := []struct {
+		dir  string
+		size int
+	}{
+		{"mdpi", 48}, {"hdpi", 72}, {"xhdpi", 96}, {"xxhdpi", 144}, {"xxxhdpi", 192},
+	}
+	// 自适应图标画布是 108dp，前景/背景按同一套密度各出一份
+	adaptive := []struct {
+		dir  string
+		size int
+	}{
+		{"mdpi", 108}, {"hdpi", 162}, {"xhdpi", 216}, {"xxhdpi", 324}, {"xxxhdpi", 432},
+	}
+
+	for _, d := range legacy {
+		dir := filepath.Join(root, "mipmap-"+d.dir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		square, err := render(d.size)
+		if err != nil {
+			return err
+		}
+		if err := writePNG(filepath.Join(dir, "ic_launcher.png"), square); err != nil {
+			return err
+		}
+		round, err := renderRound(d.size)
+		if err != nil {
+			return err
+		}
+		if err := writePNG(filepath.Join(dir, "ic_launcher_round.png"), round); err != nil {
+			return err
+		}
+	}
+
+	for _, d := range adaptive {
+		dir := filepath.Join(root, "mipmap-"+d.dir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		bg, err := renderBackground(d.size)
+		if err != nil {
+			return err
+		}
+		if err := writePNG(filepath.Join(dir, "ic_launcher_background.png"), bg); err != nil {
+			return err
+		}
+		fg, err := renderForeground(d.size)
+		if err != nil {
+			return err
+		}
+		if err := writePNG(filepath.Join(dir, "ic_launcher_foreground.png"), fg); err != nil {
+			return err
+		}
+	}
+
+	anydpi := filepath.Join(root, "mipmap-anydpi-v26")
+	if err := os.MkdirAll(anydpi, 0o755); err != nil {
+		return err
+	}
+	const layerXML = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
+`
+	for _, name := range []string{"ic_launcher.xml", "ic_launcher_round.xml"} {
+		if err := os.WriteFile(filepath.Join(anydpi, name), []byte(layerXML), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
 	const out = "internal/brand/icons"
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -300,4 +465,12 @@ func main() {
 		st, _ := os.Stat(dst)
 		fmt.Printf("%s %d B\n", dst, st.Size())
 	}
+
+	// 安卓启动器图标：旧版位图 + 自适应图标分层
+	const androidRes = "build/android/app/src/main/res"
+	if err := writeAndroidIcons(androidRes); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s/mipmap-*/ic_launcher*.png 已更新\n", androidRes)
 }

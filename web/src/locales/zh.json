@@ -354,6 +354,7 @@
     "check": "检查",
     "botLogin": "登录 bot",
     "botLoginHint": "用上面填的或已保存的 token 登录",
+    "credentialsRequired": "先在上方填 api_id 和 api_hash，再登录",
     "userLoginHint": "账号会话用于列频道、建卷、重建索引",
     "phone": "手机号",
     "phonePlaceholder": "+8613800000000",

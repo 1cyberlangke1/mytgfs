@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"mytgfs/internal/i18n"
 )
 
 // newService 造一个指向临时目录的服务，配置里带 api_id。
@@ -98,6 +100,30 @@ func TestLoginBotRequiresAPIID(t *testing.T) {
 	s, _ := newService(t, 0, "hash", "token")
 	if _, err := s.LoginBot(context.Background(), "token"); err == nil {
 		t.Fatal("缺 api_id 应报错")
+	}
+}
+
+// TestStartUserLoginWithoutConfig 全新安装还没有 config.toml 时给出可读提示。
+//
+// 输入：ConfigPath 指向不存在的文件（安卓首次启动的默认状态）
+// 输出：错误文本是 i18n 的 err.credentials_missing
+// 预期：不把 `open config.toml: no such file or directory` 直接透给面板
+func TestStartUserLoginWithoutConfig(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Paths{
+		ConfigPath:   filepath.Join(dir, "config.toml"),
+		APIHashFile:  filepath.Join(dir, "secrets", "api_hash"),
+		BotTokenFile: filepath.Join(dir, "secrets", "bot_token"),
+		BotSession:   filepath.Join(dir, "secrets", "bot.session"),
+		UserSession:  filepath.Join(dir, "secrets", "user.session"),
+		KeyPath:      filepath.Join(dir, "secrets", "session.key"),
+	})
+	_, err := s.StartUserLogin(context.Background(), "+8613800000000")
+	if err == nil {
+		t.Fatal("缺配置文件应报错")
+	}
+	if want := i18n.T("err.credentials_missing"); err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 

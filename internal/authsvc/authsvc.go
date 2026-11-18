@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -344,10 +345,20 @@ func (s *Service) Identity(ctx context.Context, bot bool) (Identity, error) {
 }
 
 // apiParams 读取 api_id/api_hash，缺失时在联网前失败。
+//
+// 输入：无
+// 输出：api_id、api_hash、配置；失败时返回可读原因
+// 预期：
+//   - 全新安装还没有 config.toml 时给「先保存凭证」的提示，而不是裸的
+//     `open config.toml: no such file or directory`（安卓首次启动就会撞上）
+//   - 其它读取错误带「读取配置」前缀，保留底层原因
 func (s *Service) apiParams() (int, string, config.Config, error) {
 	cfg, err := config.Load(s.p.ConfigPath)
 	if err != nil {
-		return 0, "", config.Config{}, err
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, "", config.Config{}, errors.New(i18n.T("err.credentials_missing"))
+		}
+		return 0, "", config.Config{}, fmt.Errorf("%s: %w", i18n.T("err.config_read"), err)
 	}
 	apiID := cfg.Telegram.APIID
 	apiHash := readTrim(cmp.Or(cfg.Telegram.APIHashFile, s.p.APIHashFile))

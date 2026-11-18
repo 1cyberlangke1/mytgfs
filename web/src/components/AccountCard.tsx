@@ -64,6 +64,39 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
 
   const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+  // 已保存的凭证够不够登录：后端只认盘上的 config.toml + 密钥文件
+  const savedReady = Boolean(creds?.api_id && creds?.api_hash_set);
+  // 输入框里刚填、还没保存的也算：点登录会先自动落盘再继续
+  const fillingReady =
+    apiId !== MASK && Number(apiId) > 0 && apiHash !== MASK && apiHash.trim() !== '';
+  const loginReady = savedReady || fillingReady;
+
+  // pendingCreds 把输入框里还没保存的凭证整理成请求体；没有改动时返回 null
+  const pendingCreds = () => {
+    const body = {
+      api_id: apiId === MASK ? 0 : Number(apiId) || 0,
+      api_hash: apiHash === MASK ? '' : apiHash.trim(),
+      bot_token: botToken === MASK ? '' : botToken.trim(),
+    };
+    return body.api_id || body.api_hash || body.bot_token ? body : null;
+  };
+
+  // ensureCreds 登录前先把输入框里的凭证落盘
+  //
+  // 输入：无（读当前输入框）
+  // 输出：保存完成后 resolve；没有待保存内容时直接 resolve
+  // 预期：安卓全新安装没有 config.toml，不先写就直接报「文件不存在」，
+  // 所以登录入口自己负责补这一步，用户不用先点保存
+  const ensureCreds = async () => {
+    const body = pendingCreds();
+    if (!body) return;
+    const res = await saveCredentials(body);
+    setCreds(res.status);
+    setApiId(res.status.api_id > 0 ? MASK : '');
+    setApiHash(res.status.api_hash_set ? MASK : '');
+    setBotToken(res.status.bot_token_set ? MASK : '');
+  };
+
   // saveCreds 保存凭证；值为哨兵点时表示不修改对应密钥
   const saveCreds = () => {
     setBusy('save');
@@ -85,7 +118,9 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
 
   const doBotLogin = () => {
     setBusy('bot');
-    loginBot(botToken === MASK ? '' : botToken.trim())
+    const token = botToken === MASK ? '' : botToken.trim();
+    ensureCreds()
+      .then(() => loginBot(token))
       .then((res) => {
         setBotIdentity(res.user);
         setBotToken('');
@@ -98,7 +133,9 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
 
   const doSendCode = () => {
     setBusy('code');
-    startUserLogin(phone.trim())
+    const target = phone.trim();
+    ensureCreds()
+      .then(() => startUserLogin(target))
       .then((res) => {
         setCodeHash(res.phone_code_hash);
         onNotify(a.codeSent, 'success');
@@ -109,12 +146,15 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
 
   const doFinishLogin = () => {
     setBusy('finish');
-    finishUserLogin({
-      phone: phone.trim(),
-      code: code.trim(),
-      phone_code_hash: codeHash,
-      password: needPassword ? password : undefined,
-    })
+    ensureCreds()
+      .then(() =>
+        finishUserLogin({
+          phone: phone.trim(),
+          code: code.trim(),
+          phone_code_hash: codeHash,
+          password: needPassword ? password : undefined,
+        })
+      )
       .then((res) => {
         if (res.need_password) {
           setNeedPassword(true);
@@ -222,6 +262,9 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
 
       <section className="surface-card rounded-2xl p-6 space-y-5">
         <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">{a.login}</h2>
+        {!loginReady && (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400">{a.credentialsRequired}</p>
+        )}
 
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3">
@@ -243,7 +286,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{a.botLoginHint}</p>
           )}
           <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" onClick={doBotLogin} disabled={busy !== ''}>
+            <Button type="button" variant="outline" onClick={doBotLogin} disabled={busy !== '' || !loginReady}>
               {busy === 'bot' ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
@@ -290,7 +333,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
                 type="button"
                 variant="outline"
                 onClick={doSendCode}
-                disabled={busy !== '' || !phone.trim()}
+                disabled={busy !== '' || !phone.trim() || !loginReady}
               >
                 {busy === 'code' ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -338,7 +381,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({ t, onNotify }) => {
                   type="button"
                   variant="accent"
                   onClick={doFinishLogin}
-                  disabled={busy !== '' || !code.trim()}
+                  disabled={busy !== '' || !code.trim() || !loginReady}
                 >
                   {busy === 'finish' ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />

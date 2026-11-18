@@ -354,6 +354,7 @@
     "check": "Check",
     "botLogin": "Sign in bot",
     "botLoginHint": "Uses the token above or the saved one",
+    "credentialsRequired": "Fill in api_id and api_hash above, then log in",
     "userLoginHint": "The account session powers channel listing, volume creation and index rebuild",
     "phone": "Phone number",
     "phonePlaceholder": "+15551234567",

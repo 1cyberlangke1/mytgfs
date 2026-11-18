@@ -61,6 +61,8 @@ export interface ApiQueueItem {
 
 export interface ApiState {
   volumes: ApiVolume[];
+  /** 已保存 api_id + api_hash；false 表示还没完成首次配置 */
+  login_ready?: boolean;
   caps?: {
     createVolume?: boolean;
     deleteVolume?: boolean;

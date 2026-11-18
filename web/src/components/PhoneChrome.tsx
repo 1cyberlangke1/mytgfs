@@ -40,7 +40,7 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
   ThemeIcon,
   setTheme,
 }) => (
-  <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 py-2">
+  <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
     <div className="flex items-center justify-between gap-2">
       <motion.a
         href="#overview"

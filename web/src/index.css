@@ -104,6 +104,8 @@ textarea:user-invalid {
   width: 100vw;
   max-width: none;
   height: 100vh;
+  /* 移动端地址栏 / 手势区会改变可视高度：dvh 才是真实视口 */
+  height: 100dvh;
   max-height: none;
   border: 0;
   background: transparent;
