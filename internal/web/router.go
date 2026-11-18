@@ -20,6 +20,8 @@ import (
 type router struct {
 	mux    *http.ServeMux
 	events push.Events
+	// closers 是随 handler 一起释放的后台资源（如下载任务）。
+	closers []func()
 }
 
 // newRouter 创建面板路由。
@@ -44,6 +46,29 @@ func (rt *router) route(pattern string, h http.Handler) {
 // routeFunc 是 route 的函数版，给 http.HandlerFunc 用。
 func (rt *router) routeFunc(pattern string, h http.HandlerFunc) {
 	rt.route(pattern, h)
+}
+
+// addCloser 登记一个随 handler 释放的资源。
+//
+// 输入：fn 关闭函数（nil 忽略）
+// 输出：无
+// 预期：Close 按登记顺序逐个调用；重复登记同一资源由调用方保证不发生
+func (rt *router) addCloser(fn func()) {
+	if fn != nil {
+		rt.closers = append(rt.closers, fn)
+	}
+}
+
+// Close 释放随 handler 存活的资源。
+//
+// 输入：无
+// 输出：无
+// 预期：幂等；在 HTTP 服务关闭后调用，停掉仍在跑的后台下载
+func (rt *router) Close() {
+	for _, fn := range rt.closers {
+		fn()
+	}
+	rt.closers = nil
 }
 
 // ServeHTTP 让 router 直接当 http.Handler 用。
@@ -92,4 +117,25 @@ func (s *statusRecorder) WriteHeader(code int) {
 		s.wrote = true
 	}
 	s.ResponseWriter.WriteHeader(code)
+}
+
+// Flush 透传 http.Flusher。
+//
+// 输入：无
+// 输出：无
+// 预期：包一层后 SSE/流式响应仍能逐块下发；
+// 不实现时 w.(http.Flusher) 断言失败，路由下的流直接退化成整块缓冲
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap 暴露底层 ResponseWriter。
+//
+// 输入：无
+// 输出：底层 writer
+// 预期：http.ResponseController 据此取到 Flush/Hijack/SetReadDeadline 等能力
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
 }

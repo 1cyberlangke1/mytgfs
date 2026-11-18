@@ -2,7 +2,11 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-FYotVB9vWsh1PphJdRE2Xm3pEHA8fk1ftskO1OfVGHs='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>mytgfs — Local Telegram Channel File Volume Panel</title>
     <meta name="description" content="Single-user local Web management console for Telegram private channel file volumes with chunked resumable uploads." />
     <meta property="og:title" content="mytgfs — Local Telegram Channel File Volume Panel" />
@@ -10,8 +14,9 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <script>
-      // 首屏前先定深浅色：跟随系统时读 prefers-color-scheme，
-      // 免得深色系统上先闪一帧浅色再被 React 纠正
+      // 首屏前先定深浅色与语言：跟随系统时读 prefers-color-scheme，
+      // 免得深色系统上先闪一帧浅色再被 React 纠正；
+      // lang 也在这里定，英文用户首屏的读屏语言才是对的
       (function () {
         try {
           var stored = JSON.parse(localStorage.getItem('mytgfs_theme_v1') || '"system"');
@@ -22,12 +27,25 @@
         } catch (e) {
           // 隐私模式禁用存储时按浅色渲染，React 挂载后会再校正
         }
+        try {
+          var lang = JSON.parse(localStorage.getItem('mytgfs_locale_v1') || 'null');
+          if (lang === 'en') document.documentElement.lang = 'en';
+          else if (lang === 'zh') document.documentElement.lang = 'zh-CN';
+        } catch (e) {
+          // 语言读不到就保持模板默认 zh-CN，React 挂载后会再校正
+        }
       })();
     </script>
-    <script type="module" crossorigin src="/assets/index-B1pUvwti.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Cvo9TMLF.css">
+    <script type="module" crossorigin src="/assets/index-B4vFXpim.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-BWaJ3C7D.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-Crg9zhOY.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-DxJR-o3i.js">
+    <link rel="modulepreload" crossorigin href="/assets/motion-Ca1jNima.js">
+    <link rel="modulepreload" crossorigin href="/assets/i18n-DE70oKSM.js">
+    <link rel="stylesheet" crossorigin href="/assets/vendor-DLP2qhq4.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-ByVI5gK9.css">
   </head>
   <body class="bg-[#F6F6F3] text-zinc-900 dark:bg-[#090A0F] dark:text-zinc-100 antialiased selection:bg-blue-500/20 selection:text-blue-600 dark:selection:text-blue-300">
-    <div id="root"></div>
+    <div id="root"></div>
   </body>
 </html>

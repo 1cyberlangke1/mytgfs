@@ -7,4 +7,6 @@ package web
 // 输入：无
 // 输出：true
 // 预期：安卓进程拿不到宿主环境变量，改由编译期标签决定挂假数据层
+//
+//lint:ignore U1000 唯一调用点 e2e_on.go 受 //go:build e2e 约束
 func forcedE2E() bool { return true }

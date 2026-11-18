@@ -205,18 +205,19 @@ func makePNG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// TestValidVolumeName 卷名只允许安全字符。
+// TestValidVolumeName 卷名不能带路径分隔符或 Windows 保留字符。
 //
 // 输入：合法与非法卷名
 // 输出：布尔
-// 预期：斜杠、空格、中文、超长都拒绝，避免拼进 index-<name>.db 出问题
+// 预期：允许中文与空格，但拒绝 ..、分隔符、盘符、控制字符与结尾的点/空格
 func TestValidVolumeName(t *testing.T) {
-	for _, n := range []string{"demo", "demo2", "a-b_c", "A1"} {
+	for _, n := range []string{"demo", "demo2", "a-b_c", "A1", "中文卷", "a b"} {
 		if !validVolumeName(n) {
 			t.Errorf("%q 应合法", n)
 		}
 	}
-	for _, n := range []string{"", "../x", "a/b", "中文", "a b", string(make([]byte, 40))} {
+	tooLong := strings.Repeat("卷", 33) // 33×3=99 字节，超过 64
+	for _, n := range []string{"", "../x", "a/b", `a\b`, "C:x", "x.", "x ", tooLong, "a\x00b"} {
 		if validVolumeName(n) {
 			t.Errorf("%q 应非法", n)
 		}

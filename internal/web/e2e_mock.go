@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -294,7 +295,7 @@ func mockRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		replyJSON(w, http.StatusOK, map[string]any{
-			"dir": "C:\\mock\\downloads",
+			"dir": filepath.Join(os.TempDir(), "mock", "downloads"),
 			"files": []map[string]any{
 				{"name": "已下载报告.pdf", "size": 65536, "mod": now},
 				{"name": "已下载歌曲.mp3", "size": 2048 * 1024, "mod": now},

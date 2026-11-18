@@ -39,6 +39,11 @@ func handleFileVideoThumb(dir string, fn VideoThumbFunc) http.HandlerFunc {
 			http.Error(w, i18n.T("err.http_bad_request"), http.StatusBadRequest)
 			return
 		}
+		// 与 /api/poster 一致：卷名是缓存子目录的一段，不能带 .. 或分隔符
+		if !safeVolumeDir(vol) {
+			http.Error(w, i18n.T("err.http_bad_request"), http.StatusBadRequest)
+			return
+		}
 		ph := pathHash(vol, p)
 		key := ph + "-" + q.Get("v")
 		w.Header().Set("ETag", `"`+key+`"`)

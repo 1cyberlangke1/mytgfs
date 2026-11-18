@@ -13,5 +13,10 @@ import "os/exec"
 
 func openPath(dir string) error {
 	cmd := exec.Command("explorer.exe", dir)
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 不等也不留句柄：explorer 把请求转交给已在运行的实例后立刻退出，
+	// 不释放进程句柄会在频繁「打开目录」时堆积
+	return cmd.Process.Release()
 }

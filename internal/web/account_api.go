@@ -44,7 +44,7 @@ func handleAPICredentials(opts Options) http.HandlerFunc {
 			defer cancel()
 			st, err := opts.Auth.SaveCredentials(ctx, in.APIID, in.APIHash, in.BotToken)
 			if err != nil {
-				replyJSONError(w, http.StatusBadRequest, err.Error())
+				replyJSONError(w, http.StatusBadRequest, opFailed("err.credentials_save_prefix", err))
 				return
 			}
 			replyJSON(w, http.StatusOK, map[string]any{
@@ -82,7 +82,7 @@ func handleAPILoginBot(opts Options) http.HandlerFunc {
 		defer cancel()
 		idn, err := opts.Auth.LoginBot(ctx, in.Token)
 		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.login_bot_prefix", err))
 			return
 		}
 		replyJSON(w, http.StatusOK, map[string]any{"user": idn, "restart_required": true})
@@ -113,7 +113,7 @@ func handleAPIUserStart(opts Options) http.HandlerFunc {
 		defer cancel()
 		req, err := opts.Auth.StartUserLogin(ctx, in.Phone)
 		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.login_code_prefix", err))
 			return
 		}
 		replyJSON(w, http.StatusOK, req)
@@ -142,7 +142,7 @@ func handleAPIUserFinish(opts Options) http.HandlerFunc {
 		defer cancel()
 		res, err := opts.Auth.FinishUserLogin(ctx, in)
 		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.login_finish_prefix", err))
 			return
 		}
 		replyJSON(w, http.StatusOK, res)
@@ -169,7 +169,7 @@ func handleAPIIdentity(opts Options) http.HandlerFunc {
 		defer cancel()
 		idn, err := opts.Auth.Identity(ctx, kind != "user")
 		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.identity_prefix", err))
 			return
 		}
 		replyJSON(w, http.StatusOK, map[string]any{"user": idn})

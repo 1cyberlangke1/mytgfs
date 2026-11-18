@@ -36,7 +36,7 @@ func handleAPIChannels(opts Options) http.HandlerFunc {
 		defer cancel()
 		items, err := opts.Channels(ctx)
 		if err != nil {
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.channel_list_prefix", err))
 			return
 		}
 		if items == nil {
@@ -86,7 +86,7 @@ func handleAPIAttachVolume(opts Options) http.HandlerFunc {
 				replyJSONError(w, http.StatusConflict, i18n.T("err.channel_attached"))
 				return
 			}
-			replyJSONError(w, http.StatusBadRequest, err.Error())
+			replyJSONError(w, http.StatusBadRequest, opFailed("err.volume_attach_prefix", err))
 			return
 		}
 		replyJSON(w, http.StatusOK, res)
@@ -132,7 +132,7 @@ func handleAPIVolumes(opts Options) http.HandlerFunc {
 					replyJSONError(w, http.StatusConflict, i18n.T("err.volume_exists", name))
 					return
 				}
-				replyJSONError(w, http.StatusInternalServerError, err.Error())
+				replyJSONError(w, http.StatusInternalServerError, opFailed("err.volume_create_prefix", err))
 				return
 			}
 			replyJSON(w, http.StatusOK, res)
@@ -147,7 +147,7 @@ func handleAPIVolumes(opts Options) http.HandlerFunc {
 				return
 			}
 			if err := opts.DeleteVolume(r.Context(), name); err != nil {
-				replyJSONError(w, http.StatusInternalServerError, err.Error())
+				replyJSONError(w, http.StatusInternalServerError, opFailed("err.volume_delete_prefix", err))
 				return
 			}
 			replyJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name})
@@ -161,17 +161,7 @@ func handleAPIVolumes(opts Options) http.HandlerFunc {
 //
 // 输入：name 用户输入
 // 输出：true 表示可安全用于文件名与配置
-// 预期：字母/数字/下划线/中划线，长度 1..32
+// 预期：与 config.ValidVolumeName 同一套规则，面板与 CLI/配置文件不会出现两套标准
 func validVolumeName(name string) bool {
-	if len(name) == 0 || len(name) > 32 {
-		return false
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
+	return config.ValidVolumeName(name) == nil
 }

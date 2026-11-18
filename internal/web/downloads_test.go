@@ -30,6 +30,15 @@ func (f openFiles) Open(ctx context.Context, p string) (vfs.File, error) {
 	return &ctxFile{File: mustOpen(f.root, p), ctx: ctx}, nil
 }
 
+// Info 按真实临时目录里的文件回报大小，供下载任务启动时取 size。
+func (f openFiles) Info(ctx context.Context, p string) (fm.Entry, error) {
+	st, err := os.Stat(filepath.Join(f.root, filepath.Base(p)))
+	if err != nil {
+		return fm.Entry{}, err
+	}
+	return fm.Entry{Name: filepath.Base(p), Size: st.Size(), Mod: st.ModTime()}, nil
+}
+
 func mustOpen(root, p string) *os.File {
 	f, err := os.Open(filepath.Join(root, filepath.Base(p)))
 	if err != nil {
@@ -248,11 +257,24 @@ func (fmFunc) List(context.Context, string) ([]fm.Entry, error)       { return n
 func (fmFunc) Search(context.Context, string, string, int) ([]fm.SearchHit, error) {
 	return nil, fs.ErrInvalid
 }
-func (fmFunc) Info(context.Context, string) (fm.Entry, error)  { return fm.Entry{}, fs.ErrInvalid }
+
+// Info 用该桩自己的 Open 取文件信息，供 Start 取 size 而不必再开一次远端。
+func (f fmFunc) Info(ctx context.Context, p string) (fm.Entry, error) {
+	file, err := f(ctx, p)
+	if err != nil {
+		return fm.Entry{}, err
+	}
+	defer file.Close()
+	st, err := file.Stat()
+	if err != nil {
+		return fm.Entry{}, err
+	}
+	return fm.Entry{Name: filepath.Base(p), Size: st.Size(), Mod: st.ModTime()}, nil
+}
 func (fmFunc) Mkdir(context.Context, string) error             { return fs.ErrInvalid }
 func (fmFunc) Upload(context.Context, string, io.Reader) error { return fs.ErrInvalid }
-func (fmFunc) AdoptUpload(context.Context, string, string, int64, string) error {
-	return fs.ErrInvalid
+func (fmFunc) AdoptUpload(context.Context, string, string, int64, string) (int64, error) {
+	return 0, fs.ErrInvalid
 }
 func (fmFunc) Remove(context.Context, string) error       { return fs.ErrInvalid }
 func (fmFunc) Move(context.Context, string, string) error { return fs.ErrInvalid }

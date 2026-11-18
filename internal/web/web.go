@@ -9,8 +9,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
-	"time"
 
 	"mytgfs/internal/authsvc"
 	"mytgfs/internal/channel"
@@ -113,13 +113,29 @@ func NewHandler(configPath string, opts Options) http.Handler {
 // 输出：error
 // 预期：ctx 取消时优雅关闭；未就绪的 handler 返回空状态而不是报错
 func ServeWith(ctx context.Context, addr, configPath string, opts Options) error {
-	srv := &http.Server{Addr: addr, Handler: NewHandler(configPath, opts)}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return ServeListener(ctx, ln, configPath, opts)
+}
+
+// ServeListener 在已绑定的监听器上提供面板服务。
+//
+// 输入：ctx；ln 已 Listen 的套接字；configPath；opts 面板能力
+// 输出：error
+// 预期：--port 0 由调用方先绑定再报地址，避免「探测后关闭再重绑」被抢端口；
+// ctx 取消时优雅关闭
+func ServeListener(ctx context.Context, ln net.Listener, configPath string, opts Options) error {
+	rt := newMux(configPath, opts)
+	defer rt.Close()
+	srv := &http.Server{Handler: wrapE2E(rt)}
 	context.AfterFunc(ctx, func() {
 		if err := srv.Shutdown(context.Background()); err != nil {
 			slog.Warn(i18n.T("log.web_shutdown_failed"), "err", err)
 		}
 	})
-	err := srv.ListenAndServe()
+	err := srv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -134,8 +150,9 @@ func ServeWith(ctx context.Context, addr, configPath string, opts Options) error
 func newMux(configPath string, opts Options) *router {
 	rt := newRouter(opts.Push)
 	api := newFilesAPI(opts.Files, opts.Volumes, opts.Stats, opts.ThumbDir)
-	// 旧版 flat 布局的缩略图残留按天清扫：新布局按卷分目录，旧文件自然衰减
-	go SweepFlatLegacy(thumbRootDir(opts.ThumbDir), 24*time.Hour)
+	// 旧版 flat 布局的缩略图残留按天清扫：新布局按卷分目录，旧文件自然衰减。
+	// NewHandler 可能被多次调用（测试 / 重建 handler），清扫只对同一目录跑一次
+	sweepThumbsOnce(thumbRootDir(opts.ThumbDir))
 
 	rt.route("/api/state", handleAPIState(api, opts))
 	rt.route("/api/files", handleAPIFiles(api))
@@ -143,6 +160,8 @@ func newMux(configPath string, opts Options) *router {
 	rt.route("/api/files/move", handleAPIMove(api))
 	rt.route("/api/files/remove", handleAPIRemove(api))
 	rt.route("/api/file", handleAPIFile(api))
+	rt.route("/api/file/window", handleAPIFileWindow(api))
+	rt.route("/api/file/size", handleAPIFileSize(api))
 	dl := newDownloadStore(func() string {
 		// 下载目录每次现取：面板改 downloads.dir 立即生效，不需要重启
 		cur, err := config.Load(configPath)
@@ -157,6 +176,7 @@ func newMux(configPath string, opts Options) *router {
 		return api.lookup(v)
 	}, opts.Push)
 	rt.route("/api/downloads", handleAPIDownloads(dl))
+	rt.addCloser(dl.Close)
 	rt.route("/api/downloads/task", handleAPIDownloadTask(dl))
 	rt.route("/api/downloads/open", handleAPIDownloadsOpen(dl))
 	rt.route("/api/downloads/file", handleAPIDownloadFile(dl))
@@ -192,6 +212,8 @@ func newMux(configPath string, opts Options) *router {
 	rt.routeFunc("/api/upload/init", up.handleInit)
 	rt.routeFunc("/api/upload/chunk", up.handleChunk)
 	rt.routeFunc("/api/upload/commit", up.handleCommit)
+	// 按路径接管：选择器已把文件落盘，面板只传路径，字节不过桥
+	rt.routeFunc("/api/upload/adopt", up.handleAdopt)
 	rt.routeFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

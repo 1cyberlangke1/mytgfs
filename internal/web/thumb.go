@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -38,6 +39,11 @@ const (
 	thumbMaxSource = 16 << 20
 	// thumbMaxSide 缩略图最长边
 	thumbMaxSide = 320
+	// thumbMaxPixels 限制解码后的像素总数：高压缩比的 PNG 可以几 MB 解出上亿像素，
+	// 不设上限等于允许一张图把进程内存打满
+	thumbMaxPixels = 40_000_000
+	// thumbWorkers 是同时解码的图片数上限：并发太高时多张大图叠加同样会顶爆内存
+	thumbWorkers = 2
 )
 
 // thumbExts 是允许生成缩略图的扩展名。
@@ -45,17 +51,37 @@ var thumbExts = map[string]bool{
 	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
 }
 
-// thumbCache 是磁盘缓存目录，带锁避免同一张图被并发重复生成。
+// thumbCache 是磁盘缓存目录。
+//
+// 并发策略：
+//   - inflight 让同一张图只生成一次，其余请求等这一次的结果
+//   - sem 限制同时解码的图片数，避免多张大图叠加把内存顶爆
+//
+// 早先这里用一把全局锁把「读缓存 + 远端读 + 解码 + 编码」全串起来，
+// 结果是任何一张图的生成都会卡住其它所有卷的缩略图。
 type thumbCache struct {
 	dir string
-	mu  sync.Mutex
+
+	mu       sync.Mutex
+	inflight map[string]*thumbGen
+	sem      chan struct{}
+}
+
+// thumbGen 是一次正在进行的缩略图生成。
+type thumbGen struct {
+	done chan struct{}
+	data []byte
 }
 
 func newThumbCache(dir string) *thumbCache {
 	if strings.TrimSpace(dir) == "" {
 		dir = "data/thumbs"
 	}
-	return &thumbCache{dir: dir}
+	return &thumbCache{
+		dir:      dir,
+		inflight: map[string]*thumbGen{},
+		sem:      make(chan struct{}, thumbWorkers),
+	}
 }
 
 // thumbRootDir 返回缓存根目录（空值回落默认）。
@@ -102,6 +128,45 @@ func (c *thumbCache) purgeEntry(vol, p string) int {
 		}
 	}
 	return removed
+}
+
+// obtain 返回缩略图字节：命中缓存直接读，未命中调用 gen 生成并写缓存。
+//
+// 输入：vol 卷名；p 卷内路径；key 版本键；gen 生成函数
+// 输出：JPEG 字节；生成失败返回 nil
+// 预期：
+//   - 同一个 key 只允许一个生成者，其余调用者等它的结果
+//   - 同时解码数受 thumbWorkers 限制，避免多张大图叠加
+func (c *thumbCache) obtain(vol, p, key string, gen func() []byte) []byte {
+	if b := c.load(vol, p, key); b != nil {
+		return b
+	}
+	c.mu.Lock()
+	if g, ok := c.inflight[key]; ok {
+		c.mu.Unlock()
+		<-g.done
+		return g.data
+	}
+	g := &thumbGen{done: make(chan struct{})}
+	c.inflight[key] = g
+	c.mu.Unlock()
+
+	// sem 用闭包包住，生成过程中 panic 也不会漏放名额
+	b := func() []byte {
+		c.sem <- struct{}{}
+		defer func() { <-c.sem }()
+		return gen()
+	}()
+	if b != nil {
+		c.save(vol, p, key, b)
+	}
+	g.data = b
+	close(g.done)
+
+	c.mu.Lock()
+	delete(c.inflight, key)
+	c.mu.Unlock()
+	return b
 }
 
 // load 返回缓存文件内容；未命中返回 nil。
@@ -191,16 +256,11 @@ func handleFileThumb(api *filesAPI) http.HandlerFunc {
 			return
 		}
 
-		// 串行生成：目录里几十张图同时点开也不会把内存顶爆
-		api.thumbs.mu.Lock()
-		b := api.thumbs.load(vol, p, key)
-		if b == nil {
-			b = generateThumb(r, m, p, thumbMaxSide)
-			if b != nil {
-				api.thumbs.save(vol, p, key, b)
-			}
-		}
-		api.thumbs.mu.Unlock()
+		// 命中磁盘缓存直接返回；未命中时同一张图只生成一次，
+		// 其它请求等这一次结果，不同图片之间互不阻塞
+		b := api.thumbs.obtain(vol, p, key, func() []byte {
+			return generateThumb(r, m, p, thumbMaxSide)
+		})
 		if b == nil {
 			http.Error(w, i18n.T("err.http_decode_failed"), http.StatusUnsupportedMediaType)
 			return
@@ -219,6 +279,18 @@ func generateThumb(r *http.Request, m fm.Files, p string, side int) []byte {
 		return nil
 	}
 	defer f.Close()
+	// 先只读文件头拿尺寸：几 MB 的高压缩比 PNG 能解出上亿像素，
+	// 直接 Decode 等于让一张图把进程内存打满
+	cfg, _, cerr := image.DecodeConfig(f)
+	if cerr != nil {
+		return nil
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > thumbMaxPixels {
+		return nil
+	}
+	if _, serr := f.Seek(0, io.SeekStart); serr != nil {
+		return nil
+	}
 	src, _, err := image.Decode(f)
 	if err != nil {
 		return nil

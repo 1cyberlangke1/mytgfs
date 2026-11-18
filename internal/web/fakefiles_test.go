@@ -65,20 +65,20 @@ func (f *fakeFiles) Upload(ctx context.Context, p string, r io.Reader) error {
 // AdoptUpload 接管已落盘的临时文件：测试里读进内存，等价于 Upload。
 //
 // 输入：p 目标路径；temp 临时文件；size 字节数；sha 摘要（不校验）
-// 输出：error
+// 输出：固定的假任务号 1；error
 // 预期：记录一次接管调用，用来断言提交路径没有退回「再拷一份」
-func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error {
+func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) (int64, error) {
 	data, err := os.ReadFile(temp)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if int64(len(data)) != size {
-		return errors.New("adopt size mismatch")
+		return 0, errors.New("adopt size mismatch")
 	}
 	f.adoptCalls++
 	f.lastSha = sha
 	f.uploads[p] = string(data)
-	return nil
+	return 1, nil
 }
 
 func (f *fakeFiles) Remove(ctx context.Context, p string) error {

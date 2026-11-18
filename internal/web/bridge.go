@@ -2,18 +2,24 @@ package web
 
 // 安卓传输桥：把面板路由暴露成一个 Wails 服务方法。
 //
-// 输入：前端经 Wails 运行期桥送来的 {method, path, body(base64)}
-// 输出：{status, type, body(base64)}
+// 输入：前端经 Wails 运行期桥送来的 {method, path, body(UTF-8 文本)}
+// 输出：{status, type, body(UTF-8 文本)}
 // 预期：与直接 fetch 走同一套 newMux 路由，行为一致；
-// 安卓 WebView 的 shouldInterceptRequest 拿不到请求体、也会丢掉 query 串，
-// 所以安卓前端不再直连 /api/*，统一从 Do 进来
+// 安卓 WebView 的 shouldInterceptRequest 拿不到请求体，所以写入类请求从 Do 进来。
+// 这里只走文本（JSON）；文件字节要么由服务端按路径读盘，要么走原生文件通道，
+// 不做任何 base64 编码。
 
 import (
 	"bytes"
-	"encoding/base64"
 	"net/http"
 	"strings"
 )
+
+// maxBridgeBody 是桥请求体的上限。
+//
+// 桥只承载 JSON（移动/删除/设置等），1MiB 已远超实际大小；
+// 上限存在是为了不让一次调用按声明的字符串长度任意分配内存。
+const maxBridgeBody = 1 << 20
 
 // BridgeRequest 是一次面板请求。
 //
@@ -26,7 +32,7 @@ type BridgeRequest struct {
 
 // BridgeResponse 是面板响应。
 //
-// Status 是 HTTP 状态码；Type 是响应的 Content-Type；Body 是原始字节的 base64。
+// Status 是 HTTP 状态码；Type 是响应的 Content-Type；Body 是 UTF-8 文本。
 type BridgeResponse struct {
 	Status int    `json:"status"`
 	Type   string `json:"type"`
@@ -70,8 +76,8 @@ func (r *bridgeRecorder) WriteHeader(status int) {
 
 // Do 执行一次面板请求。
 //
-// 输入：req.Method / req.Path / req.Body(base64)
-// 输出：状态码、Content-Type 与 base64 正文
+// 输入：req.Method / req.Path / req.Body（UTF-8 文本，通常是 JSON）
+// 输出：状态码、Content-Type 与文本正文
 // 预期：非 /api/ 路径与 SSE 通道直接拒绝（前者走静态资源、后者阻塞不返回）
 func (b *Bridge) Do(req BridgeRequest) (BridgeResponse, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
@@ -80,28 +86,23 @@ func (b *Bridge) Do(req BridgeRequest) (BridgeResponse, error) {
 	}
 	if !strings.HasPrefix(req.Path, "/api/") {
 		return BridgeResponse{Status: http.StatusBadRequest, Type: "application/json",
-			Body: encodeBridgeBody([]byte(`{"error":{"message":"bridge only serves /api/"}}`))}, nil
+			Body: `{"error":{"message":"bridge only serves /api/"}}`}, nil
 	}
 	if strings.HasPrefix(req.Path, "/api/events") {
 		return BridgeResponse{Status: http.StatusBadRequest, Type: "application/json",
-			Body: encodeBridgeBody([]byte(`{"error":{"message":"events use the desktop runtime"}}`))}, nil
+			Body: `{"error":{"message":"events use the desktop runtime"}}`}, nil
 	}
 
-	var body []byte
-	if req.Body != "" {
-		raw, err := base64.StdEncoding.DecodeString(req.Body)
-		if err != nil {
-			return BridgeResponse{}, err
-		}
-		body = raw
+	if len(req.Body) > maxBridgeBody {
+		return BridgeResponse{Status: http.StatusRequestEntityTooLarge, Type: "application/json",
+			Body: `{"error":{"message":"bridge body too large"}}`}, nil
 	}
-	hr, err := http.NewRequest(method, req.Path, bytes.NewReader(body))
+	hr, err := http.NewRequest(method, req.Path, strings.NewReader(req.Body))
 	if err != nil {
 		return BridgeResponse{}, err
 	}
-	// 上传分片按原始字节收，与桌面端同源
-	if method != http.MethodGet {
-		hr.Header.Set("Content-Type", "application/octet-stream")
+	if method != http.MethodGet && req.Body != "" {
+		hr.Header.Set("Content-Type", "application/json")
 	}
 	rec := &bridgeRecorder{}
 	b.h.ServeHTTP(rec, hr)
@@ -112,17 +113,6 @@ func (b *Bridge) Do(req BridgeRequest) (BridgeResponse, error) {
 	return BridgeResponse{
 		Status: status,
 		Type:   rec.header.Get("Content-Type"),
-		Body:   encodeBridgeBody(rec.body.Bytes()),
+		Body:   rec.body.String(),
 	}, nil
-}
-
-// encodeBridgeBody 把字节编成 base64 字符串。
-//
-// 输入：原始字节
-// 输出：base64（空输入返回空串，前端据此跳过解码）
-func encodeBridgeBody(p []byte) string {
-	if len(p) == 0 {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(p)
 }

@@ -16,6 +16,24 @@ import (
 // maxPosterBytes 是浏览器上传封面的上限。
 const maxPosterBytes = 8 << 20
 
+// safeVolumeDir 判断卷名能否安全地当作缓存目录的一段。
+//
+// 输入：vol 请求里的卷名
+// 输出：true 表示不含路径分隔符/父目录/盘符等会改变落点或越出缓存根的内容
+// 预期：缓存目录是 thumbs/<vol>，卷名一旦带 .. 或 / 就会把文件写到缓存根之外
+func safeVolumeDir(vol string) bool {
+	if vol == "" || vol == "." || vol == ".." {
+		return false
+	}
+	for _, r := range vol {
+		switch {
+		case r < 0x20, r == '/', r == '\\', r == ':', r < 0x7f && strings.ContainsRune(`<>"|?*`, r):
+			return false
+		}
+	}
+	return true
+}
+
 // posterPath 返回浏览器封面缓存文件的路径。
 //
 // 布局：thumbs/<vol>/<路径哈希>-<版本>.jpg，分卷便于删卷整块清理；
@@ -62,6 +80,12 @@ func handleAPIPoster(dir string) http.HandlerFunc {
 			replyJSONError(w, http.StatusBadRequest, i18n.T("err.http_bad_request"))
 			return
 		}
+		// 卷名直接用做缓存子目录：不校验等于允许 /api/poster?vol=../../x 写到缓存根外
+		if !safeVolumeDir(vol) {
+			replyJSONError(w, http.StatusBadRequest, i18n.T("err.http_bad_request"))
+			return
+		}
+		bodyFromSrc(r)
 		body := http.MaxBytesReader(w, r.Body, maxPosterBytes)
 		data, err := io.ReadAll(body)
 		if err != nil || len(data) == 0 {

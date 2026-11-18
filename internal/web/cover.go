@@ -15,12 +15,42 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"mytgfs/internal/cover"
 	"mytgfs/internal/i18n"
 )
+
+// bodyFromSrc 让「按路径上传」复用同一套读取逻辑。
+//
+// 输入：r；查询参数 src 为宿主落盘的绝对路径（原生选择器/原生落盘通道）
+// 输出：无；src 有效时把 r.Body 换成文件句柄
+// 预期：src 缺失或不可读时保持 r.Body 不变，后续按原逻辑返回 400；
+// 路径必须是绝对路径且不含 NUL，避免被拼成任意特殊文件
+func bodyFromSrc(r *http.Request) {
+	src := r.URL.Query().Get("src")
+	if src == "" || strings.ContainsRune(src, 0) {
+		return
+	}
+	abs, err := filepath.Abs(src)
+	if err != nil || abs != src {
+		// 只接受调用方给出的绝对路径形态，不做相对路径解析
+		return
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return
+	}
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		f.Close()
+		return
+	}
+	r.Body = f
+}
 
 // CoverSource 是频道头像与标题的读写入口。
 //
@@ -105,6 +135,7 @@ func serveCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol 
 // 输出：{"ok":true}；400 空体；413 超限；415 不是图片；502 Telegram 拒绝
 // 预期：先本地归一成 512×512 JPEG，Telegram 侧只会收到合规头像
 func uploadCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol string) {
+	bodyFromSrc(r)
 	body := http.MaxBytesReader(w, r.Body, maxCoverUpload)
 	raw, err := io.ReadAll(body)
 	if err != nil {
@@ -136,23 +167,24 @@ func uploadCover(w http.ResponseWriter, r *http.Request, covers CoverSource, vol
 //
 // 输入：body {"title":"新名字"}
 // 输出：{"ok":true}；400 体非法或标题为空；502 Telegram 拒绝
-// 预期：只改频道标题，不动节点数据；成功由路由层自动推送 status
+// 预期：只改频道标题，不动节点数据；成功由路由层自动推送 status；
+// 错误统一走 JSON，前端只会解析 JSON
 func updateTitle(w http.ResponseWriter, r *http.Request, covers CoverSource, vol string) {
 	var req struct {
 		Title string `json:"title"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
-		http.Error(w, i18n.T("err.web_bad_json"), http.StatusBadRequest)
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.web_bad_json"))
 		return
 	}
 	if strings.TrimSpace(req.Title) == "" {
-		http.Error(w, i18n.T("err.title_empty"), http.StatusBadRequest)
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.title_empty"))
 		return
 	}
 	if err := covers.SetTitle(r.Context(), vol, req.Title); err != nil {
 		// 权限不足、频道不可用等上游原因写日志，面板只显示人话
 		slog.Warn(i18n.T("log.title_set_failed"), "vol", vol, "err", err)
-		http.Error(w, i18n.T("err.title_set"), http.StatusBadGateway)
+		replyJSONError(w, http.StatusBadGateway, i18n.T("err.title_set"))
 		return
 	}
 	replyJSON(w, http.StatusOK, map[string]bool{"ok": true})

@@ -115,6 +115,7 @@ type downloadStore struct {
 	open   func(volume string) (fm.Files, bool)
 	events push.Events
 	base   context.Context
+	cancel context.CancelFunc
 	// mu 同时保护目录命名与任务表，避免同一瞬间两次下载抢同一个文件名
 	mu    sync.Mutex
 	tasks map[string]*downloadTask
@@ -125,13 +126,28 @@ type downloadStore struct {
 //
 // 输入：dirFn 每次操作现取下载目录；open 卷名到文件后端的解析函数；events 进度推送通道（可为 nil）
 // 输出：*downloadStore
-// 预期：只保存参数，不创建目录；首次写入或打开时才建目录
+// 预期：只保存参数，不创建目录；首次写入或打开时才建目录。
+// base 可取消：进程/面板关闭时由 Close 停掉所有在跑的复制协程
 func newDownloadStore(dirFn func() string, open func(string) (fm.Files, bool), events push.Events) *downloadStore {
+	base, cancel := context.WithCancel(context.Background())
 	return &downloadStore{
 		dirFn: dirFn, open: open, events: events,
-		base:  context.Background(),
-		tasks: make(map[string]*downloadTask),
+		base:   base,
+		cancel: cancel,
+		tasks:  make(map[string]*downloadTask),
 	}
+}
+
+// Close 停止所有在跑的下载协程。
+//
+// 输入：无
+// 输出：无
+// 预期：面板/进程关闭时调用；之后 Start 返回任务不可用
+func (d *downloadStore) Close() {
+	if d == nil || d.cancel == nil {
+		return
+	}
+	d.cancel()
 }
 
 // Dir 返回下载目录的绝对路径。
@@ -199,16 +215,13 @@ func (d *downloadStore) Start(vol, p string) (downloadTask, error) {
 	if !ok {
 		return downloadTask{}, errDownloadVolume
 	}
-	src, err := m.Open(context.Background(), p)
+	// 用 Info 而不是 Open+Stat：下载前只想知道大小与类型，
+	// 额外开一次远端文件等于白跑一轮 RPC
+	info, err := m.Info(context.Background(), p)
 	if err != nil {
 		return downloadTask{}, err
 	}
-	info, err := src.Stat()
-	_ = src.Close()
-	if err != nil {
-		return downloadTask{}, err
-	}
-	if info.IsDir() {
+	if info.Dir {
 		return downloadTask{}, errDownloadPath
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -229,7 +242,7 @@ func (d *downloadStore) Start(vol, p string) (downloadTask, error) {
 		Name:  safeDownloadName(path.Base(p)),
 		Vol:   vol,
 		Path:  p,
-		Size:  info.Size(),
+		Size:  info.Size,
 		State: downloadRunning,
 		tmp:   tmpName,
 	}
@@ -318,7 +331,9 @@ func (d *downloadStore) Resume(id string) error {
 //
 // 输入：id 任务 ID
 // 输出：error；任务不存在时返回 errDownloadTask
-// 预期：取消后不留半份临时文件，也不出现在任务列表里
+// 预期：立即返回，不等正在跑的读操作；临时文件由复制协程退出后删除，
+// 否则 Windows 上正在写的文件删不掉，留下半份残片。
+// 若复制协程还没启动（stop 已关闭），就地删除。
 func (d *downloadStore) Cancel(id string) error {
 	d.mu.Lock()
 	t, ok := d.tasks[id]
@@ -329,13 +344,29 @@ func (d *downloadStore) Cancel(id string) error {
 	delete(d.tasks, id)
 	d.order = slices.DeleteFunc(d.order, func(x string) bool { return x == id })
 	cancel := t.cancel
+	stop := t.stop
 	tmp := t.tmp
 	d.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if tmp != "" {
+	if tmp == "" {
+		d.notify()
+		return nil
+	}
+	if stop == nil {
 		_ = os.Remove(tmp)
+	} else {
+		select {
+		case <-stop:
+			_ = os.Remove(tmp)
+		default:
+			// 复制协程还在跑：等它退出后再删，期间 Cancel 不阻塞调用方
+			go func() {
+				<-stop
+				_ = os.Remove(tmp)
+			}()
+		}
 	}
 	d.notify()
 	return nil
@@ -586,7 +617,10 @@ func (d *downloadStore) uniquePath(name string) string {
 //
 // 输入：name 远端 basename
 // 输出：去掉非法字符后的文件名
-// 预期：Windows 的 \ / : * ? " < > | 与控制字符替换成 _；空名回落到 download
+// 预期：
+//   - Windows 的 \ / : * ? " < > | 与控制字符替换成 _
+//   - Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）加前缀避开
+//   - 空名回落到 download
 func safeDownloadName(name string) string {
 	name = strings.TrimSpace(name)
 	var b strings.Builder
@@ -602,7 +636,29 @@ func safeDownloadName(name string) string {
 	if out == "" {
 		return "download"
 	}
+	if windowsReserved(out) {
+		out = "_" + out
+	}
 	return out
+}
+
+// windowsReserved 判断名字是否是 Windows 保留设备名。
+//
+// 输入：name 文件名（不含目录）
+// 输出：true 表示不能直接落盘
+// 预期：比较主名（去掉扩展名）且忽略大小写；con.txt 同样保留
+func windowsReserved(name string) bool {
+	base := name
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	switch strings.ToUpper(strings.TrimSpace(base)) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 // Path 把已下载文件名解析成磁盘路径，并确认文件存在。

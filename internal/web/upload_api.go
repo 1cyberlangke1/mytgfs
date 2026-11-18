@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ import (
 
 	"mytgfs/internal/fm"
 	"mytgfs/internal/i18n"
+	"mytgfs/internal/upload"
 )
 
 // 会话上限与空闲回收时间。
@@ -138,7 +140,7 @@ func (u *uploadAPI) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.lastUsed.Store(time.Now().UnixNano())
 	u.mu.Lock()
-	u.evictLocked()
+	u.evictLocked(s.id)
 	u.sess[s.id] = s
 	u.mu.Unlock()
 	replyJSON(w, http.StatusOK, map[string]any{"id": s.id})
@@ -177,13 +179,27 @@ func (u *uploadAPI) handleChunk(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	n, cerr := io.Copy(io.MultiWriter(s.file, s.sum), r.Body)
+	// 只允许写满 init 声明的大小：否则单个分片就能把临时文件撑到任意大
+	remaining := s.size - s.done
+	if remaining <= 0 {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_incomplete"))
+		return
+	}
+	body := http.MaxBytesReader(w, r.Body, remaining)
+	n, cerr := io.Copy(io.MultiWriter(s.file, s.sum), body)
+	// 先记已写字节：超限时 MaxBytesReader 已经把磁盘填到声明大小，
+	// 不记下来会让下一段的 offset 校验对着错误的进度比
+	s.done += n
+	s.lastUsed.Store(time.Now().UnixNano())
 	if cerr != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(cerr, &tooLarge) {
+			replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_too_large"))
+			return
+		}
 		replyJSONError(w, http.StatusInternalServerError, cerr.Error())
 		return
 	}
-	s.done += n
-	s.lastUsed.Store(time.Now().UnixNano())
 	replyJSON(w, http.StatusOK, map[string]any{"offset": s.done})
 }
 
@@ -248,14 +264,148 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusInternalServerError, cerr.Error())
 		return
 	}
-	if err := m.AdoptUpload(r.Context(), s.target, temp, done, sha); err != nil {
+	job, err := m.AdoptUpload(r.Context(), s.target, temp, done, sha)
+	if err != nil {
 		// 临时文件已交给后端：失败时保留给队列重试，不在会话里删
 		u.drop(s.id)
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
 	u.drop(s.id)
-	replyJSON(w, http.StatusOK, map[string]any{"path": s.target})
+	// job 是后台队列任务号：面板据此跟踪 Telegram 上传的真实字节进度
+	replyJSON(w, http.StatusOK, map[string]any{"path": s.target, "job": job})
+}
+
+// adoptRequest 是 /api/upload/adopt 的请求体。
+//
+// Path 是选择器把文件落到本地磁盘后的真实路径（安卓由 Wails 的
+// dialogs.OpenFile 复制进应用 cache 后返回）。面板只传路径，不传字节。
+type adoptRequest struct {
+	Vol  string `json:"vol"`
+	Dir  string `json:"dir"`
+	Rel  string `json:"rel"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// handleAdopt 接管宿主已落盘的文件（POST /api/upload/adopt）。
+//
+// 输入：JSON {vol,dir,rel,name,path}，或查询串 vol/dir/rel/name/path
+// 输出：JSON {path,job}；路径非法/不可读/空文件返回 400
+// 预期：
+//   - 字节不经 JS 层：单文件走原生选择器路径，文件夹走 Android fd（/proc/self/fd/N）
+//   - 摘要流式计算，不把文件读进内存
+//   - 成功后文件所有权交给文件后端，磁盘上的临时副本由它消费
+func (u *uploadAPI) handleAdopt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req adoptRequest
+	if q := r.URL.Query(); q.Get("path") != "" {
+		// 原生侧直接调用（无请求体）：参数全在 query
+		req = adoptRequest{
+			Vol:  q.Get("vol"),
+			Dir:  q.Get("dir"),
+			Rel:  q.Get("rel"),
+			Name: q.Get("name"),
+			Path: q.Get("path"),
+		}
+	} else if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	if _, ok := u.manager(req.Vol); !ok {
+		replyJSONError(w, http.StatusNotFound, i18n.T("err.fm_no_volume"))
+		return
+	}
+	target, err := uploadTarget(req.Dir, req.Rel, req.Name)
+	if err != nil {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
+		return
+	}
+	if req.Path == "" || !filepath.IsAbs(req.Path) {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	// /proc/self/fd/N 只保证调用期间有效：先落一份到本层临时目录，
+	// 之后队列再慢慢上传。其它路径由调用方保证生命周期，直接接管。
+	src := req.Path
+	adopted := false
+	if strings.HasPrefix(src, "/proc/self/fd/") {
+		tmp, _, cpErr := copyFdToTemp(u.tmpDir, src)
+		if cpErr != nil {
+			replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+			return
+		}
+		src = tmp
+		defer func() {
+			// 入队成功后所有权交给文件后端，由队列上传完再删；
+			// 失败时这里清掉刚复制的临时副本。
+			if !adopted {
+				_ = os.Remove(tmp)
+			}
+		}()
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	st, statErr := f.Stat()
+	if statErr != nil || st.IsDir() || st.Size() <= 0 {
+		f.Close()
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_empty"))
+		return
+	}
+	sha, hashErr := upload.Hash(f, st.Size())
+	f.Close()
+	if hashErr != nil {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	m, _ := u.manager(req.Vol)
+	if err := ensureParents(r.Context(), m, target); err != nil {
+		replyJSONError(w, http.StatusBadRequest, fmError(err))
+		return
+	}
+	job, err := m.AdoptUpload(r.Context(), target, src, st.Size(), sha)
+	if err != nil {
+		replyJSONError(w, http.StatusBadRequest, fmError(err))
+		return
+	}
+	adopted = true
+	replyJSON(w, http.StatusOK, map[string]any{"path": target, "job": job})
+}
+
+// copyFdToTemp 把 /proc/self/fd/N 的内容复制到本层临时目录。
+//
+// 输入：dir 临时目录；src fd 路径
+// 输出：新文件路径、字节数、error
+// 预期：调用返回后原 fd 可以关闭；目标文件已 fsync，避免队列读到短文件
+func copyFdToTemp(dir, src string) (string, int64, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return "", 0, err
+	}
+	defer in.Close()
+	out, err := os.CreateTemp(dir, ".mytgfs-dav-fd-*")
+	if err != nil {
+		return "", 0, err
+	}
+	name := out.Name()
+	n, err := io.Copy(out, in)
+	if err == nil {
+		err = out.Sync()
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(name)
+		return "", 0, err
+	}
+	return name, n, nil
 }
 
 // ensureParents 建好目标文件的父目录层级。
@@ -310,9 +460,14 @@ func (u *uploadAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // get 取会话并刷新活跃时间。
+//
+// 输入：id 会话标识
+// 输出：会话指针；false 表示不存在
+// 预期：顺带回收闲置/超量会话（keep=id，本次要用的那个不会被回收）
 func (u *uploadAPI) get(id string) (*uploadSession, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.evictLocked(id)
 	s, ok := u.sess[id]
 	if !ok {
 		return nil, false
@@ -348,18 +503,29 @@ func (u *uploadAPI) drop(id string) {
 
 // evictLocked 回收超时或超量的会话；调用方需持 u.mu。
 //
-// 正在提交（busy）或正在写分片（TryLock 失败）的会话跳过：
-// 关掉正在使用的句柄会把临时文件写坏，留到下一轮回收。
-func (u *uploadAPI) evictLocked() {
+// 输入：keep 本次请求正在使用的会话 id，永不回收（传空表示没有）
+// 输出：无
+// 预期：
+//   - 回收由每次会话请求触发，而不是只在新建会话时扫一遍，
+//     否则用户放弃上传后再没有新上传，临时文件就一直留着
+//   - 正在提交（busy）或正在写分片（TryLock 失败）的会话跳过：
+//     关掉正在使用的句柄会把临时文件写坏，留到下一轮回收
+func (u *uploadAPI) evictLocked(keep string) {
 	cutoff := time.Now().Add(-uploadIdleTimeout).UnixNano()
 	for id, s := range u.sess {
+		if id == keep {
+			continue
+		}
 		if s.lastUsed.Load() < cutoff && u.discard(s) {
 			delete(u.sess, id)
 		}
 	}
 	for len(u.sess) >= uploadMaxSessions {
 		var oldest *uploadSession
-		for _, s := range u.sess {
+		for id, s := range u.sess {
+			if id == keep {
+				continue
+			}
 			if !s.mu.TryLock() {
 				continue
 			}

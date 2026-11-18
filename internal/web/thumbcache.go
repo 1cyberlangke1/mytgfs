@@ -6,8 +6,31 @@ package web
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
+
+// sweptDirs 记录已经清扫过的缓存根目录，避免同一进程重复起清扫协程。
+var (
+	sweptMu   sync.Mutex
+	sweptDirs = map[string]struct{}{}
+)
+
+// sweepThumbsOnce 对同一目录只启动一次后台清扫。
+//
+// 输入：dir 缓存根目录
+// 输出：无
+// 预期：NewHandler 被多次调用（测试、重建 handler）也只扫一次
+func sweepThumbsOnce(dir string) {
+	sweptMu.Lock()
+	if _, done := sweptDirs[dir]; done {
+		sweptMu.Unlock()
+		return
+	}
+	sweptDirs[dir] = struct{}{}
+	sweptMu.Unlock()
+	go SweepFlatLegacy(dir, 24*time.Hour)
+}
 
 // PurgeEntry 删掉卷内一个路径的全部缓存文件（缩略图/封面，所有版本）。
 //

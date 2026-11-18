@@ -53,7 +53,8 @@ func handleAPIEvents(hub *push.Hub) http.HandlerFunc {
 		fmt.Fprint(w, "event: ready\ndata: {}\n\n")
 		flusher.Flush()
 
-		heartbeat := time.Tick(25 * time.Second)
+		heartbeat := time.NewTicker(25 * time.Second)
+		defer heartbeat.Stop()
 		for {
 			select {
 			case <-r.Context().Done():
@@ -61,7 +62,7 @@ func handleAPIEvents(hub *push.Hub) http.HandlerFunc {
 			case topic := <-events:
 				fmt.Fprintf(w, "event: %s\ndata: {}\n\n", topic)
 				flusher.Flush()
-			case <-heartbeat:
+			case <-heartbeat.C:
 				fmt.Fprint(w, ": ping\n\n")
 				flusher.Flush()
 			}

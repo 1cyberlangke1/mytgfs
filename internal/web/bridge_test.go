@@ -1,17 +1,18 @@
 package web
 
 // 安卓传输桥的单元测试：只验请求怎么进路由、响应怎么回前端。
+// 桥只承载文本（JSON），文件字节走路径或原生通道，因此这里不出现任何编码。
 
 import (
-	"encoding/base64"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
-// TestBridgeDoForwardsRequest 确认方法、query 与原始字节都原样进路由。
+// TestBridgeDoForwardsRequest 确认方法、query 与文本正文都原样进路由。
 //
-// 输入：POST /api/x?a=1 + 原始字节 "hello"
+// 输入：POST /api/x?a=1 + JSON 文本
 // 输出：handler 收到的 method/query/body 与响应状态、正文
 func TestBridgeDoForwardsRequest(t *testing.T) {
 	var gotMethod, gotQuery, gotBody string
@@ -25,11 +26,7 @@ func TestBridgeDoForwardsRequest(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 
-	resp, err := b.Do(BridgeRequest{
-		Method: "post",
-		Path:   "/api/x?a=1",
-		Body:   base64.StdEncoding.EncodeToString([]byte("hello")),
-	})
+	resp, err := b.Do(BridgeRequest{Method: "post", Path: "/api/x?a=1", Body: `{"a":1}`})
 	if err != nil {
 		t.Fatalf("Do 失败: %v", err)
 	}
@@ -39,8 +36,8 @@ func TestBridgeDoForwardsRequest(t *testing.T) {
 	if gotQuery != "a=1" {
 		t.Errorf("query = %q，期望 a=1", gotQuery)
 	}
-	if gotBody != "hello" {
-		t.Errorf("body = %q，期望 hello", gotBody)
+	if gotBody != `{"a":1}` {
+		t.Errorf("body = %q，期望原文本", gotBody)
 	}
 	if resp.Status != http.StatusAccepted {
 		t.Errorf("status = %d，期望 202", resp.Status)
@@ -48,12 +45,8 @@ func TestBridgeDoForwardsRequest(t *testing.T) {
 	if resp.Type != "application/json" {
 		t.Errorf("type = %q，期望 application/json", resp.Type)
 	}
-	raw, derr := base64.StdEncoding.DecodeString(resp.Body)
-	if derr != nil {
-		t.Fatalf("响应不是 base64: %v", derr)
-	}
-	if string(raw) != `{"ok":true}` {
-		t.Errorf("body = %q", raw)
+	if resp.Body != `{"ok":true}` {
+		t.Errorf("body = %q，期望原文本", resp.Body)
 	}
 }
 
@@ -100,10 +93,16 @@ func TestBridgeDoRejectsAssets(t *testing.T) {
 	}
 }
 
-// TestBridgeDoBadBase64 确认坏 base64 直接报错而不是静默丢 body。
-func TestBridgeDoBadBase64(t *testing.T) {
-	b := NewBridge(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	if _, err := b.Do(BridgeRequest{Method: "POST", Path: "/api/x", Body: "!!!!"}); err == nil {
-		t.Fatal("坏 base64 应返回错误")
+// TestBridgeDoRejectsOversize 确认超过上限的正文被拒，而不是按声明长度分配内存。
+func TestBridgeDoRejectsOversize(t *testing.T) {
+	b := NewBridge(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("超限请求不应进 handler")
+	}))
+	resp, err := b.Do(BridgeRequest{Method: "POST", Path: "/api/x", Body: strings.Repeat("a", maxBridgeBody+1)})
+	if err != nil {
+		t.Fatalf("Do 失败: %v", err)
+	}
+	if resp.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d，期望 413", resp.Status)
 	}
 }

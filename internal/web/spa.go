@@ -58,6 +58,13 @@ func spaHandler() http.Handler {
 			files.ServeHTTP(w, r)
 			return
 		}
+		// 带 hash 的构建产物缺失就是真缺失：回落到 index.html 会让浏览器把
+		// 一段 HTML 当成 JS/CSS 永久缓存（immutable），故障会一直复现
+		if strings.HasPrefix(p, "assets/") {
+			w.Header().Set("Cache-Control", "no-store")
+			http.NotFound(w, r)
+			return
+		}
 		// 前端路由：未知路径交给 index.html
 		r2 := r.Clone(r.Context())
 		r2.URL.Path = "/"
