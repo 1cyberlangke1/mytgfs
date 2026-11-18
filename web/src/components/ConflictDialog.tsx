@@ -62,33 +62,35 @@ export const ConflictDialog: React.FC<ConflictDialogProps> = ({
   };
 
   return (
-    <Modal onClose={onCancel} labelledBy={titleId} panelClassName="w-full max-w-lg">
-      <div className="w-full max-w-lg rounded-xl surface-card p-6 space-y-4 shadow-xl">
-        <div className="space-y-1">
-          <h3
-            id={titleId}
-            className="text-base font-semibold tracking-tight text-zinc-900 dark:text-white"
-          >
-            {t.files.conflictTitle}
-          </h3>
-          <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-            {t.files.conflictHint}
-          </p>
+    <Modal onClose={onCancel} labelledBy={titleId} panelClassName="w-full max-w-lg sm:max-w-xl">
+      <div className="w-full rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
+        <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-3">
+          <div className="space-y-1">
+            <h3
+              id={titleId}
+              className="text-base font-semibold tracking-tight text-zinc-900 dark:text-white"
+            >
+              {t.files.conflictTitle}
+            </h3>
+            <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+              {t.files.conflictHint}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => pickAll('overwrite')}>
+              {t.files.conflictAllOverwrite}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => pickAll('rename')}>
+              {t.files.conflictAllRename}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => pickAll('skip')}>
+              {t.files.conflictAllSkip}
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => pickAll('overwrite')}>
-            {t.files.conflictAllOverwrite}
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => pickAll('rename')}>
-            {t.files.conflictAllRename}
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => pickAll('skip')}>
-            {t.files.conflictAllSkip}
-          </Button>
-        </div>
-
-        <ul className="max-h-[min(50vh,20rem)] overflow-y-auto divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
+        <ul className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 sm:px-6 divide-y divide-zinc-200/70 dark:divide-zinc-800/70 overscroll-contain">
           {conflicts.map((conflict) => {
             const action = actionOf(conflict.id);
             const selectId = `${titleId}-${conflict.id}`;
@@ -138,7 +140,7 @@ export const ConflictDialog: React.FC<ConflictDialogProps> = ({
           })}
         </ul>
 
-        <div className="flex items-center justify-end gap-2 pt-1">
+        <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
           <Button type="button" variant="outline" onClick={onCancel}>
             {t.files.cancel}
           </Button>

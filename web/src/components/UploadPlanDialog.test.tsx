@@ -64,6 +64,7 @@ describe('UploadPlanDialog', () => {
     expect(within(dialog).getByDisplayValue('b.txt')).toBeTruthy();
     expect(within(dialog).getByText('dir/')).toBeTruthy();
     expect(within(dialog).getByText(/2 个文件/)).toBeTruthy();
+    expect(dialog.querySelector('ul')?.classList.contains('custom-scrollbar')).toBe(true);
   });
 
   it('移除单个文件后只剩另一个，确认时不再带上被移除的', async () => {

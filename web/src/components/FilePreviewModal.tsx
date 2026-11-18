@@ -98,7 +98,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
         initial={{ opacity: 0, scale: 0.94, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={IOS_SPRING}
-        className="w-full max-w-4xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden my-auto"
+        className="w-full max-w-4xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden my-auto max-h-[calc(100dvh-2.5rem)] flex flex-col"
       >
             {(() => {
               const fullPath = getItemFullPath(allFiles, file);
@@ -133,7 +133,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
               return (
                 <>
                   {/* Header */}
-                  <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-slate-200 dark:border-slate-800 shrink-0">
                     <div className="min-w-0">
                       <h2
                         id="file-detail-modal-title"
@@ -158,7 +158,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                     </Button>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-12">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                     {/* Left/Top: Media Preview Viewport */}
                     <div className="lg:col-span-8 p-6 bg-slate-50 dark:bg-slate-950/60 border-b lg:border-b-0 lg:border-e border-slate-200 dark:border-slate-800 flex flex-col justify-between min-h-[340px]">
                       <div className="flex items-center justify-between mb-3">

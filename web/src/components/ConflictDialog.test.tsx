@@ -65,6 +65,7 @@ describe('ConflictDialog', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('将保存为 a (2).txt')).toBeTruthy();
+    expect(dialog.querySelector('ul')?.classList.contains('custom-scrollbar')).toBe(true);
     await user.click(within(dialog).getByRole('button', { name: t.files.conflictConfirm }));
 
     const choices = onConfirm.mock.calls[0]?.[0] as Record<string, string>;

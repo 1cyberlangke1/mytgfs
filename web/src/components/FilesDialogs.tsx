@@ -161,7 +161,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitNewFolder}
-          className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
           <h3
             id="modal-new-folder-title"
@@ -206,7 +206,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitRenameMove}
-          className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
           <h3
             id="modal-rename-move-title"
@@ -285,7 +285,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitBatchMove}
-          className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
           <h3
             id="modal-batch-move-title"
@@ -334,7 +334,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-delete-confirm-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
           <h3
             id="modal-delete-confirm-title"
             className="text-base font-semibold text-zinc-950 dark:text-white"
@@ -384,7 +384,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
             onCreateVolume(name, newVolume.title.trim());
             setShowCreateVolume(false);
           }}
-          className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
           <div>
             <h3
@@ -466,7 +466,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
             onAttachVolume(name, id);
             setShowAttachVolume(false);
           }}
-          className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
           <div>
             <h3
@@ -612,7 +612,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-delete-volume-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
               <AlertTriangle className="w-5 h-5" />
@@ -676,7 +676,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-rebuild-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl">
+        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
           <h3
             id="modal-rebuild-title"
             className="text-base font-semibold text-zinc-950 dark:text-white"

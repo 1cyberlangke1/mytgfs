@@ -154,7 +154,7 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
     <div
       role="tree"
       aria-label={ariaLabel}
-      className="max-h-64 overflow-y-auto rounded-xl border border-zinc-200/90 dark:border-zinc-800 p-1.5 space-y-0.5"
+      className="max-h-64 overflow-y-auto custom-scrollbar rounded-xl border border-zinc-200/90 dark:border-zinc-800 p-1.5 space-y-0.5"
     >
       <div
         role="treeitem"

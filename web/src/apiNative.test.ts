@@ -9,17 +9,14 @@
 //       Chromium V8 JavaBridge 会抛出：
 //       "Java bridge method can't be invoked on a non-injected object"
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { importFileNative, importFolderNative } from './api';
+import { importFileNative, importFolderNative, type MytgfsNativeBridge } from './api';
 
 describe('安卓原生文件与目录选择器 (Java Bridge 上下文约束)', () => {
-  let nativeBridge: {
-    pickFileImport: (_vol: string, _dir: string) => void;
-    pickFolderImport: (_vol: string, _dir: string) => void;
-  };
+  let nativeBridge: MytgfsNativeBridge;
 
   beforeEach(() => {
     nativeBridge = {
-      pickFileImport(this: unknown, _vol: string, _dir: string) {
+      pickFileImport(this: MytgfsNativeBridge, _vol: string, _dir: string) {
         // 严格模拟 Android WebView @JavascriptInterface 的原生行为：
         // 方法必须由注入的原生对象作为 receiver (this) 调用；
         // 若引用被解构/脱离对象后裸调（this 丢失为 undefined 或 window），直接抛出 Chromium 标准异常。
@@ -35,7 +32,7 @@ describe('安卓原生文件与目录选择器 (Java Bridge 上下文约束)', (
           }
         }, 0);
       },
-      pickFolderImport(this: unknown, _vol: string, _dir: string) {
+      pickFolderImport(this: MytgfsNativeBridge, _vol: string, _dir: string) {
         if (this !== nativeBridge) {
           throw new Error("Java bridge method can't be invoked on a non-injected object");
         }

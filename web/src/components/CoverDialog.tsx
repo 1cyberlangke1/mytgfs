@@ -73,9 +73,10 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
       onClose={onClose}
       labelledBy="cover-dialog-title"
       closeDisabled={busy}
-      panelClassName="w-full max-w-md rounded-xl surface-card p-6 space-y-4 shadow-xl"
+      panelClassName="w-full max-w-md"
     >
-        <div className="flex items-start justify-between gap-3">
+      <div className="w-full rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
+        <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/50 dark:border-zinc-800/50 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 id="cover-dialog-title" className="text-base font-semibold text-zinc-950 dark:text-white">
               {t.volume.coverDialogTitle}
@@ -95,55 +96,57 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
           </button>
         </div>
 
-        {onSubmitTitle && (
-          <div className="space-y-1.5">
-            <label htmlFor="cover-dialog-name" className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
-              {t.volume.coverDialogNameLabel}
-            </label>
-            <input
-              id="cover-dialog-name"
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={busy}
-              maxLength={128}
-              placeholder={t.volume.coverDialogNamePlaceholder}
-              className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#007AFF]/40"
-            />
-          </div>
-        )}
-
-        <div className="space-y-1.5">
-          <button
-            type="button"
-            onClick={() => (nativePicker ? onPickNative?.() : inputRef.current?.click())}
-            className="relative block w-full aspect-square max-h-64 rounded-lg overflow-hidden border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60"
-          >
-            {preview && !nativePicker ? (
-              <img src={preview} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400 dark:text-zinc-500">
-                <ImageIcon className="w-8 h-8" />
-                <span className="text-xs">{t.volume.coverDialogPick}</span>
-              </span>
-            )}
-          </button>
-          {!nativePicker && (
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                if (f) setPicked(f);
-                e.target.value = '';
-              }}
-            />
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+          {onSubmitTitle && (
+            <div className="space-y-1.5">
+              <label htmlFor="cover-dialog-name" className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                {t.volume.coverDialogNameLabel}
+              </label>
+              <input
+                id="cover-dialog-name"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={busy}
+                maxLength={128}
+                placeholder={t.volume.coverDialogNamePlaceholder}
+                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#007AFF]/40"
+              />
+            </div>
           )}
+
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => (nativePicker ? onPickNative?.() : inputRef.current?.click())}
+              className="relative block w-full aspect-square max-h-64 rounded-lg overflow-hidden border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60"
+            >
+              {preview && !nativePicker ? (
+                <img src={preview} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400 dark:text-zinc-500">
+                  <ImageIcon className="w-8 h-8" />
+                  <span className="text-xs">{t.volume.coverDialogPick}</span>
+                </span>
+              )}
+            </button>
+            {!nativePicker && (
+              <input
+                ref={inputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  if (f) setPicked(f);
+                  e.target.value = '';
+                }}
+              />
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-2">
+        <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/50 dark:border-zinc-800/50 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
             {t.volume.coverDialogCancel}
           </Button>
@@ -159,6 +162,7 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
             {busy ? t.volume.coverDialogSaving : t.volume.coverDialogSave}
           </Button>
         </div>
+      </div>
     </Modal>
   );
 };

@@ -236,12 +236,22 @@ export function removeItems(volume: string, paths: string[]): Promise<{ removed:
   });
 }
 
+/** MytgfsNativeBridge 声明安卓宿主注入的 Java 桥接口。
+ * 方法均标注显式 this 约束，防止被脱离宿主对象解构调用。 */
+export interface MytgfsNativeBridge {
+  pickFileImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
+  pickFolderImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
+  pickCover?: (this: MytgfsNativeBridge, vol: string) => void;
+}
+
 // nativeImport 走安卓原生选择器：壳用 SAF 打开 fd，逐个交给服务端接管，
 // 字节不进 JS，也不在应用 cache 留副本。
 //
 // 输入：zone=file|folder；卷名；卷内目标目录
 // 输出：{uploaded, failed, failedNames}；用户取消时 {0,0,[]}
 // 预期：桌面端不会调用；回调名与壳里的 evaluateJavascript 一一对应；
+//       必须保留 native 宿主对象作为 receiver (this) 调用，避免 Chromium V8 报
+//       "Java bridge method can't be invoked on a non-injected object"；
 //       失败项名字由壳按相对路径回传，前端据此逐条提示
 function nativeImport(
   zone: 'file' | 'folder',
@@ -250,12 +260,16 @@ function nativeImport(
 ): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
   return new Promise((resolve, reject) => {
     const w = window as unknown as {
-      mytgfsNative?: { pickFileImport?: (v: string, d: string) => void; pickFolderImport?: (v: string, d: string) => void };
+      mytgfsNative?: MytgfsNativeBridge;
       _mytgfsFileImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
       _mytgfsFolderImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
     };
-    const pick = zone === 'file' ? w.mytgfsNative?.pickFileImport : w.mytgfsNative?.pickFolderImport;
-    if (!pick) {
+    const native = w.mytgfsNative;
+    const hasMethod =
+      zone === 'file'
+        ? typeof native?.pickFileImport === 'function'
+        : typeof native?.pickFolderImport === 'function';
+    if (!native || !hasMethod) {
       reject(new ApiError('native picker unavailable', 0));
       return;
     }
@@ -266,13 +280,14 @@ function nativeImport(
         delete w._mytgfsFileImport;
         done(uploaded, failed, failedNames);
       };
+      native.pickFileImport!(volume, dir);
     } else {
       w._mytgfsFolderImport = (uploaded, failed, failedNames) => {
         delete w._mytgfsFolderImport;
         done(uploaded, failed, failedNames);
       };
+      native.pickFolderImport!(volume, dir);
     }
-    pick(volume, dir);
   });
 }
 
@@ -590,10 +605,11 @@ export function coverURL(volume: string, version?: string): string {
 export function pickCoverNative(volume: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const w = window as unknown as {
-      mytgfsNative?: { pickCover?: (vol: string) => void };
+      mytgfsNative?: MytgfsNativeBridge;
       _mytgfsCoverPicked?: (ok: boolean) => void;
     };
-    if (!w.mytgfsNative?.pickCover) {
+    const native = w.mytgfsNative;
+    if (typeof native?.pickCover !== 'function') {
       reject(new ApiError('native cover picker unavailable', 0));
       return;
     }
@@ -601,7 +617,7 @@ export function pickCoverNative(volume: string): Promise<boolean> {
       delete w._mytgfsCoverPicked;
       resolve(ok);
     };
-    w.mytgfsNative.pickCover(volume);
+    native.pickCover(volume);
   });
 }
 

@@ -68,4 +68,11 @@ describe('TextFileDialog', () => {
     }) as HTMLTextAreaElement;
     expect(body.value).toBe('pasted');
   });
+
+  it('文本域采用项目 custom-scrollbar 样式且自适应', () => {
+    installDialogShim();
+    render(<TextFileDialog t={t} onSave={vi.fn()} onClose={vi.fn()} />);
+    const textarea = screen.getByRole('textbox', { name: t.files.textDialogBodyLabel });
+    expect(textarea.classList.contains('custom-scrollbar')).toBe(true);
+  });
 });

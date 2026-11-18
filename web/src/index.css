@@ -130,11 +130,24 @@ textarea:user-invalid {
   background: transparent;
   overflow-y: auto;
   color: inherit;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 113, 122, 0.45) transparent;
+}
+
+.modal-shell::-webkit-scrollbar {
+  display: block !important;
+  width: 6px !important;
+  height: 6px !important;
+  background: transparent !important;
+}
+
+.modal-shell::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.45);
+  border-radius: 999px;
 }
 
 .modal-shell[open] {
   display: flex;
-  align-items: center;
   justify-content: center;
 }
 

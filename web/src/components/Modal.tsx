@@ -96,7 +96,7 @@ export function Modal({
 
   return (
     <dialog ref={ref} aria-labelledby={labelledBy} className="modal-shell">
-      <div className={panelClassName}>{children}</div>
+      <div className={panelClassName ? `my-auto ${panelClassName}` : 'my-auto'}>{children}</div>
     </dialog>
   );
 }
