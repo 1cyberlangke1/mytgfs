@@ -6,11 +6,9 @@ package index
 // 远端目录信息在节点表里（见 nodes.go），这里放待补传账本、路径搜索与状态游标。
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
-	"slices"
 	"strings"
 )
 
@@ -250,6 +248,18 @@ func (i *Index) CountFiles(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountNodes 返回索引里的节点总数（含目录）。
+//
+// 输入：ctx
+// 输出：节点数；error
+// 预期：用于判断「索引是否为空卷」——只有空目录的卷也算已有内容，
+// 不能因为 CountFiles 为 0 就在每次启动时全量重建
+func (i *Index) CountNodes(ctx context.Context) (int, error) {
+	var n int
+	err := i.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&n)
+	return n, err
+}
+
 // Used 返回索引里所有文件大小合计。
 func (i *Index) Used(ctx context.Context) (int64, error) {
 	var n int64
@@ -273,30 +283,48 @@ func (i *Index) Search(ctx context.Context, dir, query string, limit int) ([]Sea
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
-	nodes, err := i.ListPrefix(ctx, dir)
+	// 过滤下推到 SQL：根目录搜索等于全表读，先 ListPrefix 再逐条 contains
+	// 在几万节点的卷上要把整棵子树拉进内存
+	pattern := "%" + escapeLike(q) + "%"
+	base := cleanPath(dir)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	const cols = `SELECT path, is_dir, size, mtime FROM nodes`
+	if base == "/" {
+		rows, err = i.db.QueryContext(ctx, cols+`
+WHERE lower(name) LIKE ? ESCAPE '\'
+ORDER BY is_dir DESC, path ASC LIMIT ?`, pattern, limit)
+	} else {
+		rows, err = i.db.QueryContext(ctx, cols+`
+WHERE substr(path, 1, ?) = ? AND lower(name) LIKE ? ESCAPE '\'
+ORDER BY is_dir DESC, path ASC LIMIT ?`, len(base)+1, base+"/", pattern, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	out := make([]SearchHit, 0, 16)
-	for _, n := range nodes {
-		if !strings.Contains(strings.ToLower(n.Name), q) {
-			continue
+	for rows.Next() {
+		var hit SearchHit
+		if err := rows.Scan(&hit.Path, &hit.IsDir, &hit.Size, &hit.Mtime); err != nil {
+			return nil, err
 		}
-		out = append(out, SearchHit{Path: n.Path, IsDir: n.IsDir, Size: n.Size, Mtime: n.Mtime})
+		out = append(out, hit)
 	}
-	slices.SortFunc(out, func(a, b SearchHit) int {
-		if a.IsDir != b.IsDir {
-			if a.IsDir {
-				return -1
-			}
-			return 1
-		}
-		return cmp.Compare(a.Path, b.Path)
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return out, rows.Err()
+}
+
+// escapeLike 转义 SQL LIKE 的通配符。
+//
+// 输入：用户输入的子串
+// 输出：可安全放进 `LIKE ? ESCAPE '\'` 的模式
+// 预期：名字里的 % 与 _ 按字面匹配，而不是当通配符
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	return strings.ReplaceAll(s, "_", `\_`)
 }
 
 // ListPrefix 返回目录子树的全部节点（不含目录自己）。

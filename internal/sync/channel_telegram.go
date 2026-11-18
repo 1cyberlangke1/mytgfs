@@ -52,7 +52,27 @@ func (d *TelegramChannelDiffer) ChannelDifference(ctx context.Context, pts, limi
 		Limit:   limit,
 	})
 	if err != nil {
-		return Difference{}, err
+		// access_hash 与登录 session 绑定：换会话/频道迁移后旧值会一直失败。
+		// 丢掉缓存重解析一次，而不是让增量同步僵到进程重启
+		if !channel.IsStale(err) {
+			return Difference{}, err
+		}
+		d.mu.Lock()
+		d.channel = nil
+		d.mu.Unlock()
+		ch, cerr := d.channelOf(ctx)
+		if cerr != nil {
+			return Difference{}, cerr
+		}
+		res, err = d.API.UpdatesGetChannelDifference(ctx, &tg.UpdatesGetChannelDifferenceRequest{
+			Channel: &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash},
+			Filter:  &tg.ChannelMessagesFilter{},
+			Pts:     pts,
+			Limit:   limit,
+		})
+		if err != nil {
+			return Difference{}, err
+		}
 	}
 
 	switch v := res.(type) {

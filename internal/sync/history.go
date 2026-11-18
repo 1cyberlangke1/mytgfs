@@ -47,7 +47,8 @@ func (h *TelegramHistory) AllNodes(ctx context.Context) ([]telegramstore.NodeInf
 		return nil, err
 	}
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-	var msgs []*tg.Message
+	// 逐页解析：只留节点结果，不再把整段历史消息对象都攒在内存里
+	var out []telegramstore.NodeInfo
 	offset := 0
 	for range maxHistoryPages {
 		res, err := h.API.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
@@ -60,35 +61,26 @@ func (h *TelegramHistory) AllNodes(ctx context.Context) ([]telegramstore.NodeInf
 		}
 		page := historyMessages(res)
 		if len(page) == 0 {
-			return parseHistory(msgs), nil
+			return out, nil
 		}
 		for _, mc := range page {
 			if msg, ok := mc.(*tg.Message); ok && msg.Message != "" {
-				msgs = append(msgs, msg)
+				if info, ok := telegramstore.NodeOf(msg, msg.Message); ok {
+					out = append(out, info)
+				}
 			}
 		}
 		last, ok := page[len(page)-1].(*tg.Message)
 		if !ok || last.ID <= 0 {
-			return parseHistory(msgs), nil
+			return out, nil
 		}
 		if offset != 0 && last.ID >= offset {
 			// 游标没有前进：数据异常，直接停
-			return parseHistory(msgs), nil
+			return out, nil
 		}
 		offset = last.ID
 	}
 	return nil, fmt.Errorf(i18n.T("err.history_too_long"), maxHistoryPages)
-}
-
-// parseHistory 把历史消息解析成节点。
-func parseHistory(msgs []*tg.Message) []telegramstore.NodeInfo {
-	out := make([]telegramstore.NodeInfo, 0, len(msgs))
-	for _, m := range msgs {
-		if info, ok := telegramstore.NodeOf(m, m.Message); ok {
-			out = append(out, info)
-		}
-	}
-	return out
 }
 
 // channel 解析频道，拿到 user 视角的 access_hash。

@@ -27,9 +27,8 @@ const driverName = "sqlite3"
 //
 // 输入：索引文件的绝对路径（安卓沙盒路径是 POSIX 形式，不带盘符）
 // 输出："file:<path>?_pragma=..." 形式的 URI
-// 预期：ncruces 只对 file: URI 解析查询参数，裸路径会把 ?_pragma=... 当成
-//
-//	文件名的一部分，进而报 unable to open database file
+// 预期：ncruces 只对 file: URI 解析查询参数；裸路径会把 ?_pragma=... 当成文件名的一部分，
+// 进而报 unable to open database file
 func dsnFor(path string) string {
 	return "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 }

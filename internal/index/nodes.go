@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -199,7 +200,23 @@ func (i *Index) PutNode(ctx context.Context, n Node) error {
 	if n.IsDir {
 		isDir = 1
 	}
-	_, err := i.db.ExecContext(ctx, `
+	// INSERT OR REPLACE 命中 (parent_id,name) 唯一索引时会静默删掉旧行：
+	// 旧行若是目录，它的子节点会全部变成孤儿（parent_id 指向已消失的节点）。
+	// 先把同名旧子树整棵删掉，行为与文件系统的「覆盖」一致
+	var oldID int
+	err := i.db.QueryRowContext(ctx,
+		`SELECT id FROM nodes WHERE parent_id = ? AND name = ? AND id <> ? LIMIT 1`,
+		n.ParentID, n.Name, n.ID).Scan(&oldID)
+	switch {
+	case err == nil:
+		if _, derr := i.DeleteSubtree(ctx, oldID); derr != nil {
+			return derr
+		}
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return err
+	}
+	_, err = i.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO nodes(id, parent_id, name, is_dir, path, document_id, access_hash, file_reference, size, mtime, sha256, thumb)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		n.ID, n.ParentID, n.Name, isDir, p, n.DocumentID, n.AccessHash,
@@ -351,8 +368,15 @@ func (i *Index) DeleteSubtree(ctx context.Context, id int) ([]int, error) {
 		return nil, err
 	}
 	if err := i.tx(ctx, func(tx *sql.Tx) error {
-		for _, v := range ids {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id = ?`, v); err != nil {
+		// 一条 IN 删除，避免大子树逐行往返
+		for chunk := range slices.Chunk(ids, 400) {
+			args := make([]any, len(chunk))
+			for j, v := range chunk {
+				args[j] = v
+			}
+			placeholder := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM nodes WHERE id IN (`+placeholder+`)`, args...); err != nil {
 				return err
 			}
 		}

@@ -103,6 +103,6 @@ func Run(ctx context.Context, idx *index.Index, src Source, fix bool) (Report, e
 		return rep, err
 	}
 	slog.Debug(i18n.T("log.fsck_rebuilt"), "nodes", n)
-	rep.Fixed = len(rep.Problems)
+	rep.Fixed = n
 	return rep, nil
 }

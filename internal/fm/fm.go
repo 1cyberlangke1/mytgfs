@@ -47,7 +47,7 @@ type Files interface {
 	Mkdir(ctx context.Context, p string) error
 	Upload(ctx context.Context, p string, r io.Reader) error
 	// AdoptUpload 接管已经落盘的临时文件直接入队上传；比 Upload 少一次整文件拷贝
-	AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error
+	AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) (int64, error)
 	Remove(ctx context.Context, p string) error
 	Move(ctx context.Context, from, to string) error
 	Open(ctx context.Context, p string) (vfs.File, error)
@@ -179,7 +179,7 @@ func (m *Manager) Info(ctx context.Context, p string) (Entry, error) {
 //
 // 输入：p 新目录路径
 // 输出：error；已存在返回 ErrExists，卷根返回 ErrBadPath
-// 预期：父目录不必预先存在（索引按路径前缀推导）
+// 预期：父目录必须已存在；底层缺失时返回 os.ErrNotExist
 func (m *Manager) Mkdir(ctx context.Context, p string) error {
 	c, err := clean(p)
 	if err != nil {
@@ -211,8 +211,8 @@ func (m *Manager) Upload(ctx context.Context, p string, r io.Reader) error {
 	if c == "/" {
 		return ErrBadPath
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 不持 m.mu：并发写同一卷由 vfs 队列串行化，这里持锁会把整段拷贝
+	// 时间都堵住同卷的删除/改名（与 AdoptUpload 的口径一致）
 	f, err := m.fs.OpenFile(ctx, c, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
@@ -233,37 +233,38 @@ func (m *Manager) Upload(ctx context.Context, p string, r io.Reader) error {
 //
 // vfs.FileSystem 实现了它；没有实现的实现退化成读一遍再 Upload。
 type Adopter interface {
-	Adopt(ctx context.Context, name, temp string, size int64, sha string) error
+	Adopt(ctx context.Context, name, temp string, size int64, sha string) (int64, error)
 }
 
 // AdoptUpload 接管已经落盘的临时文件直接入队上传。
 //
 // 输入：p 卷内目标路径；temp 临时文件；size 字节数；sha 内容摘要
-// 输出：error
+// 输出：队列任务 id（底层同步执行时为 0）；error
 // 预期：
-//   - 底层支持接管时不再复制内容，临时文件所有权转给底层
+//   - 底层支持接管时不再复制内容，临时文件所有权转给底层；
+//     接管只等到任务落库，Telegram 上传在后台继续
 //   - 不支持时退回「读临时文件 + Upload」，行为不变
-func (m *Manager) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) error {
+func (m *Manager) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) (int64, error) {
 	c, err := clean(p)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if c == "/" {
-		return ErrBadPath
+		return 0, ErrBadPath
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 不持 m.mu：Adopt 只把临时文件登记进队列就返回，真正的串行化在队列里；
+	// fallback 分支自己拷字节，持锁会把同卷其它操作全堵在这段时间上
 	if a, ok := m.fs.(Adopter); ok {
 		return a.Adopt(ctx, c, temp, size, sha)
 	}
 	f, oerr := os.Open(temp)
 	if oerr != nil {
-		return oerr
+		return 0, oerr
 	}
 	defer func() { _ = f.Close() }()
 	w, werr := m.fs.OpenFile(ctx, c, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if werr != nil {
-		return werr
+		return 0, werr
 	}
 	if _, cerr := io.Copy(w, f); cerr != nil {
 		if a, ok := w.(interface{ Abort() error }); ok {
@@ -271,9 +272,9 @@ func (m *Manager) AdoptUpload(ctx context.Context, p, temp string, size int64, s
 		} else {
 			_ = w.Close()
 		}
-		return cerr
+		return 0, cerr
 	}
-	return w.Close()
+	return 0, w.Close()
 }
 
 // Remove 删除文件或目录。
