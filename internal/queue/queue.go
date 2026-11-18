@@ -934,6 +934,10 @@ func (q *Queue) finishState(id int64, state, msg string) {
 		slog.Warn(i18n.T("log.queue_finish_failed", uerr), "err", uerr)
 		return
 	}
+	// 终态已落库：先注销取消函数再唤醒等待者。
+	// 否则 Cancel 可能在「已结束但还没 disarm」的窗口里拿到这条任务的取消函数，
+	// 把已结束任务当成「取消成功」返回 nil（macOS 上稳定复现）
+	q.disarmCancel(id)
 	_, _ = q.db.Exec(`
 DELETE FROM jobs WHERE state IN (?, ?, ?) AND id NOT IN (
 	SELECT id FROM jobs WHERE state IN (?, ?, ?) ORDER BY id DESC LIMIT ?
