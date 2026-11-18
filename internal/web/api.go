@@ -242,29 +242,37 @@ func handleAPIState(api *filesAPI, opts Options) http.HandlerFunc {
 // walkAll 递归收集整卷条目。
 //
 // 输入：ctx；m 文件后端；dir 起始目录；out 收集器；depth 当前深度
-// 输出：error；条目追加到 out
-// 预期：深度上限 32、条目上限 50000，避免异常目录把内存打满
-func walkAll(ctx context.Context, m fm.Files, vol, dir string, out *[]fileItem, depth int) error {
-	if depth > 32 || len(*out) >= 50000 {
-		return nil
+// 输出：truncated 是否因上限被截断；error
+// 预期：深度上限 32、条目上限 50000，避免异常目录把内存打满；
+// 命中上限时返回 truncated=true，调用方据此提示用户而不是装作完整
+func walkAll(ctx context.Context, m fm.Files, vol, dir string, out *[]fileItem, depth int) (bool, error) {
+	if depth > 32 {
+		return true, nil
+	}
+	if len(*out) >= 50000 {
+		return true, nil
 	}
 	entries, err := m.List(ctx, dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	for _, e := range entries {
 		p := path.Join(dir, e.Name)
 		*out = append(*out, toFileItem(vol, p, e))
 		if e.Dir {
-			if err := walkAll(ctx, m, vol, p, out, depth+1); err != nil {
-				return err
+			trunc, err := walkAll(ctx, m, vol, p, out, depth+1)
+			if err != nil {
+				return trunc, err
+			}
+			if trunc {
+				return true, nil
 			}
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // handleAPIFiles 列目录或整卷。
@@ -283,11 +291,12 @@ func handleAPIFiles(api *filesAPI) http.HandlerFunc {
 		}
 		if q.Get("all") == "1" {
 			out := make([]fileItem, 0, 64)
-			if err := walkAll(r.Context(), m, vol, "/", &out, 0); err != nil {
+			truncated, err := walkAll(r.Context(), m, vol, "/", &out, 0)
+			if err != nil {
 				replyJSONError(w, http.StatusBadGateway, fmError(err))
 				return
 			}
-			replyJSON(w, http.StatusOK, map[string]any{"files": out})
+			replyJSON(w, http.StatusOK, map[string]any{"files": out, "truncated": truncated})
 			return
 		}
 		dir := normalizeDir(q.Get("dir"))
@@ -319,6 +328,16 @@ type jsonBody struct {
 	To    string   `json:"to"`
 	Dest  string   `json:"dest"`
 	Paths []string `json:"paths"`
+}
+
+// pathFailure 是批量操作里单条的失败原因。
+//
+// 输入：Path 卷内路径；Error 人话原因
+// 输出：JSON {"path","error"}
+// 预期：让前端能按条展示「哪几个成功、哪几个失败」
+type pathFailure struct {
+	Path  string `json:"path"`
+	Error string `json:"error"`
 }
 
 // decodeBody 解析 JSON 请求体。
@@ -407,6 +426,8 @@ func handleAPIMove(api *filesAPI) http.HandlerFunc {
 				return
 			}
 		}
+		failed := make([]pathFailure, 0)
+		moved := 0
 		for _, src := range body.Paths {
 			if strings.Contains(src, "..") {
 				replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
@@ -417,13 +438,20 @@ func handleAPIMove(api *filesAPI) http.HandlerFunc {
 				dst = dest
 			}
 			if err := m.Move(r.Context(), src, dst); err != nil {
-				replyJSONError(w, http.StatusBadGateway, fmError(err))
-				return
+				// 批量操作逐条回报：前面成功的已经改了远端，
+				// 整批 502 会让用户不知道哪些生效、重试还会重复移动
+				failed = append(failed, pathFailure{Path: src, Error: fmError(err)})
+				continue
 			}
+			moved++
 			// 旧路径的缩略图/封面缓存随改名/移动一起清掉
 			api.thumbs.purgeEntry(body.Vol, src)
 		}
-		replyJSON(w, http.StatusOK, map[string]any{"moved": len(body.Paths)})
+		status := http.StatusOK
+		if moved == 0 && len(failed) > 0 {
+			status = http.StatusBadGateway
+		}
+		replyJSON(w, status, map[string]any{"moved": moved, "failed": failed})
 	}
 }
 
@@ -446,19 +474,27 @@ func handleAPIRemove(api *filesAPI) http.HandlerFunc {
 			replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
 			return
 		}
+		failed := make([]pathFailure, 0)
+		removed := 0
 		for _, p := range body.Paths {
 			if strings.Contains(p, "..") {
 				replyJSONError(w, http.StatusBadRequest, i18n.T("err.fm_bad_path"))
 				return
 			}
 			if err := m.Remove(r.Context(), p); err != nil && !errors.Is(err, os.ErrNotExist) {
-				replyJSONError(w, http.StatusBadGateway, fmError(err))
-				return
+				// 逐条回报，理由同批量移动：已删的不可回滚
+				failed = append(failed, pathFailure{Path: p, Error: fmError(err)})
+				continue
 			}
+			removed++
 			// 文件没了，缩略图/封面缓存也一起清掉，不留孤儿
 			api.thumbs.purgeEntry(body.Vol, p)
 		}
-		replyJSON(w, http.StatusOK, map[string]any{"removed": len(body.Paths)})
+		status := http.StatusOK
+		if removed == 0 && len(failed) > 0 {
+			status = http.StatusBadGateway
+		}
+		replyJSON(w, status, map[string]any{"removed": removed, "failed": failed})
 	}
 }
 
@@ -491,7 +527,8 @@ func handleAPIFile(api *filesAPI) http.HandlerFunc {
 		defer f.Close()
 		st, err := f.Stat()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			// 底层错误里可能带内部路径，只给通用提示
+			http.Error(w, i18n.T("err.http_bad_gateway"), http.StatusBadGateway)
 			return
 		}
 		disp := "attachment"
@@ -499,8 +536,166 @@ func handleAPIFile(api *filesAPI) http.HandlerFunc {
 			disp = "inline"
 		}
 		w.Header().Set("Content-Disposition", disp+"; filename*=UTF-8''"+urlQueryEscape(path.Base(p)))
-		w.Header().Set("Content-Type", mimeOf(path.Base(p)))
+		mime := mimeOf(path.Base(p))
+		w.Header().Set("Content-Type", mime)
+		// inline 会原样渲染 SVG：没有 nosniff 时浏览器可能按 HTML 解析，
+		// 同源下等于给上传的 SVG 一个执行脚本的机会
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// 桌面壳会把一个响应的正文整份缓冲；媒体只给一个窗口，
+		// 浏览器播到窗口末尾会自己再发 Range，于是内存有界且可拖动。
+		// 只在客户端确实发了 Range 时窗口化：安卓壳只转发 200 的正文，
+		// 把无 Range 的整份请求改成 206 会让它拿到空体。
+		if isStreamMime(mime) && st.Size() > mediaWindow && r.Header.Get("Range") != "" {
+			start, end := rangeWindow(r.Header.Get("Range"), st.Size())
+			if end-start+1 > mediaWindow {
+				end = start + mediaWindow - 1
+			}
+			r.Header.Set("Range", "bytes="+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(end, 10))
+		}
 		http.ServeContent(w, r, path.Base(p), st.ModTime(), f)
+	}
+}
+
+// mediaWindow 是单次媒体响应的字节上限（桌面壳每个响应会整份缓冲）。
+const mediaWindow = 1 << 20
+
+// isStreamMime 判断是否是需要分段拉取的媒体类型。
+//
+// 输入：MIME
+// 输出：video/* 或 audio/* 为 true
+// 预期：图片/文档不窗口化，避免把多请求开销加到小文件上
+func isStreamMime(mime string) bool {
+	return strings.HasPrefix(mime, "video/") || strings.HasPrefix(mime, "audio/")
+}
+
+// rangeWindow 解析单段 Range，返回闭区间 [start,end]。
+//
+// 输入：Range 头（可为空）；文件总长
+// 输出：起止偏移，已夹在文件范围内
+// 预期：只支持单段；无法解析时按「从头开始」处理，交给上层去截窗口
+func rangeWindow(header string, size int64) (int64, int64) {
+	if size <= 0 {
+		return 0, 0
+	}
+	start, end := int64(0), size-1
+	spec, ok := strings.CutPrefix(header, "bytes=")
+	if !ok {
+		return start, end
+	}
+	spec = strings.TrimSpace(strings.SplitN(spec, ",", 2)[0])
+	a, b, found := strings.Cut(spec, "-")
+	if !found {
+		return start, end
+	}
+	if a == "" {
+		// 后缀形式 bytes=-N：最后 N 字节
+		n, err := strconv.ParseInt(strings.TrimSpace(b), 10, 64)
+		if err != nil || n <= 0 {
+			return start, end
+		}
+		if n > size {
+			n = size
+		}
+		return size - n, size - 1
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(a), 10, 64)
+	if err != nil || parsed < 0 {
+		return start, end
+	}
+	if parsed >= size {
+		// 起点已越过文件尾：返回空区间（end 小于 start），
+		// 上层拼成 "bytes=<size>-<size-1>" 后由 ServeContent 回 416
+		return size, size - 1
+	}
+	start = parsed
+	if b != "" {
+		if v, err := strconv.ParseInt(strings.TrimSpace(b), 10, 64); err == nil && v >= start {
+			end = min(v, size-1)
+		}
+	}
+	return start, end
+}
+
+// handleAPIFileWindow 是给安卓壳用的内部窗口读取。
+//
+// 输入：GET ?vol=&path=&offset=&length=
+// 输出：200 + 恰好 length 字节；参数非法 400；越界 416
+// 预期：这不是 HTTP Range 语义，只是「读一段」的 RPC；
+// 对 WebView 的 206/Content-Range 由壳自己组装
+func handleAPIFileWindow(api *filesAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, i18n.T("err.web_method"), http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query()
+		m, ok := api.lookup(q.Get("vol"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		p := q.Get("path")
+		if p == "" || strings.Contains(p, "..") {
+			http.Error(w, i18n.T("err.fm_bad_path"), http.StatusBadRequest)
+			return
+		}
+		offset, offErr := strconv.ParseInt(q.Get("offset"), 10, 64)
+		length, lenErr := strconv.ParseInt(q.Get("length"), 10, 64)
+		if offErr != nil || lenErr != nil || offset < 0 || length <= 0 || length > 8<<20 {
+			http.Error(w, i18n.T("err.web_bad_request"), http.StatusBadRequest)
+			return
+		}
+		f, err := m.Open(r.Context(), p)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			http.Error(w, i18n.T("err.http_bad_request"), http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method == http.MethodHead {
+			return
+		}
+		written, copyErr := io.CopyN(w, f, length)
+		if copyErr != nil && written == 0 {
+			http.Error(w, i18n.T("err.http_bad_gateway"), http.StatusBadGateway)
+		}
+	}
+}
+
+// handleAPIFileSize 返回文件字节数（安卓壳用来组装 Content-Range）。
+//
+// 输入：GET ?vol=&path=
+// 输出：{"size":N}；目录/不存在 404
+// 预期：只读元数据，不打开文件内容
+func handleAPIFileSize(api *filesAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, i18n.T("err.web_method"), http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query()
+		m, ok := api.lookup(q.Get("vol"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		p := q.Get("path")
+		if p == "" || strings.Contains(p, "..") {
+			http.Error(w, i18n.T("err.fm_bad_path"), http.StatusBadRequest)
+			return
+		}
+		info, err := m.Info(r.Context(), p)
+		if err != nil || info.Dir {
+			http.NotFound(w, r)
+			return
+		}
+		replyJSON(w, http.StatusOK, map[string]any{"size": info.Size})
 	}
 }
 
@@ -667,6 +862,19 @@ func replyJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// opFailed 把「本地化的操作名 + 上游原因」拼成一句人话。
+//
+// 输入：prefixKey 是描述这次操作的 i18n 键；err 是上游返回的错误
+// 输出：形如「创建卷失败: rpc error ...」的字符串；err 为 nil 时返回空串
+// 预期：前缀必定本地化，前端不会拿到只有原始英文 RPC 文本的错误；
+// 与 CLI 的 failErr 口径一致，两个入口说的是同一句话
+func opFailed(prefixKey string, err error) string {
+	if err == nil {
+		return ""
+	}
+	return i18n.T(prefixKey) + ": " + err.Error()
 }
 
 // replyJSONError 输出 {error:{message}} 形态的错误。

@@ -61,6 +61,7 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private WailsBridge bridge;
+    private WailsJSBridge jsBridge;
     // Battery: system-event receivers are registered only while the activity is
     // in the foreground (onStart) and torn down in onStop, so background battery/
     // network/screen broadcasts don't wake the app.
@@ -200,6 +201,9 @@ public class MainActivity extends AppCompatActivity {
 
                     // /api/* 的 GET 交给 Go 面板路由（缩略图、封面、预览媒体）。
                     // 这里必须自己把 query 拼回去：WebViewAssetLoader.PathHandler 会丢 query。
+                    if (path != null && path.equals("/api/file")) {
+                        return serveMediaStream(path, request);
+                    }
                     if (path != null && path.startsWith("/api/")) {
                         return serveAPIGet(path, request);
                     }
@@ -229,7 +233,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // Add JavaScript interface for Go communication
-        webView.addJavascriptInterface(new WailsJSBridge(bridge, webView), "wails");
+        jsBridge = new WailsJSBridge(bridge, webView);
+        webView.addJavascriptInterface(jsBridge, "wails");
 
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on
@@ -293,6 +298,185 @@ public class MainActivity extends AppCompatActivity {
         return new WebResourceResponse(apiMime(fullPath), null, 200, "OK", headers,
                 new java.io.ByteArrayInputStream(data));
     }
+
+    // serveMediaStream 给 /api/file 的 Range 请求返回 206 子范围。
+    //
+    // 输入：path 固定 "/api/file"；request 原始请求（Range/query）
+    // 输出：WebResourceResponse；body 是单次 ≤1MiB 的窗口字节
+    // 预期：带 Range 必须回 206+Content-Range，否则 Chromium 会把响应当成
+    //       整份从头开始，seek 后 currentTime 被打回 0；无 Range 才回整份 200
+    private WebResourceResponse serveMediaStream(String path, WebResourceRequest request) {
+        String query = request.getUrl().getQuery();
+        String fullPath = (query != null && !query.isEmpty()) ? path + "?" + query : path;
+        String mime = apiMime(fullPath);
+
+        String range = request.getRequestHeaders() != null
+                ? request.getRequestHeaders().get("Range") : null;
+        if (range == null && request.getRequestHeaders() != null) {
+            range = request.getRequestHeaders().get("range");
+        }
+        // 没有 Range 的请求（<img>、直接下载）走整份返回：图片通常很小，
+        // 而伪造 206 会让浏览器把图片截断
+        if (range == null) {
+            return serveAPIGet(path, request);
+        }
+
+        long total = -1;
+        byte[] meta = bridge.serveAsset(path + "/size?" + (query == null ? "" : query), "GET", "{}");
+        if (meta != null) {
+            try {
+                total = new JSONObject(new String(meta, "UTF-8")).optLong("size", -1);
+            } catch (Exception ignored) {
+            }
+        }
+        if (total <= 0) {
+            return serveAPIGet(path, request);
+        }
+
+        long start = 0, end = total - 1;
+        boolean partial = false;
+        boolean suffix = false;
+        if (range.startsWith("bytes=")) {
+            String spec = range.substring(6).trim();
+            int dash = spec.indexOf('-');
+            if (dash >= 0) {
+                String head = spec.substring(0, dash).trim();
+                String tail = spec.substring(dash + 1).trim();
+                try {
+                    if (head.isEmpty()) {
+                        // 后缀形式 bytes=-N：要文件最后 N 字节，
+                        // 不能当成「从 0 开始」——播放器读 moov 时常发这种
+                        long n = Long.parseLong(tail);
+                        if (n > 0) {
+                            start = Math.max(0, total - n);
+                            end = total - 1;
+                            partial = true;
+                            suffix = true;
+                        }
+                    } else {
+                        start = Long.parseLong(head);
+                        end = tail.isEmpty() ? total - 1 : Long.parseLong(tail);
+                        partial = true;
+                    }
+                } catch (NumberFormatException e) {
+                    start = 0;
+                    end = total - 1;
+                    partial = false;
+                    suffix = false;
+                }
+            }
+        }
+        if (start < 0) start = 0;
+        if (end >= total) end = total - 1;
+        if (start >= total || end < start) {
+            java.util.Map<String, String> bad = new java.util.HashMap<>();
+            bad.put("Content-Range", "bytes */" + total);
+            return new WebResourceResponse(mime, null, 416, "Range Not Satisfiable",
+                    bad, new java.io.ByteArrayInputStream(new byte[0]));
+        }
+        if (!partial) {
+            return serveAPIGet(path, request);
+        }
+
+        // 只回一个 ≤1MiB 的窗口：响应体一次取完就交给 WebView，
+        // 不持有长连接流；播到窗口末尾浏览器会自己再发下一个 Range。
+        if (suffix) {
+            // 后缀请求要的是最后 N 字节：保留尾部，砍掉更早的部分
+            start = Math.max(start, end - MEDIA_WINDOW + 1);
+        } else {
+            end = Math.min(end, start + MEDIA_WINDOW - 1);
+        }
+        long count = end - start + 1;
+        String windowUrl = path + "/window?"
+                + (query == null || query.isEmpty() ? "" : query + "&")
+                + "offset=" + start + "&length=" + count;
+        byte[] data = bridge.serveAsset(windowUrl, "GET", "{}");
+        if (data == null || data.length != count) {
+            // 短读会让 Content-Range 与实际字节不一致，播放器只能报解码错误；
+            // 这里直接失败，不把不一致的 206 交给 WebView
+            Log.w(TAG, "media window mismatch offset=" + start + " want=" + count
+                    + " got=" + (data == null ? -1 : data.length));
+            java.util.Map<String, String> bad = new java.util.HashMap<>();
+            return new WebResourceResponse("application/json", "UTF-8", 500, "Internal Server Error",
+                    bad, new java.io.ByteArrayInputStream("{}".getBytes()));
+        }
+
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        headers.put("Accept-Ranges", "bytes");
+        headers.put("Content-Length", String.valueOf(data.length));
+        headers.put("Content-Range", "bytes " + start + "-" + (start + data.length - 1) + "/" + total);
+        headers.put("Cache-Control", "no-store");
+        java.io.InputStream raw = new java.io.ByteArrayInputStream(data);
+        java.io.InputStream body;
+        if (request.getMethod().equals("HEAD")) {
+            body = new java.io.ByteArrayInputStream(new byte[0]);
+        } else if (suffix) {
+            // 后缀请求由 Chromium 自己按 available() 算起点，不能再包前缀
+            body = raw;
+        } else {
+            body = new SkippedPrefixInputStream(start, raw);
+        }
+        return new WebResourceResponse(mime, null, 206, "Partial Content", headers, body);
+    }
+
+    // SkippedPrefixInputStream 让出「可跳过但不可读」的前缀。
+    //
+    // 输入：prefixLength 本次 206 的起点偏移；body 已截好的区间字节
+    // 输出：read 只返回 body 字节，skip 先消耗前缀
+    // 预期：WebView 收到 shouldInterceptRequest 的响应后会按请求 Range 的
+    //  first-byte-pos 再 skip 一次（不看状态码），把这次 skip 落在前缀上，
+    //  正文才不会被二次裁剪（上游同因：wry#1864）
+    private static final class SkippedPrefixInputStream extends java.io.InputStream {
+        private final java.io.InputStream body;
+        private long prefixRemaining;
+
+        SkippedPrefixInputStream(long prefixLength, java.io.InputStream body) {
+            this.prefixRemaining = prefixLength;
+            this.body = body;
+        }
+
+        @Override
+        public int available() throws java.io.IOException {
+            long total = prefixRemaining + body.available();
+            if (total > Integer.MAX_VALUE) {
+                // Chromium 把 available() 当 int 读；超出时返回 0，
+                // 它会跳过区间校验而不是直接判失败
+                return 0;
+            }
+            return (int) total;
+        }
+
+        @Override
+        public long skip(long n) throws java.io.IOException {
+            if (n <= 0) {
+                return 0;
+            }
+            if (prefixRemaining > 0) {
+                long skipped = Math.min(Math.min(n, prefixRemaining), Integer.MAX_VALUE);
+                prefixRemaining -= skipped;
+                return skipped;
+            }
+            return body.skip(n);
+        }
+
+        @Override
+        public int read() throws java.io.IOException {
+            return body.read();
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws java.io.IOException {
+            return body.read(b, off, len);
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            body.close();
+        }
+    }
+
+    // MEDIA_WINDOW 是单次媒体响应的字节上限：一次取完，不持有长连接流。
+    private static final int MEDIA_WINDOW = 1 << 20;
 
     // apiMime 推断 /api/* 响应的 Content-Type。
     //
@@ -590,6 +774,18 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == WailsJSBridge.FILE_IMPORT_REQUEST) {
+            jsBridge.onFilesPicked(resultCode == RESULT_OK ? data : null);
+            return;
+        }
+        if (requestCode == WailsJSBridge.FOLDER_IMPORT_REQUEST) {
+            jsBridge.onFolderPicked(resultCode == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
+        if (requestCode == WailsJSBridge.COVER_PICK_REQUEST) {
+            jsBridge.onCoverPicked(resultCode == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (requestCode == PHOTO_CAPTURE_REQUEST || requestCode == VIDEO_CAPTURE_REQUEST) {
             handleCaptureResult(resultCode, data);
             return;

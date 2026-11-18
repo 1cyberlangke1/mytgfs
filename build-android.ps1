@@ -140,10 +140,10 @@ try {
 
     Write-Host "Gradle $Task"
     if ($isWin) {
-        & (Join-Path $androidDir 'gradlew.bat') '-p' $androidDir $Task "-PappVersion=$version"
+        & (Join-Path $androidDir 'gradlew.bat') '-p' $androidDir $Task "--build-cache" "-PappVersion=$version"
     } else {
         # 仓库里 gradlew 的可执行位在 Windows 检出时可能丢失，直接交给 sh 更稳
-        & sh (Join-Path $androidDir 'gradlew') '-p' $androidDir $Task "-PappVersion=$version"
+        & sh (Join-Path $androidDir 'gradlew') '-p' $androidDir $Task "--build-cache" "-PappVersion=$version"
     }
     if ($LASTEXITCODE -ne 0) { throw "Gradle 失败: exit $LASTEXITCODE" }
 
