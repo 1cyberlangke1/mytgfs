@@ -43,6 +43,25 @@
     background: transparent !important;
   }
 
+  /* 需要视觉提示的滚动容器：全局隐藏原生滚动条后，
+     这些列表仍要能看出「还能往下滑」 */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(113, 113, 122, 0.45) transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    display: block !important;
+    width: 6px !important;
+    height: 6px !important;
+    background: transparent !important;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(113, 113, 122, 0.45);
+    border-radius: 999px;
+  }
+
   body {
     font-family: var(--font-sans);
     /* 内嵌字体加载前后让回退字体按 x-height 对齐，减少布局抖动 */
@@ -127,8 +146,6 @@ textarea:user-invalid {
 .modal-shell::backdrop {
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(4px);
-  overflow: hidden;
-  overscroll-behavior: contain;
 }
 
 /* 列表骨架屏 */

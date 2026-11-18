@@ -6,7 +6,7 @@
 //   - 用 WebView2 的远程调试端口连进真实窗口，而不是另起一个 http 服务
 //   - 只发 GET 请求，对 Telegram 账号与频道零写入：不建卷、不上传、不删除
 //   - 进程由本脚本启动并在结束时关闭，不碰用户已有的托盘实例
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
@@ -55,11 +55,40 @@ async function evaluate(expression) {
   return res.result?.value;
 }
 
+// killTree 结束子进程及其整棵进程树。
+//
+// 输入：spawn 出来的子进程
+// 输出：无
+// 预期：WebView2 会派生多个子进程，只 kill 父进程会留下仍占着调试端口的
+//       孤儿；Windows 用 taskkill /T 连子树一起收，其它平台普通 kill
+function killTree(proc) {
+  if (!proc || !proc.pid) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  proc.kill();
+}
+
+// findTarget 等 WebView2 调试目标出现，并只认本程序窗口。
+//
+// 输入：无
+// 输出：CDP page 目标
+// 预期：校验 URL 是 wails.localhost，避免连到上一轮残留目标；
+//       进程提前退出立即失败，不白等
 async function findTarget() {
   for (let i = 0; i < 120; i++) {
+    if (child.exitCode !== null) {
+      throw new Error('桌面壳提前退出（code=' + child.exitCode + '）');
+    }
     try {
       const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
-      const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      const page = list.find(
+        (t) =>
+          t.type === 'page' &&
+          t.webSocketDebuggerUrl &&
+          t.url.startsWith('http://wails.localhost')
+      );
       if (page) return page;
     } catch {
       // 窗口还没起来
@@ -106,7 +135,9 @@ try {
   // 1. 等窗口连上 Telegram（connecting 属于正常过程；账号没有频道时卷数为 0 也正常）
   //    页面尚未导航完成时 fetch 会抛错：静默重试，不算失败
   const state = await evaluate(`(async () => {
-    for (let i = 0; i < 240; i++) {
+    // 50 × 500ms = 25s：必须小于 rpc 的 30s 超时，
+    // 否则页内还在轮询、RPC 先被拒，变成误报
+    for (let i = 0; i < 50; i++) {
       try {
         const s = await fetch('http://wails.localhost/api/state').then(r => r.json());
         if (s.status && s.status.state_code !== 'connecting') return s;
@@ -225,5 +256,5 @@ try {
   process.exitCode = 1;
 } finally {
   if (ws) ws.close();
-  child.kill();
+  killTree(child);
 }

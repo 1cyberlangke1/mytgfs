@@ -43,6 +43,12 @@ fi
 
 title=$(head -n1 "$msg_file")
 
+# 空提交信息直接拒绝：允许空消息时 --allow-empty-message 会绕过所有校验
+if [ -z "$(printf '%s' "$title" | tr -d '[:space:]')" ]; then
+    echo "❌ 提交信息不能为空"
+    exit 1
+fi
+
 # 标准化中文符号：全角括号/冒号转半角（不要引入反斜杠）
 title=$(printf '%s' "$title" | sed -e 's/（/(/g' -e 's/）/)/g' -e 's/：/: /g')
 
@@ -96,9 +102,11 @@ esac
 
 new_title="$type: $body"
 
-# 检查正文是否包含中文字符
+# 检查正文是否包含汉字。
+# 用 perl 按 UTF-8 解码后匹配 Unicode 的 \p{Han}：
+# C locale 下 grep 按字节比较，`[一-龥]` 会退化成首字节范围，日文/韩文也能混过
 body_part=$(printf '%s' "$new_title" | sed -E 's/^[^:]+:[ \t]*//')
-if ! printf '%s' "$body_part" | grep -qE '[一-龥]'; then
+if ! printf '%s' "$body_part" | perl -CSD -0777 -ne 'exit(/\p{Han}/ ? 0 : 1)'; then
     echo "❌ 提交正文必须包含中文字符"
     echo "  当前正文: $body_part"
     exit 1

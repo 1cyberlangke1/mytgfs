@@ -1,7 +1,43 @@
 #!/bin/sh
+
+# 被 .gitignore 忽略的文件不能进索引：一旦提交，后续 .gitignore 也拦不住
 staged_ignored=$(git ls-files --cached --ignored --exclude-standard)
 if [ -n "$staged_ignored" ]; then
     echo "❌ 禁止提交被 .gitignore 忽略的文件"
     echo "$staged_ignored" | sed 's/^/   /'
     exit 1
 fi
+
+# 已跟踪文件的内容检查：.gitignore 只能挡住未 add 的路径，
+# 密钥或大文件被 git add -f / 历史遗留带进来时必须在提交前拦住
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# 1) 私钥 / 凭据目录 / 环境变量文件
+forbidden=$(printf '%s\n' "$staged" \
+    | grep -Ei '(^|/)(secrets?|\.env)(/|$)|(^|/)\.env\.[^/]+$|\.(pem|key|p12|pfx|jks)$|(^|/)id_(rsa|ed25519|ecdsa)$')
+if [ -n "$forbidden" ]; then
+    echo "❌ 禁止提交密钥/凭据类文件"
+    echo "$forbidden" | sed 's/^/   /'
+    exit 1
+fi
+
+# 2) 单文件超过 10 MiB：大二进制应走 Release 资产，不进仓库
+max_bytes=10485760
+too_big=$(while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    size=$(wc -c < "$f" | tr -d ' ')
+    if [ "$size" -gt "$max_bytes" ]; then
+        printf '%s (%s bytes)\n' "$f" "$size"
+    fi
+done <<EOF
+$staged
+EOF
+)
+if [ -n "$too_big" ]; then
+    echo "❌ 禁止提交超过 10 MiB 的文件"
+    echo "$too_big" | sed 's/^/   /'
+    exit 1
+fi
+
+exit 0

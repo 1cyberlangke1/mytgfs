@@ -824,9 +824,10 @@ try {
     return ready?.ready && ready.host === (target === 'web' ? '127.0.0.1:' + webPort : 'wails.localhost');
   });
   await waitFor('导航渲染', () => evaluate(`document.querySelectorAll('nav[aria-label] a').length > 0`));
-  // 首屏数据到位再测键盘：否则徽标数字会在按键之间变化
+  // 首屏数据到位再测键盘：否则徽标数字会在按键之间变化；
+  // 用侧栏卷入口判断，避免依赖当前停在哪个页签
   await waitFor('首屏数据到位', () =>
-    evaluate(`(document.body.innerText || '').includes('演示卷')`)
+    evaluate(`!!document.querySelector('[data-volume-id]')`)
   );
 
   // ---- 1. 方向键导航 ----
@@ -897,10 +898,16 @@ try {
   check('Delete 打开删除确认框', true);
 
   const countAfterDialog = (await listFiles()).length;
+  const idsBeforeDialog = new Set((await listFiles()).map((f) => f.id));
   // 用 Esc 取消：这就是用户真实的取消手势，别用 dialog.close()（脚本关窗不等 React 收尾）
   await key('Escape');
   await waitFor('删除确认框关闭', () => evaluate(`!document.querySelector('dialog[open]')`));
-  check('取消删除不改数据', (await listFiles()).length === countAfterDialog);
+  const afterCancelIds = new Set((await listFiles()).map((f) => f.id));
+  check(
+    '取消删除不改数据',
+    afterCancelIds.size === idsBeforeDialog.size &&
+      [...idsBeforeDialog].every((id) => afterCancelIds.has(id))
+  );
 
   await selectFirstRow();
   const doomedId = await cursorRowId();
@@ -917,9 +924,9 @@ try {
   check('确认按钮可点击', confirmed === true);
   const afterDelete = await waitFor('删除后数据减少', async () => {
     const files = await listFiles();
-    return files.length < countAfterDialog ? files : false;
+    return !files.some((f) => f.id === doomedId) ? files : false;
   });
-  check('确认删除后文件树变小', afterDelete.length < countAfterDialog, String(afterDelete.length));
+  check('确认删除后文件树变小', !afterDelete.some((f) => f.id === doomedId), String(afterDelete.length));
   await waitFor('删除确认框消失', () => evaluate(`!document.querySelector('dialog[open]')`));
   // 接口变了不等于界面变了：等被删那一行真的从 DOM 消失，否则下一步会选中陈旧行
   const doomedSelector = `[data-file-id="${doomedId}"]`;
@@ -1118,20 +1125,13 @@ try {
   // ---- 7. 操作队列：假任务可取消并落「已取消」 ----
   await clickNav('#overview');
   await waitFor('切到概览页', async () => (await tabHash()) === '#overview');
-  const queueCancelLabel = await waitFor('操作队列渲染假任务', () =>
-    evaluate(`(() => {
-      const btn = [...document.querySelectorAll('button[aria-label]')].find((b) =>
-        (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
-      );
-      return btn ? btn.getAttribute('aria-label') : false;
-    })()`)
+  const queueCancel = await waitFor('操作队列渲染假任务', () =>
+    evaluate(`!!document.querySelector('[data-testid="queue-cancel"]')`)
   );
-  check('服务端队列任务给出取消按钮', typeof queueCancelLabel === 'string', queueCancelLabel);
+  check('服务端队列任务给出取消按钮', queueCancel === true);
 
   const queueClicked = await evaluate(`(() => {
-    const btn = [...document.querySelectorAll('button[aria-label]')].find((b) =>
-      (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
-    );
+    const btn = document.querySelector('[data-testid="queue-cancel"]');
     if (!btn) return false;
     btn.click();
     return true;
@@ -1139,21 +1139,14 @@ try {
   check('队列取消按钮可点击', queueClicked === true);
 
   const queueCancelled = await waitFor('队列任务落已取消', () =>
-    evaluate(`(() => {
-      const main = document.querySelector('main');
-      return !!main && main.textContent.includes('已取消');
-    })()`)
+    evaluate(`!!document.querySelector('[data-queue-state="cancelled"]')`)
   );
   check('取消后任务显示已取消', queueCancelled === true);
 
-  const queueCancelGone = await evaluate(`(() => {
-    const main = document.querySelector('main');
-    if (!main) return null;
-    return [...main.querySelectorAll('button[aria-label]')].some((b) =>
-      (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
-    );
-  })()`);
-  check('已取消任务不再给取消按钮', queueCancelGone === false);
+  const queueCancelGone = await waitFor('已取消任务不再给取消按钮', () =>
+    evaluate(`!document.querySelector('[data-testid="queue-cancel"]')`)
+  );
+  check('已取消任务不再给取消按钮', queueCancelGone === true);
 
   // ---- 8. 同名冲突：选一个根目录已存在的名字，确认前必须问怎么处理 ----
   if (!isAndroid) {
@@ -1273,38 +1266,27 @@ try {
     await waitFor('切到下载页', async () => (await tabHash()) === '#downloads');
     const androidRows = await waitFor('安卓下载页列出本地文件', () =>
       evaluate(`(() => {
-        const text = document.querySelector('main')?.textContent ?? '';
-        return text.includes('已下载报告.pdf') && text.includes('已下载歌曲.mp3') ? text : false;
+        const n = document.querySelectorAll('[data-download-name]').length;
+        return n >= 2 ? String(n) : false;
       })()`)
     );
-    check('安卓下载页列出本地文件', typeof androidRows === 'string');
+    check('安卓下载页列出本地文件', typeof androidRows === 'string', androidRows);
     // 安卓没有文件管理器语义：按钮改成导出到系统公共下载目录，不再是「打开文件夹」
-    const hasFolderBtn = await evaluate(`(() => {
-      const main = document.querySelector('main');
-      if (!main) return false;
-      return [...main.querySelectorAll('button')].some((b) =>
-        /打开文件夹|Open folder/i.test(b.textContent || '')
-      );
-    })()`);
-    check('安卓不渲染打开下载文件夹', hasFolderBtn === false);
-    const hasExportBtn = await evaluate(`(() => {
-      const main = document.querySelector('main');
-      if (!main) return false;
-      return [...main.querySelectorAll('button')].some((b) =>
-        /导出到系统下载目录|Export to Downloads/i.test(b.textContent || '')
-      );
-    })()`);
-    check('安卓渲染导出到下载目录', hasExportBtn === true);
+    const dirAction = await evaluate(
+      `document.querySelector('[data-testid="downloads-dir-action"]')?.getAttribute('data-dir-action') ?? null`
+    );
+    check('安卓不渲染打开下载文件夹', dirAction !== 'open', String(dirAction));
+    check('安卓渲染导出到下载目录', dirAction === 'export');
   } else {
     await clickNav('#downloads');
     await waitFor('切到下载页', async () => (await tabHash()) === '#downloads');
     const rows = await waitFor('假下载文件渲染', () =>
       evaluate(`(() => {
-        const text = document.querySelector('main')?.textContent ?? '';
-        return text.includes('已下载报告.pdf') && text.includes('已下载歌曲.mp3') ? text : false;
+        const n = document.querySelectorAll('[data-download-name]').length;
+        return n >= 2 ? String(n) : false;
       })()`)
     );
-    check('下载页列出本地文件', typeof rows === 'string');
+    check('下载页列出本地文件', typeof rows === 'string', rows);
 
     let reachedNav = false;
     for (let i = 0; i < 4 && !reachedNav; i += 1) {
