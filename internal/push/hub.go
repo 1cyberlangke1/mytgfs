@@ -121,4 +121,5 @@ func (h *Hub) Close() {
 	}
 	h.cancel()
 	h.wg.Wait()
+	h.bus.Close()
 }

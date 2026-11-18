@@ -21,6 +21,8 @@ type Bus struct {
 	last map[string]time.Time
 	// later 记录每个主题待补发的尾沿推送；只有被合并掉的那次才需要
 	later map[string]*time.Timer
+	// closed 由 Close 置位：已关闭的总线不再触发补发，也不接受新订阅
+	closed bool
 }
 
 // New 创建空总线。
@@ -84,6 +86,10 @@ func (b *Bus) PublishEvery(topic string, every time.Duration) {
 			b.later[topic] = time.AfterFunc(delay, func() {
 				b.mu.Lock()
 				delete(b.later, topic)
+				if b.closed {
+					b.mu.Unlock()
+					return
+				}
 				b.last[topic] = time.Now()
 				b.mu.Unlock()
 				b.Publish(topic)
@@ -95,6 +101,21 @@ func (b *Bus) PublishEvery(topic string, every time.Duration) {
 	b.last[topic] = now
 	b.mu.Unlock()
 	b.Publish(topic)
+}
+
+// Close 停止所有待补发的尾沿推送并标记总线已关闭。
+//
+// 输入：无
+// 输出：无
+// 预期：关闭后定时器触发时直接返回，不会在 Hub 关闭后再发布事件
+func (b *Bus) Close() {
+	b.mu.Lock()
+	b.closed = true
+	for topic, t := range b.later {
+		t.Stop()
+		delete(b.later, topic)
+	}
+	b.mu.Unlock()
 }
 
 // Publish 通知某主题的所有订阅者。

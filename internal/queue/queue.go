@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +69,9 @@ const (
 	defaultWorkers = 4
 	minBackoff     = time.Second
 	maxBackoff     = time.Minute
-	maxFloodWait   = 15 * time.Minute
+	// progressGap 是执行中进度推送的最小间隔。
+	progressGap  = 200 * time.Millisecond
+	maxFloodWait = 15 * time.Minute
 )
 
 // Job 是一条待执行任务。
@@ -125,6 +128,9 @@ type Queue struct {
 	handler Handler
 	// onChange 可选：任务入队、开始、结束时各回调一次，供上层推送状态
 	onChange func()
+	// onProgress 可选：执行中的字节进度回调，单独一条通道，
+	// 避免每个分片都触发一次完整状态推送
+	onProgress func()
 
 	// wakes 是每个 worker 一个的唤醒通道：Open 时按 workers 固定长度创建，
 	// 之后只读不增删，signal 广播不会与 worker 生命周期竞态
@@ -145,6 +151,9 @@ type Queue struct {
 	// 只放内存、不落库：重启后任务重排，进度从 0 重新上报即可
 	progMu   sync.Mutex
 	progress map[int64]progress
+	// progAt 是上一次推送进度的时间：一个 150MB 文件有近 300 个分片，
+	// 逐片推送会把面板刷成每秒几十次重绘，统一在这里节流
+	progAt time.Time
 }
 
 // progress 是一条任务的字节进度。
@@ -229,6 +238,34 @@ func (q *Queue) SetHandler(fn Handler) {
 func (q *Queue) changed() {
 	q.mu.RLock()
 	fn := q.onChange
+	q.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// SetProgressNotifier 注册执行中进度回调。
+//
+// 输入：fn 每收到一次 Report 调用一次；传 nil 表示回落成 onChange
+// 输出：无
+// 预期：进度推送与状态推送分开，面板不用为每个分片重拉整份状态
+func (q *Queue) SetProgressNotifier(fn func()) {
+	q.mu.Lock()
+	q.onProgress = fn
+	q.mu.Unlock()
+}
+
+// progressChanged 推送一次字节进度。
+//
+// 输入：无
+// 输出：无
+// 预期：没有独立进度回调时退回状态回调，保证任何装配方式下界面都会刷新
+func (q *Queue) progressChanged() {
+	q.mu.RLock()
+	fn := q.onProgress
+	if fn == nil {
+		fn = q.onChange
+	}
 	q.mu.RUnlock()
 	if fn != nil {
 		fn()
@@ -472,6 +509,29 @@ func (q *Queue) notifyDoneClose(id int64) {
 	delete(q.waiters, id)
 }
 
+// removeWaiter 摘掉一个已经不再等待的通道。
+//
+// 输入：id 任务 ID；ch Wait 注册的通道
+// 输出：无
+// 预期：调用方 ctx 先取消时不能让通道留在表里，
+// 否则长时间运行会为每条被放弃的等待堆积一个已无人接收的通道
+func (q *Queue) removeWaiter(id int64, ch chan struct{}) {
+	q.waitMu.Lock()
+	defer q.waitMu.Unlock()
+	list := q.waiters[id]
+	for i, c := range list {
+		if c == ch {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(list) == 0 {
+		delete(q.waiters, id)
+		return
+	}
+	q.waiters[id] = list
+}
+
 // Wait 等待任务到达终态（done/failed）。
 //
 // 输入：ctx 取消；id 任务 ID
@@ -496,6 +556,8 @@ func (q *Queue) Wait(ctx context.Context, id int64) error {
 	}
 
 	ch := q.notifyDone(id)
+	// ctx 先结束时把注册的通道摘掉：否则每次放弃等待都在表里留一条死通道
+	defer q.removeWaiter(id, ch)
 	// 注册后再查一次：finish 可能恰好发生在首查与注册之间
 	err = q.db.QueryRowContext(ctx,
 		`SELECT state, err FROM jobs WHERE id = ?`, id).Scan(&state, &msg)
@@ -557,8 +619,15 @@ func (q *Queue) Report(id, done, size int64) {
 		done = prev.done
 	}
 	q.progress[id] = progress{done: done, size: size}
+	// 逐片推送会把面板刷爆：按 200ms 节流，但完成那一刻必须立刻推
+	notify := done >= size || time.Since(q.progAt) >= progressGap
+	if notify {
+		q.progAt = time.Now()
+	}
 	q.progMu.Unlock()
-	q.changed()
+	if notify {
+		q.progressChanged()
+	}
 }
 
 // progressOf 读取任务进度。
@@ -575,24 +644,50 @@ func (q *Queue) progressOf(id int64) (int64, int64) {
 	return p.done, p.size
 }
 
-// Snapshot 返回最近的任务快照，最新的排在最前。
+// Snapshot 返回任务快照，最新的排在最前。
+//
+// 输入：无
+// 输出：排队中/执行中的全部任务 + 最近 keepFinished 条已结束任务
+// 预期：只按 keepFinished 截断已结束的历史，排队中的一条都不能丢
 func (q *Queue) Snapshot() []Item {
+	out := make([]Item, 0, 16)
+	// 未结束的任务没有条数上限：批量操作排队 100 个也要全部显示
 	rows, err := q.db.Query(`
 SELECT id, volume, kind, name, state, attempt, err FROM jobs
-ORDER BY id DESC LIMIT ?`, keepFinished)
+WHERE state IN (?, ?) ORDER BY id DESC`,
+		stateQueued, stateRunning)
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
-	out := make([]Item, 0, 16)
 	for rows.Next() {
 		var it Item
 		if err := rows.Scan(&it.ID, &it.Volume, &it.Kind, &it.Name, &it.State, &it.Attempt, &it.Err); err != nil {
+			rows.Close()
 			return out
 		}
 		it.Done, it.Size = q.progressOf(it.ID)
 		out = append(out, it)
 	}
+	rows.Close()
+
+	// 已结束的只保留最近若干条：历史没有继续展示的价值，但也不能无上限增长
+	hist, err := q.db.Query(`
+SELECT id, volume, kind, name, state, attempt, err FROM jobs
+WHERE state IN (?, ?, ?) ORDER BY id DESC LIMIT ?`,
+		stateDone, stateFailed, stateCancelled, keepFinished)
+	if err != nil {
+		return out
+	}
+	defer hist.Close()
+	for hist.Next() {
+		var it Item
+		if err := hist.Scan(&it.ID, &it.Volume, &it.Kind, &it.Name, &it.State, &it.Attempt, &it.Err); err != nil {
+			return out
+		}
+		it.Done, it.Size = q.progressOf(it.ID)
+		out = append(out, it)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out
 }
 

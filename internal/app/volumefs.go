@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"sync"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/datadir"
@@ -40,6 +41,11 @@ type VolumeFS struct {
 	Store  *telegramstore.Store
 	FS     *vfs.FileSystem // 卷内文件系统后端
 	Files  *fm.Manager     // 文件管理接口
+
+	// peerMu/peers 缓存跨卷复制用到的源卷索引：
+	// 每个复制任务都新开一条 SQLite 连接，会与源卷自己的连接抢锁并重复开销
+	peerMu sync.Mutex
+	peers  map[string]*index.Index
 }
 
 // OpenVolume 为一个卷搭好读写后端。
@@ -73,6 +79,15 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 	fsys := vfs.New(ctx, idx, store, a.Config().Mount.ReadChunk(), a.Events())
 	fsys.SetVolume(volName)
 	// 排队的跨卷复制任务要按卷名解析源卷：注入这一层，重启后也能重放
+	v := &VolumeFS{
+		Volume: vol,
+		Name:   volName,
+		Index:  idx,
+		Store:  store,
+		FS:     fsys,
+		Files:  fm.New(fsys),
+		peers:  map[string]*index.Index{},
+	}
 	fsys.SetCopySource(func(name string) (vfs.Peer, error) {
 		if name == volName {
 			return vfs.Peer{Index: idx, Store: store}, nil
@@ -81,14 +96,15 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		if !ok {
 			return vfs.Peer{}, ErrVolumeNotFound{Name: name}
 		}
-		pidx, perr := a.Index(pn)
+		// 源卷索引复用一条连接：每个复制任务都 open/close 会与源卷自己的
+		// 连接反复抢锁，同一卷连续复制时开销翻倍
+		pidx, perr := a.peerIndex(v, pn)
 		if perr != nil {
 			return vfs.Peer{}, perr
 		}
 		return vfs.Peer{
-			Index:   pidx,
-			Store:   a.newStore(api, pv.ChatID, pidx),
-			Release: func() { _ = pidx.Close() },
+			Index: pidx,
+			Store: a.newStore(api, pv.ChatID, pidx),
 		}, nil
 	})
 	// 所有改动频道的操作先落库再执行：断电/断网后重启继续
@@ -97,18 +113,36 @@ func (a *App) OpenVolume(ctx context.Context, name string, api telegramstore.API
 		return nil, qerr
 	}
 	fsys.SetTempDir(datadir.Path("tmp"))
-	// 只补传本程序记下的记录，不动频道里别的内容
-	if rerr := fsys.ResumePending(); rerr != nil {
-		logging.Warn("log.volume_warn", rerr, volName)
+	// 只补传本程序记下的记录，不动频道里别的内容。
+	// 放到后台跑：大文件要整份算 sha256，不能把打开卷（首屏）卡住
+	go func() {
+		if rerr := fsys.ResumePending(); rerr != nil {
+			logging.Warn("log.pending_resume_failed", rerr, volName)
+		}
+	}()
+	return v, nil
+}
+
+// peerIndex 返回跨卷复制用的源卷索引（按卷名缓存）。
+//
+// 输入：v 持有缓存的卷；name 源卷名
+// 输出：已打开的索引；error
+// 预期：同一源卷只开一条连接，VolumeFS.Close 时统一关闭
+func (a *App) peerIndex(v *VolumeFS, name string) (*index.Index, error) {
+	v.peerMu.Lock()
+	defer v.peerMu.Unlock()
+	if idx, ok := v.peers[name]; ok {
+		return idx, nil
 	}
-	return &VolumeFS{
-		Volume: vol,
-		Name:   volName,
-		Index:  idx,
-		Store:  store,
-		FS:     fsys,
-		Files:  fm.New(fsys),
-	}, nil
+	idx, err := a.Index(name)
+	if err != nil {
+		return nil, err
+	}
+	if v.peers == nil {
+		v.peers = map[string]*index.Index{}
+	}
+	v.peers[name] = idx
+	return idx, nil
 }
 
 // Snapshot 是一个卷在面板上的状态。
@@ -130,7 +164,10 @@ func (v *VolumeFS) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	used, _ := v.Index.Used(ctx)
+	used, uerr := v.Index.Used(ctx)
+	if uerr != nil {
+		return Snapshot{}, uerr
+	}
 	snap := Snapshot{Name: v.Name, Entries: len(children), Used: used}
 	if v.FS == nil {
 		return snap, nil
@@ -208,5 +245,12 @@ func (v *VolumeFS) CancelQueue(ctx context.Context, id int64) error {
 // Close 先停队列再关索引；在跑任务被取消后等下次启动重排。
 func (v *VolumeFS) Close() error {
 	v.FS.Close()
+	v.peerMu.Lock()
+	peers := v.peers
+	v.peers = nil
+	v.peerMu.Unlock()
+	for _, idx := range peers {
+		_ = idx.Close()
+	}
 	return v.Index.Close()
 }
