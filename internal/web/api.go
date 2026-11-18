@@ -659,6 +659,10 @@ func handleAPIFileWindow(api *filesAPI) http.HandlerFunc {
 			return
 		}
 		defer f.Close()
+		// 窗口读取只服务媒体预览，进度不能算成下载任务
+		if s, ok := f.(interface{ MarkStream() }); ok {
+			s.MarkStream()
+		}
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			http.Error(w, i18n.T("err.http_bad_request"), http.StatusRequestedRangeNotSatisfiable)
 			return

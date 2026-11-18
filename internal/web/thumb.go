@@ -279,6 +279,10 @@ func generateThumb(r *http.Request, m fm.Files, p string, side int) []byte {
 		return nil
 	}
 	defer f.Close()
+	// 缩略图/海报是预览读取，进度不当作下载任务
+	if s, ok := f.(interface{ MarkStream() }); ok {
+		s.MarkStream()
+	}
 	// 先只读文件头拿尺寸：几 MB 的高压缩比 PNG 能解出上亿像素，
 	// 直接 Decode 等于让一张图把进程内存打满
 	cfg, _, cerr := image.DecodeConfig(f)
