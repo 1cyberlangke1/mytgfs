@@ -2,6 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-FYotVB9vWsh1PphJdRE2Xm3pEHA8fk1ftskO1OfVGHs='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>mytgfs — Local Telegram Channel File Volume Panel</title>
     <meta name="description" content="Single-user local Web management console for Telegram private channel file volumes with chunked resumable uploads." />
@@ -10,8 +14,9 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <script>
-      // 首屏前先定深浅色：跟随系统时读 prefers-color-scheme，
-      // 免得深色系统上先闪一帧浅色再被 React 纠正
+      // 首屏前先定深浅色与语言：跟随系统时读 prefers-color-scheme，
+      // 免得深色系统上先闪一帧浅色再被 React 纠正；
+      // lang 也在这里定，英文用户首屏的读屏语言才是对的
       (function () {
         try {
           var stored = JSON.parse(localStorage.getItem('mytgfs_theme_v1') || '"system"');
@@ -21,6 +26,13 @@
           if (dark) document.documentElement.classList.add('dark');
         } catch (e) {
           // 隐私模式禁用存储时按浅色渲染，React 挂载后会再校正
+        }
+        try {
+          var lang = JSON.parse(localStorage.getItem('mytgfs_locale_v1') || 'null');
+          if (lang === 'en') document.documentElement.lang = 'en';
+          else if (lang === 'zh') document.documentElement.lang = 'zh-CN';
+        } catch (e) {
+          // 语言读不到就保持模板默认 zh-CN，React 挂载后会再校正
         }
       })();
     </script>

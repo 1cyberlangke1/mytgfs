@@ -115,6 +115,10 @@ function asMessage(payload: unknown): string {
 }
 
 // ---- 安卓传输桥 ----
+//
+// 桥只传文本（JSON）。文件字节不经这里：单文件由原生选择器给路径、服务端读盘；
+// 文件夹/剪贴板产生的 File 先写入应用缓存拿到路径，再走 /api/upload/adopt。
+// 因此整条链路上没有 base64，也没有额外的编码层。
 
 /** BridgeReply 与 Go 侧 web.BridgeResponse 一一对应。 */
 interface BridgeReply {
@@ -123,70 +127,21 @@ interface BridgeReply {
   body?: string;
 }
 
-// encodeBase64 把字节编成 base64，分段避免超长参数列表。
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + step));
-  }
-  return btoa(binary);
-}
-
-// decodeBase64 把 base64 还原成字节；空串返回空数组。
-function decodeBase64(text: string): Uint8Array {
-  if (!text) return new Uint8Array(0);
-  const raw = atob(text);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-  return bytes;
-}
-
-// bodyToBytes 把 RequestInit.body 归一成字节。
+// bridgeFetch 经 Wails 服务方法执行一次控制面请求。
 //
-// 输入：字符串 / ArrayBuffer / TypedArray / URLSearchParams / Blob
-// 输出：UTF-8 原始字节
-// 预期：面板只发这几种体；其它类型直接报错，不做静默降级
-async function bodyToBytes(body: BodyInit | null | undefined): Promise<Uint8Array> {
-  if (!body) return new Uint8Array(0);
-  if (typeof body === 'string') return new TextEncoder().encode(body);
-  if (body instanceof ArrayBuffer) return new Uint8Array(body);
-  if (ArrayBuffer.isView(body)) {
-    return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
-  }
-  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
-    return new TextEncoder().encode(body.toString());
-  }
-  if (typeof Blob !== 'undefined' && body instanceof Blob) {
-    return new Uint8Array(await body.arrayBuffer());
-  }
-  throw new ApiError('unsupported request body', 0);
-}
-
-// responseFromBridge 把桥返回的字节包成标准 Response。
-//
-// 输入：BridgeReply
-// 输出：Response；无正文的状态码给 null body，避免构造器拒绝
-function responseFromBridge(reply: BridgeReply): Response {
-  const status = reply.status ?? 200;
-  const headers = new Headers();
-  if (reply.type) headers.set('Content-Type', reply.type);
-  const bytes = decodeBase64(reply.body ?? '');
-  const noBody = status === 204 || status === 205 || status === 304 || bytes.length === 0;
-  return new Response(noBody ? null : (bytes.buffer as ArrayBuffer), { status, headers });
-}
-
-// bridgeFetch 经 Wails 服务方法执行一次面板请求。
-//
-// 输入：path 带完整 query；init 与 fetch 同形
-// 输出：Response（状态码/头/正文由 Go 侧回填）
-// 预期：取消信号触发时调用 CancellablePromise.cancel，调用方按 aborted 处理
+// 输入：path 带完整 query；init.body 必须是字符串（JSON）
+// 输出：Response（状态码/头/文本正文由 Go 侧回填）
+// 预期：取消信号触发时调用 CancellablePromise.cancel，调用方按 aborted 处理；
+// 二进制请求体直接报错，避免又出现一条隐式编码通道
 async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> {
   const call = wailsRuntime()?.Call?.ByName;
   if (!call) throw new ApiError('desktop runtime unavailable', 0);
   const method = (init?.method ?? 'GET').toUpperCase();
-  const body = encodeBase64(await bodyToBytes(init?.body));
-  const pending = call('mytgfs/internal/web.Bridge.Do', { method, path, body }) as Promise<unknown> & {
+  const raw = init?.body ?? null;
+  if (raw !== null && typeof raw !== 'string') {
+    throw new ApiError('binary body must not use the text bridge', 0);
+  }
+  const pending = call('mytgfs/internal/web.Bridge.Do', { method, path, body: raw ?? '' }) as Promise<unknown> & {
     cancel?: () => void;
   };
   const signal = init?.signal;
@@ -198,14 +153,20 @@ async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> 
     signal.addEventListener('abort', () => pending.cancel?.(), { once: true });
   }
   try {
-    return responseFromBridge((await pending) as BridgeReply);
+    const reply = (await pending) as BridgeReply;
+    const status = reply.status ?? 200;
+    const headers = new Headers();
+    if (reply.type) headers.set('Content-Type', reply.type);
+    const text = reply.body ?? '';
+    const noBody = status === 204 || status === 205 || status === 304 || text === '';
+    return new Response(noBody ? null : text, { status, headers });
   } catch (err) {
     if (signal?.aborted) throw new ApiError('aborted', 0);
     throw err;
   }
 }
 
-// rawFetch 是 fetch 的平台分派：安卓走桥，其余照旧。
+// rawFetch 是 fetch 的平台分派：安卓走文本桥，其余照旧。
 function rawFetch(path: string, init?: RequestInit): Promise<Response> {
   return isAndroid ? bridgeFetch(path, init) : fetch(path, init);
 }
@@ -273,11 +234,73 @@ export function removeItems(volume: string, paths: string[]): Promise<{ removed:
   });
 }
 
+// nativeImport 走安卓原生选择器：壳用 SAF 打开 fd，逐个交给服务端接管，
+// 字节不进 JS，也不在应用 cache 留副本。
+//
+// 输入：zone=file|folder；卷名；卷内目标目录
+// 输出：{uploaded, failed}；用户取消时 {0,0}
+// 预期：桌面端不会调用；回调名与壳里的 evaluateJavascript 一一对应
+function nativeImport(
+  zone: 'file' | 'folder',
+  volume: string,
+  dir: string
+): Promise<{ uploaded: number; failed: number }> {
+  return new Promise((resolve, reject) => {
+    const w = window as unknown as {
+      wails?: { pickFileImport?: (v: string, d: string) => void; pickFolderImport?: (v: string, d: string) => void };
+      _mytgfsFileImport?: (uploaded: number, failed: number) => void;
+      _mytgfsFolderImport?: (uploaded: number, failed: number) => void;
+    };
+    const pick = zone === 'file' ? w.wails?.pickFileImport : w.wails?.pickFolderImport;
+    if (!pick) {
+      reject(new ApiError('native picker unavailable', 0));
+      return;
+    }
+    const done = (uploaded: number, failed: number) => resolve({ uploaded, failed });
+    if (zone === 'file') {
+      w._mytgfsFileImport = (uploaded, failed) => {
+        delete w._mytgfsFileImport;
+        done(uploaded, failed);
+      };
+    } else {
+      w._mytgfsFolderImport = (uploaded, failed) => {
+        delete w._mytgfsFolderImport;
+        done(uploaded, failed);
+      };
+    }
+    pick(volume, dir);
+  });
+}
+
+// importFileNative 用安卓原生单文件选择器（可多选）导入。
+//
+// 输入：卷名、卷内目标目录
+// 输出：{uploaded, failed}
+// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache
+export function importFileNative(
+  volume: string,
+  dir: string
+): Promise<{ uploaded: number; failed: number }> {
+  return nativeImport('file', volume, dir);
+}
+
+// importFolderNative 用安卓原生目录选择器递归导入。
+//
+// 输入：卷名、卷内目标目录
+// 输出：{uploaded, failed}
+// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache
+export function importFolderNative(
+  volume: string,
+  dir: string
+): Promise<{ uploaded: number; failed: number }> {
+  return nativeImport('folder', volume, dir);
+}
+
 // UPLOAD_CHUNK 是分片大小。内容一律以原始字节发送：
 // 桌面壳的 Wails AssetServer 收不到 FormData/Blob 请求体（官方 issue #5845、
 // #6068），multipart 上传在桌面端会变成 0 字节文件，所以这里走分片接口。
-// 安卓分片走 base64 桥，1MiB 一片让单次桥调用的字符串与内存开销都可控。
-const UPLOAD_CHUNK = isAndroid ? 1 << 20 : 4 << 20;
+// 安卓不做分片：File 由原生通道写入缓存，再把路径交给 /api/upload/adopt。
+const UPLOAD_CHUNK = 4 << 20;
 
 // putChunk 发送一段原始字节，返回服务端累计偏移。
 //
@@ -292,7 +315,6 @@ function putChunk(
   onProgress?: (ratio: number) => void,
   signal?: AbortSignal
 ): Promise<number> {
-  if (isAndroid) return putChunkBridge(id, offset, body, total, onProgress, signal);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const q = new URLSearchParams({ id, offset: String(offset) });
@@ -301,7 +323,7 @@ function putChunk(
     xhr.responseType = 'text';
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable && onProgress) {
-        onProgress(Math.min(0.99, (offset + ev.loaded) / Math.max(1, total)));
+        onProgress(Math.min(1, (offset + ev.loaded) / Math.max(1, total)));
       }
     };
     xhr.onerror = () => reject(new ApiError('network error', 0));
@@ -329,42 +351,6 @@ function putChunk(
     }
     xhr.send(body);
   });
-}
-
-// putChunkBridge 是安卓的分片上传实现。
-//
-// 输入：会话 id、起始偏移、这一段字节、文件总大小、进度回调、取消信号
-// 输出：服务端累计偏移
-// 预期：桥一次调用发完整个分片，进度按分片粒度上报（不伪造片内进度）
-async function putChunkBridge(
-  id: string,
-  offset: number,
-  body: ArrayBuffer,
-  total: number,
-  onProgress?: (ratio: number) => void,
-  signal?: AbortSignal
-): Promise<number> {
-  const q = new URLSearchParams({ id, offset: String(offset) });
-  const res = await rawFetch(`/api/upload/chunk?${q.toString()}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body,
-    signal,
-  });
-  const text = await res.text();
-  let payload: unknown = null;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = null;
-  }
-  if (!res.ok) {
-    throw new ApiError(asMessage(payload) || `upload failed (${res.status})`, res.status);
-  }
-  const next = (payload as { offset?: number } | null)?.offset;
-  const received = typeof next === 'number' ? next : offset + body.byteLength;
-  onProgress?.(Math.min(0.99, received / Math.max(1, total)));
-  return received;
 }
 
 // UploadPaused 表示上传被用户暂停：服务端会话与已传字节仍在。
@@ -399,13 +385,16 @@ export function discardUpload(id: string): Promise<void> {
     .catch(() => undefined);
 }
 
-// uploadFile 上传单个文件，onProgress 汇报 0..1 进度。
+// uploadFile 上传单个文件，onProgress 汇报 0..1 的「浏览器→服务端」进度。
 //
-// 输入：卷、目标目录、相对路径、落盘文件名、文件、进度回调、取消信号、断点
-// 输出：写入后的卷内路径
+// 输入：卷、目标目录、相对路径、落盘文件名、文件、进度回调、取消信号、断点、
+//       onSession 会话建立后的回调（取消时据此丢弃服务端临时文件）
+// 输出：写入后的卷内路径 + 后台队列任务号（0 表示没有队列）
 // 预期：
 //   - name 是清单里改名后的文件名，由调用方决定；与 file.name 可以不同，
 //     这样改名落进 init 请求，省掉一次上传后的重命名调用
+//   - 进度只覆盖本段：真正的 Telegram 上传在提交后由队列继续，
+//     它的字节进度从 /api/state 的队列快照里读，不是这里伪造
 //   - 取消时抛 UploadPaused，会话保留，调用方可带断点继续
 //   - 会话已失效（404）时自动从头重传一次，而不是让用户手点
 //   - 其它错误丢弃服务端会话，不留半份临时文件
@@ -417,8 +406,9 @@ export async function uploadFile(
   file: File,
   onProgress?: (ratio: number) => void,
   signal?: AbortSignal,
-  resume?: UploadResume
-): Promise<{ path: string }> {
+  resume?: UploadResume,
+  onSession?: (id: string) => void
+): Promise<{ path: string; job: number }> {
   const session = resume?.id
     ? { id: resume.id }
     : await request<{ id: string }>('/api/upload/init', {
@@ -426,6 +416,7 @@ export async function uploadFile(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vol: volume, dir, rel, name, size: file.size }),
       });
+  onSession?.(session.id);
   let offset = resume?.offset ?? 0;
   try {
     while (offset < file.size) {
@@ -434,12 +425,12 @@ export async function uploadFile(
       const bytes = await file.slice(offset, end).arrayBuffer();
       offset = await putChunk(session.id, offset, bytes, file.size, onProgress, signal);
     }
-    const done = await request<{ path: string }>(
+    const done = await request<{ path: string; job?: number }>(
       `/api/upload/commit?id=${encodeURIComponent(session.id)}`,
       { method: 'POST' }
     );
     onProgress?.(1);
-    return { path: done?.path ?? '' };
+    return { path: done?.path ?? '', job: done?.job ?? 0 };
   } catch (err) {
     if (err instanceof ApiError && err.status === 0 && err.message === 'aborted') {
       throw new UploadPaused(session.id, offset);
@@ -587,7 +578,30 @@ export function coverURL(volume: string, version?: string): string {
   return `/api/cover?${q.toString()}`;
 }
 
-// setCover 上传一张原图并写成频道头像（服务端裁方压缩）。
+// pickCoverNative 调安卓原生图片选择器：壳把 SAF 的 fd 交给 Go 读。
+//
+// 输入：卷名
+// 输出：true 表示服务端已接受新头像；用户取消返回 false
+// 预期：图片不复制到 cache，也不经过 JS 字节
+export function pickCoverNative(volume: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const w = window as unknown as {
+      wails?: { pickCover?: (vol: string) => void };
+      _mytgfsCoverPicked?: (ok: boolean) => void;
+    };
+    if (!w.wails?.pickCover) {
+      reject(new ApiError('native cover picker unavailable', 0));
+      return;
+    }
+    w._mytgfsCoverPicked = (ok) => {
+      delete w._mytgfsCoverPicked;
+      resolve(ok);
+    };
+    w.wails.pickCover(volume);
+  });
+}
+
+// setCover 上传一张原图并写成频道头像（服务端裁方压缩，仅桌面/网页端）。
 export async function setCover(volume: string, file: File): Promise<void> {
   const q = new URLSearchParams({ vol: volume });
   const res = await rawFetch(`/api/cover?${q.toString()}`, {
@@ -797,6 +811,8 @@ export function getIdentity(kind: 'bot' | 'user'): Promise<{ user: ApiIdentity }
 
 // uploadPoster 上传浏览器从视频里抽出的封面 JPEG。
 export async function uploadPoster(volume: string, path: string, poster: Blob): Promise<void> {
+  // 安卓不做帧提取：视频字节不在 JS 里，保留 Telegram 缩略图或占位图
+  if (isAndroid) return;
   const q = new URLSearchParams({ vol: volume, path });
   const res = await rawFetch(`/api/poster?${q.toString()}`, {
     method: 'POST',

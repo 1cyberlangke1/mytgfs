@@ -60,23 +60,34 @@ export const WindowCustomScrollbar: React.FC = () => {
     }, 1100);
   }, []);
 
+  // 滚动事件每帧都会来：用 rAF 合并成「每帧最多算一次」，
+  // 避免一次手势里多次 setState 引起的重复渲染
+  const rafRef = useRef<number | null>(null);
+  const scheduleMetrics = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      updateMetrics();
+    });
+  }, [updateMetrics]);
+
   useEffect(() => {
     updateMetrics();
 
     const handleScroll = () => {
-      updateMetrics();
+      scheduleMetrics();
       flashScrolling();
     };
 
     const handleResize = () => {
-      updateMetrics();
+      scheduleMetrics();
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     window.addEventListener('resize', handleResize, { passive: true });
 
     const resizeObserver = new ResizeObserver(() => {
-      updateMetrics();
+      scheduleMetrics();
     });
     resizeObserver.observe(document.documentElement);
     resizeObserver.observe(document.body);
@@ -85,9 +96,10 @@ export const WindowCustomScrollbar: React.FC = () => {
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     };
-  }, [updateMetrics, flashScrolling]);
+  }, [updateMetrics, flashScrolling, scheduleMetrics]);
 
   const handleThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();

@@ -11,11 +11,21 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { FileItem, Locale } from '../types';
-import { fileURL } from '../api';
+import { fileURL, thumbURL } from '../api';
 import { formatBytes, getItemFullPath } from '../utils/fsLogic';
 import { Translations, formatDateTime, formatNumber } from '../utils/i18n';
 import { Button, IOS_SPRING } from './ui';
 import { Modal } from './Modal';
+
+/**
+ * INLINE_PREVIEW_MAX_BYTES 是内联预览的体积上限。
+ *
+ * 桌面壳（Wails responsewriter_windows.go 用 bytes.Buffer，且明确不实现
+ * http.Flusher）与安卓壳（nativeServeAsset 返回整份 byte[]）的出口都只能
+ * 「整份交一次」，所以媒体一旦内联就必然整份进内存。超过这个值改成
+ * 「下载后用系统应用打开」，两个平台走同一条路，不再按平台分支。
+ */
+const INLINE_PREVIEW_MAX_BYTES = 32 << 20;
 
 interface FilePreviewModalProps {
   file: FileItem | null;
@@ -45,10 +55,14 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
 }) => {
   const [imgZoomed, setImgZoomed] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
+  // 图片先显示缩略图：原图动辄几 MB，而桌面壳与安卓 WebView 都会把整份响应
+  // 读进内存之后才交给页面，直接挂 previewUrl 等于每次预览都整份下载
+  const [showOriginal, setShowOriginal] = useState(false);
 
   useEffect(() => {
     setImgZoomed(false);
     setImgFailed(false);
+    setShowOriginal(false);
   }, [file?.id]);
 
   if (!file) return null;
@@ -69,6 +83,28 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
               const fullPath = getItemFullPath(allFiles, file);
               // 真实媒体流地址：服务端 /api/file 支持 Range，可直接喂给 video/audio/iframe
               const streamUrl = streamOverride ?? fileURL(file.volumeId, fullPath, true);
+              // 缩略图只在读远端文件时有意义：本地下载预览直接用 streamOverride
+              const thumbUrl = streamOverride ? '' : thumbURL(file.volumeId, fullPath);
+              const imgSrc = showOriginal || !thumbUrl ? file.previewUrl : thumbUrl;
+              // 安卓侧 /api/file 走桥整份读取：大媒体一旦内联预览就要整份进内存
+              // 再交给 WebView，所以超过阈值改成「下载后用系统应用打开」
+              // 桌面与安卓的响应出口都只能整份交付：超过阈值统一改走「下载后打开」
+              const inlineTooBig =
+                file.size > INLINE_PREVIEW_MAX_BYTES && !streamOverride && !file.isDir;
+              const tooBigCard = (
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 text-center">
+                  <HardDrive className="w-10 h-10 text-slate-500 mb-1" />
+                  <p dir="ltr" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {file.name}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t.preview.tooLargeToPreview}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                    <span dir="ltr">{formatBytes(file.size, 2, locale)}</span>
+                  </p>
+                </div>
+              );
 
               return (
                 <>
@@ -110,6 +146,20 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                             type="button"
                             variant="outline"
                             size="sm"
+                            onClick={() => {
+                              setImgFailed(false);
+                              setShowOriginal((v) => !v);
+                            }}
+                            aria-pressed={showOriginal}
+                          >
+                            {showOriginal ? t.preview.showThumbnail : t.preview.showOriginal}
+                          </Button>
+                        )}
+                        {file.category === 'image' && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
                             onClick={() => setImgZoomed((z) => !z)}
                           >
                             {imgZoomed ? (
@@ -127,10 +177,17 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                         <div className="relative flex-1 flex items-center justify-center rounded-lg overflow-hidden bg-slate-900/5 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 min-h-[260px]">
                           {file.previewUrl && !imgFailed ? (
                             <img
-                              src={file.previewUrl}
+                              src={imgSrc}
                               alt={file.name}
                               referrerPolicy="no-referrer"
-                              onError={() => setImgFailed(true)}
+                              onError={() => {
+                                // 缩略图缺失/失败时退回原图一次，而不是整块变占位
+                                if (!showOriginal && thumbUrl) {
+                                  setShowOriginal(true);
+                                  return;
+                                }
+                                setImgFailed(true);
+                              }}
                               className={`max-h-[360px] w-auto object-contain transition-transform duration-200 ${
                                 imgZoomed ? 'scale-125 cursor-zoom-out' : 'cursor-zoom-in'
                               }`}
@@ -146,13 +203,28 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                                 {t.preview.rawLosslessImage} ·{' '}
                                 <span dir="ltr">{formatBytes(file.size, 2, locale)}</span>
                               </p>
+                              {imgFailed && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="mt-3"
+                                  onClick={() => {
+                                    // 失败可能只是瞬时网络问题：先退回缩略图，
+                                    // 仍失败再由 onError 决定是否继续降级
+                                    setImgFailed(false);
+                                    setShowOriginal(false);
+                                  }}
+                                >
+                                  {t.errors.retry}
+                                </Button>
+                              )}
                             </div>
                           )}
                         </div>
                       )}
 
                       {/* AUDIO PREVIEW —— 直接播放服务端流，不做假进度 */}
-                      {file.category === 'audio' && (
+                      {file.category === 'audio' && (inlineTooBig ? tooBigCard : (
                         <div className="flex-1 flex flex-col justify-between gap-4 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5">
                           <div className="flex items-center gap-4">
                             <div className="w-14 h-14 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-600 dark:text-sky-400 shrink-0">
@@ -169,7 +241,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                           </div>
                           <audio
                             controls
-                            preload="metadata"
+                            preload="none"
                             src={streamUrl}
                             aria-label={t.files.detailPlay}
                             className="w-full"
@@ -177,14 +249,14 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                             {t.preview.noInlinePlayback}
                           </audio>
                         </div>
-                      )}
+                      ))}
 
                       {/* VIDEO PREVIEW —— 直接播放服务端流 */}
-                      {file.category === 'video' && (
+                      {file.category === 'video' && (inlineTooBig ? tooBigCard : (
                         <div className="flex-1 flex flex-col rounded-lg bg-slate-900 border border-slate-800 overflow-hidden">
                           <video
                             controls
-                            preload="metadata"
+                            preload="none"
                             playsInline
                             src={streamUrl}
                             aria-label={t.files.detailPlay}
@@ -193,10 +265,10 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                             {t.preview.noInlinePlayback}
                           </video>
                         </div>
-                      )}
+                      ))}
 
                       {/* PDF PREVIEW —— 浏览器内嵌查看器 */}
-                      {file.category === 'pdf' && (
+                      {file.category === 'pdf' && (inlineTooBig ? tooBigCard : (
                         <div className="flex-1 flex flex-col rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden min-h-[360px]">
                           <iframe
                             src={streamUrl}
@@ -204,7 +276,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                             className="w-full flex-1 min-h-[360px]"
                           />
                         </div>
-                      )}
+                      ))}
 
                       {/* ARCHIVE / OTHER DOCUMENT PREVIEW */}
                       {(file.category === 'archive' ||

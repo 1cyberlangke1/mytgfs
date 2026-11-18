@@ -100,6 +100,8 @@
     "transferCompleted": "Completed",
     "transferFailed": "Failed",
     "chunkedResumeTag": "Resumable",
+    "phaseLocal": "Sending",
+    "phaseRemote": "Uploading to Telegram",
     "pauseBtn": "Pause",
     "resumeBtn": "Resume",
     "retryBtn": "Retry",
@@ -115,7 +117,8 @@
       "mkdir": "New folder",
       "rename": "Rename/Move",
       "remove": "Delete",
-      "copy": "Copy"
+      "copy": "Copy",
+      "other": "Other"
     }
   },
   "files": {
@@ -187,6 +190,8 @@
     "uploadPlanRemoveAll": "Remove all",
     "uploadPlanRestoreAll": "Restore all",
     "uploadPlanConfirm": "Start upload",
+    "folderImportedToast": "Imported {n} files",
+    "folderImportFailed": "{n} files failed to import",
     "uploadPlanEmpty": "The list is empty. Use Restore all to bring the files back.",
     "uploadPlanRename": "Rename",
     "uploadPlanNameEmpty": "File name cannot be empty or . / ..",
@@ -250,12 +255,16 @@
     "nameRequired": "Name cannot be empty",
     "nameNoSeparator": "Name cannot contain / or \\",
     "nameExists": "A file or folder with this name already exists in the target folder",
+    "nameTooLong": "Name must be at most 255 bytes",
     "moveTargetTree": "Choose target folder",
     "movePreview": "Move to"
   },
   "preview": {
     "rawLosslessImage": "RAW / Lossless Image",
-    "noInlinePlayback": "This browser cannot play this file inline. Download it instead."
+    "noInlinePlayback": "This browser cannot play this file inline. Download it instead.",
+    "showOriginal": "View original",
+    "showThumbnail": "Show thumbnail",
+    "tooLargeToPreview": "This file is too large to preview inline; download it and open it with a system app."
   },
   "settings": {
     "title": "Settings",
@@ -417,6 +426,7 @@
     "state": "Cannot read volume status: {message}",
     "files": "Cannot read \"{volume}\": {message}",
     "settings": "Cannot read settings: {message}",
+    "downloads": "Cannot read the downloads folder: {message}",
     "retry": "Retry",
     "dismiss": "Dismiss"
   }

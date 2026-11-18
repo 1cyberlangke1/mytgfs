@@ -57,13 +57,15 @@ export interface TransferTask {
   createdAt: string;
   category?: FileCategory;
   // opKind 是服务端队列里的操作类型；前端本地上传任务固定为 upload
-  opKind?: 'upload' | 'download' | 'mkdir' | 'rename' | 'remove' | 'copy';
+  opKind?: 'upload' | 'download' | 'mkdir' | 'rename' | 'remove' | 'copy' | 'other';
   /** 同一次「上传文件/上传文件夹」的批次号，用于汇总整批进度 */
   batchId?: string;
   /** 服务端队列任务所属卷名；本地任务为空。取消接口需要它 */
   queueVolume?: string;
   /** 服务端队列任务号；本地任务为空 */
   queueJobId?: number;
+  /** 上传的两段进度：local=浏览器到服务端，remote=服务端到 Telegram */
+  phase?: 'local' | 'remote';
 }
 
 export interface AppSettingDef {

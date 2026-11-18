@@ -106,6 +106,12 @@ interface FilesViewProps {
   connectionStatus: ConnectionStatus;
   /** 统一入口：文件/文件夹/拖拽/剪贴板/新建文本都进同一份上传清单 */
   onUploadSources: (sources: UploadSource[], volumeId: string, parentId: string | null) => void;
+  /** 安卓：原生单选/多文件导入（fd 直读，字节不进 JS，不落 cache） */
+  onImportFiles?: (volumeId: string, dir: string) => void;
+  /** 安卓：按目录原生导入（fd 直读，字节不进 JS） */
+  onImportFolder?: (volumeId: string, dir: string) => void;
+  /** 上传入口是否走原生选择器；安卓为 true，桌面仍是浏览器 File 对象 */
+  canPickPaths?: boolean;
   /** 打开「新建文本」弹窗 */
   onNewTextFile: () => void;
   /** 读取系统剪贴板并上传（图片/文件）或预填文本 */
@@ -198,6 +204,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
   loading,
   connectionStatus,
   onUploadSources,
+  onImportFiles,
+  onImportFolder,
+  canPickPaths,
   onNewTextFile,
   onPasteClipboard,
   onNotifyError,
@@ -318,6 +327,19 @@ export const FilesView: React.FC<FilesViewProps> = ({
     [files, activeVolumeId, currentFolderId]
   );
 
+  // currentDirPath 是当前目录的卷内绝对路径：原生选择器上传时作为目标目录。
+  const currentDirPath = useMemo(() => {
+    if (!currentFolderId) return '/';
+    const item = files.find((f) => f.id === currentFolderId);
+    return item ? getItemFullPath(files, item) : '/';
+  }, [files, currentFolderId]);
+
+  // pickNative 走安卓原生选择器：壳用 SAF 打 fd，服务端按 fd 直接接管，
+  // 文件字节不进 JS，也不在应用 cache 留副本。
+  const pickNative = () => {
+    if (onImportFiles) onImportFiles(activeVolumeId, currentDirPath);
+  };
+
   // 搜索防抖：每次敲键都重排整个卷太浪费，200ms 静默后再过滤
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchTerm(searchQuery), 200);
@@ -348,6 +370,17 @@ export const FilesView: React.FC<FilesViewProps> = ({
     const start = (safePage - 1) * pageSize;
     return visibleItems.slice(start, start + pageSize);
   }, [visibleItems, safePage]);
+
+  // 目录大小按当前页的目录算一次并缓存：直接在渲染里逐行调用
+  // computeDirectoryStats 会变成 O(行数 × 全量条目)，大卷翻页会明显卡
+  const directorySizes = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const item of paginatedItems) {
+      if (!item.isDir) continue;
+      out.set(item.id, computeDirectoryStats(files, item.volumeId, item.id).totalBytes);
+    }
+    return out;
+  }, [paginatedItems, files]);
 
   const fileListSpringStyle = useInterruptibleViewSpring(
     `${activeVolumeId}-${currentFolderId ?? 'root'}-${viewMode}-${safePage}`
@@ -461,6 +494,10 @@ export const FilesView: React.FC<FilesViewProps> = ({
       return next;
     });
   };
+  // 部分选中时表头复选框要显示半选态，否则看不出「只选了一部分」
+  const allPageSelected =
+    paginatedItems.length > 0 && paginatedItems.every((item) => selectedIds.has(item.id));
+  const somePageSelected = paginatedItems.some((item) => selectedIds.has(item.id));
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -584,6 +621,15 @@ export const FilesView: React.FC<FilesViewProps> = ({
     e.preventDefault();
     const trimmed = newFolderName.trim();
     if (!trimmed) return;
+    // 与重命名同一套前端校验：分隔符、. / ..、超长都在发请求前拦住
+    if (/[\\/]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
+      onNotifyError(t.files.nameNoSeparator);
+      return;
+    }
+    if (new TextEncoder().encode(trimmed).length > 255) {
+      onNotifyError(t.files.nameTooLong);
+      return;
+    }
     onCreateFolder(activeVolumeId, currentFolderId, trimmed);
     setNewFolderName('');
     setShowNewFolderModal(false);
@@ -646,7 +692,9 @@ export const FilesView: React.FC<FilesViewProps> = ({
     <div
       className="space-y-4"
       onDragOver={(e) => {
-        e.preventDefault();
+        // 只对外部文件放行：站内拖拽由行的 handleFolderDragOver 处理，
+        // 无条件 preventDefault 会让非拖放区也显示可放置光标
+        if (e.dataTransfer.types.includes('Files')) e.preventDefault();
       }}
       onDrop={handleDrop}
     >
@@ -918,8 +966,14 @@ export const FilesView: React.FC<FilesViewProps> = ({
             <div className="flex items-center gap-1.5">
               <UploadMenu
                 t={t}
-                onPickFile={() => fileInputRef.current?.click()}
-                onPickFolder={() => dirInputRef.current?.click()}
+                onPickFile={() =>
+                  canPickPaths && onImportFiles ? pickNative() : fileInputRef.current?.click()
+                }
+                onPickFolder={() =>
+                  canPickPaths && onImportFolder
+                    ? onImportFolder(activeVolumeId, currentDirPath)
+                    : dirInputRef.current?.click()
+                }
                 onNewText={onNewTextFile}
                 onPasteClipboard={onPasteClipboard}
                 canPaste={canPaste}
@@ -1082,9 +1136,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
           >
             {paginatedItems.map((item) => {
               const isSelected = selectedIds.has(item.id);
-              const displaySize = item.isDir
-                ? computeDirectoryStats(files, item.volumeId, item.id).totalBytes
-                : item.size;
+              const displaySize = item.isDir ? (directorySizes.get(item.id) ?? 0) : item.size;
 
               return (
                 <div
@@ -1212,10 +1264,11 @@ export const FilesView: React.FC<FilesViewProps> = ({
                   <input
                     type="checkbox"
                     aria-label={t.a11y.selectAllPage}
-                    checked={
-                      paginatedItems.length > 0 &&
-                      paginatedItems.every((item) => selectedIds.has(item.id))
-                    }
+                    checked={allPageSelected}
+                    ref={(el) => {
+                      // 半选态只能走 DOM 属性，React 没有对应的受控 prop
+                      if (el) el.indeterminate = somePageSelected && !allPageSelected;
+                    }}
                     onChange={toggleSelectPage}
                     className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
@@ -1470,6 +1523,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
         onRebuildVolume={onRebuildVolume}
         rebuilding={rebuilding}
         setRebuilding={setRebuilding}
+        onNotifyError={onNotifyError}
       />
     </div>
   );

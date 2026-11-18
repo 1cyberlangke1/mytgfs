@@ -100,6 +100,8 @@
     "transferCompleted": "已完成",
     "transferFailed": "失败",
     "chunkedResumeTag": "分片续传",
+    "phaseLocal": "发送到服务端",
+    "phaseRemote": "上传到 Telegram",
     "pauseBtn": "暂停",
     "resumeBtn": "继续",
     "retryBtn": "重试",
@@ -115,7 +117,8 @@
       "mkdir": "新建目录",
       "rename": "改名/移动",
       "remove": "删除",
-      "copy": "复制"
+      "copy": "复制",
+      "other": "其它"
     }
   },
   "files": {
@@ -187,6 +190,8 @@
     "uploadPlanRemoveAll": "全部移除",
     "uploadPlanRestoreAll": "恢复全选",
     "uploadPlanConfirm": "开始上传",
+    "folderImportedToast": "已导入 {n} 个文件",
+    "folderImportFailed": "有 {n} 个文件导入失败",
     "uploadPlanEmpty": "列表里没有文件，点「恢复全选」可以放回来",
     "uploadPlanRename": "重命名",
     "uploadPlanNameEmpty": "文件名不能为空，也不能是 . 或 ..",
@@ -250,12 +255,16 @@
     "nameRequired": "名称不能为空",
     "nameNoSeparator": "名称不能包含 / 或 \\",
     "nameExists": "目标目录里已有同名文件或文件夹",
+    "nameTooLong": "名称最多 255 个字节",
     "moveTargetTree": "选择目标目录",
     "movePreview": "将移动到"
   },
   "preview": {
     "rawLosslessImage": "无损图像原片",
-    "noInlinePlayback": "当前浏览器不支持内嵌播放，请下载后查看。"
+    "noInlinePlayback": "当前浏览器不支持内嵌播放，请下载后查看。",
+    "showOriginal": "查看原图",
+    "showThumbnail": "显示缩略图",
+    "tooLargeToPreview": "文件较大，内嵌预览会整份占用内存，请下载后用系统应用打开。"
   },
   "settings": {
     "title": "设置",
@@ -417,6 +426,7 @@
     "state": "无法读取卷状态：{message}",
     "files": "无法读取「{volume}」的目录：{message}",
     "settings": "无法读取设置：{message}",
+    "downloads": "无法读取下载目录：{message}",
     "retry": "重试",
     "dismiss": "关闭"
   }

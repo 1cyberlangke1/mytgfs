@@ -16,9 +16,17 @@ interface CoverDialogProps {
   onSubmit: (file: File) => void;
   /** 提交频道标题；没有提供时隐藏该输入框 */
   onSubmitTitle?: (title: string) => void;
+  /** true 表示本平台的选图走系统选择器（安卓），弹窗内不显示文件 input */
+  nativePicker?: boolean;
+  /** 点图片区时触发；nativePicker 为 true 时由调用方打开系统选择器 */
+  onPickNative?: () => void;
 }
 
 // CoverDialog 是「设置频道头像与名字」的弹窗：改名字、选图、预览、保存。
+//
+// props.nativePicker 为 true 时（安卓）点图片区直接调系统选择器，
+// 由壳把 fd 交给服务端，字节不进 JS，也不在 cache 留副本；
+// 因此这一端没有本地预览，保存按钮只负责提交标题。
 export const CoverDialog: React.FC<CoverDialogProps> = ({
   open,
   volumeName,
@@ -28,6 +36,8 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
   onClose,
   onSubmit,
   onSubmitTitle,
+  nativePicker = false,
+  onPickNative,
 }) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [picked, setPicked] = useState<File | null>(null);
@@ -106,10 +116,10 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
         <div className="space-y-1.5">
           <button
             type="button"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => (nativePicker ? onPickNative?.() : inputRef.current?.click())}
             className="relative block w-full aspect-square max-h-64 rounded-lg overflow-hidden border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60"
           >
-            {preview ? (
+            {preview && !nativePicker ? (
               <img src={preview} alt="" className="w-full h-full object-cover" />
             ) : (
               <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400 dark:text-zinc-500">
@@ -118,17 +128,19 @@ export const CoverDialog: React.FC<CoverDialogProps> = ({
               </span>
             )}
           </button>
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              if (f) setPicked(f);
-              e.target.value = '';
-            }}
-          />
+          {!nativePicker && (
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                if (f) setPicked(f);
+                e.target.value = '';
+              }}
+            />
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 pt-2">

@@ -37,6 +37,16 @@ export const platformCaps = {
   autostart: !isAndroid,
   /** 键盘快捷键：触摸设备没有硬件键盘 */
   shortcuts: !isAndroid,
+  /**
+   * 上传/头像走「原生系统选择器 + fd 直读」。
+   *
+   * 安卓的 JS↔Java 桥只能传字符串，走文件字节就得 base64；桌面端用的是
+   * 浏览器 File 对象 + fetch（二进制直传，没有编码问题），所以只有安卓开启。
+   * 安卓这条链不复制到应用 cache：选择器给的 SAF 文件打开成 fd，直接交给服务端。
+   */
+  pickPaths: isAndroid,
+  /** 频道头像用原生图片选择器（fd 直读，不复制到 cache） */
+  coverPicker: isAndroid,
 } as const;
 
 // WailsJsBridge 是安卓宿主注入的 JavascriptInterface（window.wails）。
@@ -48,7 +58,7 @@ interface WailsJsBridge {
 // openNativeFile 让系统用默认应用打开沙盒里的文件。
 //
 // 输入：绝对路径（服务端返回的下载落盘路径）
-// 输出：Promise；桥不可用或调用抛错时 reject
+// 输出：无；桥不可用或调用抛错时同步抛异常
 // 预期：安卓走 FileProvider + ACTION_VIEW，桌面端不该调用本函数
 export function openNativeFile(path: string): void {
   const bridge = (window as unknown as { wails?: WailsJsBridge }).wails;

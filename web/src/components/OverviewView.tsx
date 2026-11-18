@@ -52,6 +52,8 @@ interface OverviewViewProps {
   onSetCover?: (volumeId: string, file: File) => Promise<void>;
   /** 改频道名字；没有提供时弹窗隐藏名字输入框 */
   onSetTitle?: (volumeId: string, title: string) => Promise<void>;
+  /** 安卓：点封面走系统图片选择器（fd 直读，不复制到 cache） */
+  onPickCoverNative?: (volumeId: string) => Promise<void>;
 }
 
 
@@ -81,6 +83,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onClearCompletedTransfers,
   onSetCover,
   onSetTitle,
+  onPickCoverNative,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [coverTarget, setCoverTarget] = useState<VolumeInfo | null>(null);
@@ -415,6 +418,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   <motion.div
                     key={task.id}
                     layout
+                    data-queue-state={task.state}
+                    data-queue-kind={opKind}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, height: 0 }}
@@ -443,6 +448,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           {kindLabel && (
                             <span className="px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[10px] font-sans font-medium text-zinc-600 dark:text-zinc-300">
                               {kindLabel}
+                            </span>
+                          )}
+                          {task.direction === 'upload' && task.phase && (
+                            <span className="px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[10px] font-sans font-medium text-zinc-600 dark:text-zinc-300">
+                              {task.phase === 'local'
+                                ? t.overview.phaseLocal
+                                : t.overview.phaseRemote}
                             </span>
                           )}
                           <span
@@ -575,6 +587,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                               variant="ghost"
                               size="icon"
                               onClick={() => onCancelQueueJob(task)}
+                              data-testid="queue-cancel"
                               aria-label={`${t.overview.cancelBtn} ${task.fileName}`}
                               className="text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                             >
@@ -610,6 +623,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         busy={coverBusy}
         onClose={() => {
           if (!coverBusy) setCoverTarget(null);
+        }}
+        nativePicker={!!onPickCoverNative}
+        onPickNative={async () => {
+          if (!coverTarget || !onPickCoverNative) return;
+          setCoverBusy(true);
+          try {
+            await onPickCoverNative(coverTarget.id);
+            setCoverTarget(null);
+          } finally {
+            setCoverBusy(false);
+          }
         }}
         onSubmitTitle={async (title) => {
           if (!coverTarget || !onSetTitle) return;

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -275,5 +274,3 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
   )
 );
 Select.displayName = 'Select';
-
-export { DialogPrimitive };

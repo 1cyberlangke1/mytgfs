@@ -3,6 +3,8 @@ import { FileCategory } from '../types';
 
 // 已知加载失败的缩略图地址集合：列表滚动时避免对同一 404 地址反复发请求。
 const failedThumbUrls = new Set<string>();
+// maxFailedThumbs 限制失败集合大小：长会话浏览大量坏图时不无限增长。
+const maxFailedThumbs = 500;
 
 /**
  * FileThumb 优先显示服务端缩略图，加载失败自动回退成文件类型图标。
@@ -39,6 +41,7 @@ export const FileThumb: React.FC<{
       loading="lazy"
       decoding="async"
       onError={() => {
+        if (failedThumbUrls.size >= maxFailedThumbs) failedThumbUrls.clear();
         failedThumbUrls.add(thumbnailUrl);
         setFailed(true);
       }}

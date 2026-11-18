@@ -22,7 +22,12 @@ import { initPushRuntime } from './events';
 // 预期：网页版 initPushRuntime 直接返回，App 用 SSE
 async function boot() {
   await initPushRuntime();
-  createRoot(document.getElementById('root')!).render(<App />);
+  const root = document.getElementById('root');
+  if (!root) {
+    // 模板缺 #root 时给出可读原因，而不是 createRoot(null) 的 TypeError 白屏
+    throw new Error('index.html is missing the #root element');
+  }
+  createRoot(root).render(<App />);
 }
 
 void boot();

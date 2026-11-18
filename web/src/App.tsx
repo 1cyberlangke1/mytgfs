@@ -78,9 +78,12 @@ import {
   saveSettings,
   rebuildVolume,
   setCover,
+  pickCoverNative,
   setVolumeTitle,
   uploadFile,
   uploadPoster,
+  importFileNative,
+  importFolderNative,
 } from './api';
 import { AccountCard } from './components/AccountCard';
 import { TextFileDialog } from './components/TextFileDialog';
@@ -243,7 +246,19 @@ function transferFromServer(t: ApiTransfer, index: number): TransferTask {
 // 预期：已完成的活儿必须显示「已完成」，不能一律当成排队中
 function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
   const volumeId = q.volume || '';
-  const kind = (q.kind || 'upload') as TransferTask['opKind'];
+  // 服务端 kind 有 upload/mkdir/rename/remove/copy；只有 upload/download 算传输，
+  // 其余按原样标记，别一律画成上传并显示 0 字节
+  const rawKind = q.kind || 'upload';
+  const opKind: TransferTask['opKind'] =
+    rawKind === 'upload' || rawKind === 'copy' || rawKind === 'download'
+      ? rawKind
+      : rawKind === 'mkdir'
+      ? 'mkdir'
+      : rawKind === 'rename'
+      ? 'rename'
+      : rawKind === 'remove'
+      ? 'remove'
+      : 'other';
   const state: TransferTask['state'] =
     q.state === 'done'
       ? 'completed'
@@ -259,11 +274,12 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     fileName: q.name.split('/').pop() || q.name,
     volumeId,
     targetParentId: null,
-    direction: kind === 'download' ? 'download' : 'upload',
+    direction: opKind === 'download' ? 'download' : 'upload',
     size: q.size ?? 0,
     transferredBytes: q.done ?? 0,
     state,
     speedBps: 0,
+    phase: 'remote',
     isChunkedResume: false,
     chunkSize: 0,
     currentChunk: 0,
@@ -271,7 +287,7 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
     createdAt: new Date().toISOString(),
     category: inferFileCategory(q.name, false),
     errorMessage: q.error,
-    opKind: kind,
+    opKind,
     // 取消接口需要卷名与任务号，队列任务才带
     queueVolume: q.volume,
     queueJobId: q.id,
@@ -279,14 +295,16 @@ function queueFromServer(q: ApiQueueItem, index: number): TransferTask {
 }
 
 export default function App() {
-  const globalUploadRef = useRef<HTMLInputElement | null>(null);
-
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     const tab = urlParam('tab');
-    if (tab === 'overview' || tab === 'files' || tab === 'settings' || tab === 'downloads') {
+    if (tab === 'overview' || tab === 'files' || tab === 'settings' || (tab === 'downloads' && platformCaps.downloads)) {
       return tab;
     }
-    return loadFromStorage<NavTab>(STORAGE_KEYS.tab, 'overview');
+    // localStorage 里可能残留旧版本/手改的非法值：只接受白名单，否则白屏
+    const saved = loadFromStorage<NavTab | null>(STORAGE_KEYS.tab, null);
+    if (saved === 'overview' || saved === 'files' || saved === 'settings') return saved;
+    if (saved === 'downloads' && platformCaps.downloads) return saved;
+    return 'overview';
   });
   const [locale, setLocale] = useState<Locale>(() => {
     const saved = loadFromStorage<Locale | null>(STORAGE_KEYS.locale, null);
@@ -554,6 +572,8 @@ export default function App() {
         name: string;
         task: TransferTask;
         resume?: UploadResume;
+        // sessionId 是服务端分片会话：取消时用它丢弃临时文件与断点
+        sessionId?: string;
       }
     >()
   );
@@ -578,36 +598,33 @@ export default function App() {
   // 合并上传中、下载中与服务端队列任务。
   //
   // 输入：浏览器侧上传任务、服务端下载进度、服务端队列快照
-  // 输出：一行的上传任务优先取服务端队列的真实字节数（浏览器→面板那一段是 localhost，
-  //       秒到，真正耗时在队列里的 Telegram 上传）
-  // 预期：同一个文件只出现一行；队列里没有对应行的任务照旧显示
+  // 输出：一行一个任务。本地上传任务在提交后带上服务端队列任务号，
+  //       此后整行改用队列给出的真实字节数（Telegram 上传那一段）
+  // 预期：
+  //   - 只按任务号合并：按文件名合并会把「已发送到服务端」与
+  //     「已上传到 Telegram」两个不同阶段的数字混在一起
+  //   - 队列里没有对应行的本地任务照旧显示自己的进度
   const transfers = useMemo(() => {
-    const byKey = new Map<string, TransferTask>();
-    for (const q of serverQueue) byKey.set(`${q.volumeId}:${q.fileName}`, q);
-    const merged = uploadTasks.map((t) => {
-      const key = `${t.volumeId}:${t.fileName}`;
-      const q = byKey.get(key);
-      if (!q) return t;
-      byKey.delete(key);
-      const size = q.size > 0 ? q.size : t.size;
-      const done = q.state === 'completed' ? size : Math.max(t.transferredBytes, q.transferredBytes);
-      const state: TransferTask['state'] =
-        q.state === 'failed'
-          ? 'failed'
-          : q.state === 'completed'
-            ? 'completed'
-            : t.state === 'completed' || t.state === 'failed'
-              ? 'queued'
-              : t.state;
-      return {
-        ...t,
-        size,
-        transferredBytes: done,
-        state,
-        errorMessage: q.errorMessage ?? t.errorMessage,
-      };
-    });
-    return [...merged, ...serverTransfers, ...byKey.values()];
+    const byJob = new Map<number, TransferTask>();
+    for (const q of serverQueue) {
+      if (typeof q.queueJobId === 'number') byJob.set(q.queueJobId, q);
+    }
+    const merged: TransferTask[] = [];
+    for (const t of uploadTasks) {
+      const jobId = t.queueJobId;
+      if (typeof jobId !== 'number') {
+        merged.push(t);
+        continue;
+      }
+      const q = byJob.get(jobId);
+      if (!q) {
+        merged.push(t);
+        continue;
+      }
+      byJob.delete(jobId);
+      merged.push(q);
+    }
+    return [...merged, ...serverTransfers, ...byJob.values()];
   }, [uploadTasks, serverTransfers, serverQueue]);
 
   const cycleNextLocale = () => {
@@ -688,8 +705,10 @@ export default function App() {
   // sampleDownloads 把服务端进度转成任务，并按两次采样的字节差算真实速率
   const sampleDownloads = useCallback((items: ApiTransfer[]): TransferTask[] => {
     const now = performance.now();
-    return items.map((t, i) => {
+    const seen = new Set<string>();
+    const out = items.map((t, i) => {
       const task = transferFromServer(t, i);
+      seen.add(task.id);
       const prev = downloadSpeed.current.get(task.id);
       if (prev && now > prev.at && task.transferredBytes >= prev.bytes) {
         task.speedBps = ((task.transferredBytes - prev.bytes) * 1000) / (now - prev.at);
@@ -697,6 +716,11 @@ export default function App() {
       downloadSpeed.current.set(task.id, { bytes: task.transferredBytes, at: now });
       return task;
     });
+    // 任务结束后采样表跟着收缩，长时间运行不会随历史任务无限增长
+    for (const id of downloadSpeed.current.keys()) {
+      if (!seen.has(id)) downloadSpeed.current.delete(id);
+    }
+    return out;
   }, []);
 
   // reloadState 只刷新卷摘要与传输进度（轻量，事件驱动）
@@ -839,7 +863,7 @@ export default function App() {
     } catch (err) {
       setProblem(
         'downloads',
-        interpolate(tRef.current.errors.settings, { message: errText(err) }, localeRef.current)
+        interpolate(tRef.current.errors.downloads, { message: errText(err) }, localeRef.current)
       );
     }
   }, [setProblem, clearProblem]);
@@ -919,6 +943,8 @@ export default function App() {
     };
     // 连接从「连接中/重连中」跳到「已连接」时立即补拉：断线期间错过的变化不再等推送
     onConnectedRef.current = () => {
+      // 断线期间可能错过取消/完成等队列变更，快照也要补拉
+      scheduleState();
       scheduleFiles();
       scheduleDownloads();
     };
@@ -986,7 +1012,11 @@ export default function App() {
   //       不需要刷新页面；偏好本身写进 localStorage 供下次启动复用
   useEffect(() => {
     const root = document.documentElement;
-    window.localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(theme));
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(theme));
+    } catch {
+      // 隐私模式/禁用存储：偏好无法持久化，但界面照常切换
+    }
     if (theme !== 'system') {
       root.classList.toggle('dark', theme === 'dark');
       return;
@@ -1055,9 +1085,10 @@ export default function App() {
   ) => {
     const ctl = new AbortController();
     uploadAbort.current.set(task.id, ctl);
-    const resume = uploadInputs.current.get(task.id)?.resume;
+    const input = uploadInputs.current.get(task.id);
+    const resume = input?.resume;
     setUploadTasks((prev) =>
-      prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'transferring' } : tr))
+      prev.map((tr) => (tr.id === task.id ? { ...tr, state: 'transferring', phase: 'local' } : tr))
     );
     try {
       const res = await uploadFile(
@@ -1087,9 +1118,31 @@ export default function App() {
           );
         },
         ctl.signal,
-        resume
+        resume,
+        (id) => {
+          // 记住分片会话：取消/离开页面时据此丢弃服务端临时文件
+          const cur = uploadInputs.current.get(task.id);
+          if (cur) cur.sessionId = id;
+        }
       );
-      // 视频补一张封面，失败不影响上传结果
+      // commit 只等到任务落库：Telegram 上传在队列里继续跑，
+      // 这条本地任务交出任务号后由队列快照接管真实字节进度
+      setUploadTasks((prev) =>
+        prev.map((tr) =>
+          tr.id === task.id
+            ? {
+                ...tr,
+                state: res.job > 0 ? 'queued' : 'completed',
+                phase: res.job > 0 ? 'remote' : 'local',
+                queueJobId: res.job > 0 ? res.job : undefined,
+                transferredBytes: res.job > 0 ? 0 : tr.size,
+                speedBps: 0,
+              }
+            : tr
+        )
+      );
+      // 视频补一张封面放在「完成」之后：生成封面要解码+定位，
+      // 放在前面会让界面停在 100% 却仍显示上传中
       if (file.type.startsWith('video/')) {
         try {
           const poster = await makeVideoPoster(file);
@@ -1098,18 +1151,11 @@ export default function App() {
           // 浏览器不支持解码该视频时保持 Telegram 缩略图或占位图
         }
       }
-      setUploadTasks((prev) =>
-        prev.map((tr) =>
-          tr.id === task.id
-            ? { ...tr, state: 'completed', transferredBytes: tr.size, speedBps: 0 }
-            : tr
-        )
-      );
       uploadAbort.current.delete(task.id);
       // 传完就不再需要 File 与速率采样：留着会把整份文件钉在内存里
       uploadInputs.current.delete(task.id);
       uploadSpeed.current.delete(task.id);
-      await reloadFiles();
+      await reloadFiles([volumeId]);
       await reloadState();
     } catch (err) {
       // 暂停时保留服务端会话与已传字节，继续时从断点续传
@@ -1234,6 +1280,57 @@ export default function App() {
     uploadQueue.current.push(...plan.map((task) => task.id));
     pumpUploads();
   };
+
+  // handleImportFolder 触发安卓原生目录导入（fd 直读）。
+  //
+  // 输入：volumeId 目标卷；dir 卷内目标目录
+  // 输出：无（完成或失败都提示并刷新列表）
+  // 预期：桌面端不会走到这里；文件字节全程不进 JS
+  // runNativeImport 统一处理安卓原生导入结果：提示数量并刷新该卷。
+  //
+  // 输入：run 发起一次原生选择并返回 {uploaded,failed}；volumeId 目标卷
+  // 输出：无
+  // 预期：取消选择（0,0）不弹任何提示；异常转成 toast
+  const runNativeImport = async (
+    run: () => Promise<{ uploaded: number; failed: number }>,
+    volumeId: string,
+    successKey: string,
+    failKey: string
+  ) => {
+    try {
+      const res = await run();
+      if (res.uploaded > 0) {
+        pushToast(interpolate(successKey, { n: String(res.uploaded) }, locale), 'success');
+        void reloadFiles([volumeId]);
+      }
+      if (res.failed > 0) {
+        pushToast(interpolate(failKey, { n: String(res.failed) }, locale), 'error');
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
+
+  const handleImportFolder = (volumeId: string, dir: string) =>
+    runNativeImport(
+      () => importFolderNative(volumeId, dir),
+      volumeId,
+      t.files.folderImportedToast,
+      t.files.folderImportFailed
+    );
+
+  // handleImportFiles 触发安卓原生单文件导入（fd 直读）。
+  //
+  // 输入：volumeId 目标卷；dir 卷内目标目录
+  // 输出：无（完成或失败都提示并刷新列表）
+  // 预期：桌面端不会走到这里；文件字节全程不进 JS，也不在 cache 留副本
+  const handleImportFiles = (volumeId: string, dir: string) =>
+    runNativeImport(
+      () => importFileNative(volumeId, dir),
+      volumeId,
+      t.files.folderImportedToast,
+      t.files.folderImportFailed
+    );
 
   // handleConfirmUpload 确认清单：先查同名，再决定直接传还是先问处理方式。
   //
@@ -1380,6 +1477,9 @@ export default function App() {
   const handleCancelTransfer = (taskId: string) => {
     uploadAbort.current.get(taskId)?.abort();
     uploadAbort.current.delete(taskId);
+    // 会话已建立的要让服务端丢掉分片会话与临时字节，否则只在磁盘里烂着
+    const input = uploadInputs.current.get(taskId);
+    if (input?.sessionId) void discardUpload(input.sessionId);
     uploadInputs.current.delete(taskId);
     uploadQueue.current = uploadQueue.current.filter((id) => id !== taskId);
     setUploadTasks((prev) => prev.filter((tr) => tr.id !== taskId));
@@ -1449,28 +1549,50 @@ export default function App() {
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
+  // groupByVolume 按条目所属卷分组，避免批量操作只认第一条的卷。
+  //
+  // 输入：itemIds 选中条目
+  // 输出：volumeId -> id[]；找不到的条目被跳过
+  // 预期：当前 UI 不支持跨卷多选，但切卷后残留的 selection 也不会把
+  //       A 卷的 id 发到 B 卷去执行
+  const groupByVolume = (itemIds: string[]): Map<string, string[]> => {
+    const byVol = new Map<string, string[]>();
+    for (const id of itemIds) {
+      const vol = files.find((f) => f.id === id)?.volumeId;
+      if (!vol) continue;
+      const list = byVol.get(vol);
+      if (list) list.push(id);
+      else byVol.set(vol, [id]);
+    }
+    return byVol;
+  };
+
   const handleBatchMoveItems = (itemIds: string[], targetParentId: string | null) => {
-    const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
-    if (!vol || itemIds.length === 0) {
+    const byVol = groupByVolume(itemIds);
+    if (byVol.size === 0) {
       void reloadFiles();
       pushToast(t.files.itemMissingToast, 'error');
       return;
     }
-    moveItems(vol, itemIds, targetParentId || '/')
-      .then(() => reloadFiles([vol]))
+    const jobs = Array.from(byVol.entries()).map(([vol, ids]) =>
+      moveItems(vol, ids, targetParentId || '/')
+    );
+    Promise.all(jobs)
+      .then(() => reloadFiles([...byVol.keys()]))
       .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
 
   const handleDeleteItems = (itemIds: string[]) => {
-    const vol = files.find((f) => f.id === itemIds[0])?.volumeId;
-    if (!vol || itemIds.length === 0) {
+    const byVol = groupByVolume(itemIds);
+    if (byVol.size === 0) {
       void reloadFiles();
       pushToast(t.files.itemMissingToast, 'error');
       return;
     }
-    removeItems(vol, itemIds)
-      .then(() => reloadFiles([vol]))
+    const jobs = Array.from(byVol.entries()).map(([vol, ids]) => removeItems(vol, ids));
+    Promise.all(jobs)
+      .then(() => reloadFiles([...byVol.keys()]))
       .then(() => pushToast(t.files.deletedToast, 'success'))
       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
   };
@@ -1660,6 +1782,23 @@ export default function App() {
     }
   };
 
+  // handlePickCoverNative 走安卓原生图片选择器：壳把 SAF 的 fd 交给服务端，
+  // 图片字节不进 JS，也不在应用 cache 留副本。
+  //
+  // 输入：volume 卷名
+  // 输出：无（错误转 toast，不向弹窗抛）
+  // 预期：选图并上传成功后才关闭弹窗；取消时弹窗保持打开
+  const handlePickCoverNative = async (volume: string): Promise<void> => {
+    try {
+      const ok = await pickCoverNative(volume);
+      if (!ok) return;
+      await reloadState();
+      pushToast(t.volume.coverSaved, 'success');
+    } catch (err) {
+      pushToast(errText(err), 'error');
+    }
+  };
+
   // handleSetVolumeTitle 改频道标题；成功后重取状态刷新面板显示名
   //
   // 输入：volume 卷名；title 新频道名
@@ -1745,25 +1884,6 @@ export default function App() {
       >
         {t.header.skipToContent}
       </a>
-      {/* Global Hidden File Input for Quick Upload */}
-      <input
-        ref={globalUploadRef}
-        type="file"
-        multiple
-        onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) {
-            const targetVol = volumes.find((v) => v.id === activeVolumeId)?.id || volumes[0]?.id || '';
-            if (!targetVol) {
-              e.target.value = '';
-              return;
-            }
-            handleUploadFiles(e.target.files, targetVol, currentFolderId);
-            e.target.value = '';
-          }
-        }}
-        className="hidden"
-        aria-label={t.header.quickUpload}
-      />
 
       <PhoneTopBar
         t={t}
@@ -1793,7 +1913,7 @@ export default function App() {
           sidebarCollapsed={sidebarCollapsed}
           setSidebarCollapsed={setSidebarCollapsed}
           summary={summary}
-          downloadsCount={downloads.length}
+          downloadsCount={downloads.length + downloadTasks.length}
           activeVolumeId={activeVolumeId}
           selectVolume={selectVolume}
           setCurrentFolderId={setCurrentFolderId}
@@ -1812,7 +1932,7 @@ export default function App() {
         <main
           id="main"
           tabIndex={-1}
-          className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full overflow-x-hidden outline-none"
+          className="flex-1 min-w-0 px-3.5 sm:px-6 lg:px-8 pt-4 sm:pt-7 pb-24 md:pb-8 max-w-5xl mx-auto w-full outline-none"
         >
           <ProblemBanner
             messages={problemList}
@@ -1852,6 +1972,9 @@ export default function App() {
                 onClearCompletedTransfers={handleClearCompletedTransfers}
                 onSetCover={caps.cover ? handleSetCover : undefined}
               onSetTitle={caps.cover ? handleSetVolumeTitle : undefined}
+              onPickCoverNative={
+                caps.cover && platformCaps.coverPicker ? handlePickCoverNative : undefined
+              }
               />
             )}
 
@@ -1871,6 +1994,9 @@ export default function App() {
                 loading={filesLoading}
                 connectionStatus={connectionStatus}
                 onUploadSources={handleUploadSources}
+                onImportFiles={(volumeId, dir) => void handleImportFiles(volumeId, dir)}
+                onImportFolder={(volumeId, dir) => void handleImportFolder(volumeId, dir)}
+                canPickPaths={platformCaps.pickPaths}
                 onNewTextFile={() => setTextDraft({ initial: '' })}
                 onPasteClipboard={() => void handleClipboardUpload()}
                 onNotifyError={(msg) => pushToast(msg, 'error')}
@@ -1942,7 +2068,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         totalFiles={summary.totalFiles}
-        downloadsCount={downloads.length}
+        downloadsCount={downloads.length + downloadTasks.length}
       />
 
 

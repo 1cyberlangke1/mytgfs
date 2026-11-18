@@ -83,6 +83,8 @@ interface FilesDialogsProps {
   onRebuildVolume?: (volumeId: string) => void | Promise<void>;
   rebuilding: boolean;
   setRebuilding: (busy: boolean) => void;
+  /** onNotifyError 把失败原因交给页面弹 toast；弹窗本身保持打开 */
+  onNotifyError: (msg: string) => void;
 }
 
 // FilesDialogs 集中渲染文件页的八个弹窗。
@@ -148,6 +150,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
   onRebuildVolume,
   rebuilding,
   setRebuilding,
+  onNotifyError,
 }) => (
   <>
     {showNewFolderModal && (
@@ -701,6 +704,9 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
                 try {
                   await onRebuildVolume(activeVolumeId);
                   setShowRebuildConfirm(false);
+                } catch (err) {
+                  // 失败时保留弹窗，让用户看得见是哪一步出错
+                  onNotifyError(err instanceof Error ? err.message : String(err));
                 } finally {
                   setRebuilding(false);
                 }

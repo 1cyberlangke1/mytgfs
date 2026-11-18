@@ -389,7 +389,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="flex items-center gap-2">
               <Switch
                 checked={autoOn === true}
-                disabled={autoOn === null || autoBusy}
+                disabled={autoBusy}
                 onCheckedChange={toggleAutostart}
                 aria-label={t.settings.autostartLabel}
               />

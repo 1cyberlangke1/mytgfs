@@ -207,6 +207,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 <motion.button
                   key={volume.id}
                   type="button"
+                  data-volume-id={volume.id}
                   whileTap={{ scale: 0.93 }}
                   whileHover={{ scale: 1.015 }}
                   transition={IOS_BOUNCE_SPRING}

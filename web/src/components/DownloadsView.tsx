@@ -76,7 +76,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
             <RefreshCw className="w-3.5 h-3.5" />
             <span>{t.downloads.refreshBtn}</span>
           </Button>
-          <Button type="button" variant="accent" onClick={onDirAction}>
+          <Button type="button" variant="accent" onClick={onDirAction} data-testid="downloads-dir-action" data-dir-action={dirAction}>
             {dirAction === 'export' ? (
               <FolderDown className="w-3.5 h-3.5" />
             ) : (
@@ -214,6 +214,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
               return (
                 <li
                   key={f.name}
+                  data-download-name={f.name}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900/40 transition-colors"
                 >
                   <RichFileTypeEmblem category={inferFileCategory(f.name, false)} size="sm" />
