@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/natefinch/atomic"
 
+	"mytgfs/internal/i18n"
 	"mytgfs/internal/telegramstore"
 )
 
@@ -63,7 +65,7 @@ func Sweep(dir string, maxAge time.Duration) int {
 //
 // 输入：key 断点键
 // 输出：断点；文件不存在时返回 (nil, nil)
-// 预期：内容损坏时返回 (nil, nil)，当作没有断点重传，不阻塞上传
+// 预期：内容损坏时记一条日志后返回 (nil, nil)，当作没有断点重传，不阻塞上传
 func (s *Store) Load(key string) (*telegramstore.UploadResume, error) {
 	b, err := os.ReadFile(s.path(key))
 	if err != nil {
@@ -74,6 +76,9 @@ func (s *Store) Load(key string) (*telegramstore.UploadResume, error) {
 	}
 	var r telegramstore.UploadResume
 	if err := json.Unmarshal(b, &r); err != nil {
+		// 断点只是提速用的旁路数据：坏掉就重传，但必须让人能从日志看出
+		// 「为什么这次没续传」，不能静默当作从来没有断点
+		slog.Warn(i18n.T("log.upload_cache_bad", s.path(key)), "err", err)
 		return nil, nil
 	}
 	return &r, nil

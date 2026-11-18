@@ -1,6 +1,7 @@
 package telegramstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -8,17 +9,19 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+// TestUploadRejectsTooLarge 超限在上传生产路径上就直接拒绝。
 func TestUploadRejectsTooLarge(t *testing.T) {
 	s := New(nil, 1)
-	_, err := s.Upload(context.Background(), nil, MaxFileSize+1, "x", "application/octet-stream", "")
+	_, err := s.UploadResumable(context.Background(), bytes.NewReader(nil), MaxFileSize+1, "", "x", "application/octet-stream", "")
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 }
 
+// TestUploadRejectsNegative 负数大小同样拒绝。
 func TestUploadRejectsNegative(t *testing.T) {
 	s := New(nil, 1)
-	_, err := s.Upload(context.Background(), nil, -1, "x", "application/octet-stream", "")
+	_, err := s.UploadResumable(context.Background(), bytes.NewReader(nil), -1, "", "x", "application/octet-stream", "")
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}

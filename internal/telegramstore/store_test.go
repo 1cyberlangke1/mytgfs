@@ -2,13 +2,13 @@ package telegramstore
 
 // Telegram 层单测：用假 API 代替真实网络，不挂载、不连 Telegram。
 //
-// 覆盖：上传（短/超长 caption、超限）、改名、删除、频道解析缓存、分块下载对齐。
+// 覆盖：超限拒绝、频道解析缓存、分块下载对齐。
+// 上传链的测试在 resume_test/upload_adopt 等文件里，走的是生产路径 UploadResumable。
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
@@ -252,84 +252,6 @@ func newTestStore(api API) *Store {
 	s := New(api, 42)
 	s.SetInterval(0)
 	return s
-}
-
-// TestUploadShortCaption 短 caption 直接随文件发送，Part 字段来自回显 document。
-func TestUploadShortCaption(t *testing.T) {
-	api := newFakeAPI()
-	api.uploadSize = 5
-	s := newTestStore(api)
-	ctx := context.Background()
-
-	part, err := s.Upload(ctx, bytes.NewReader([]byte("hello")), 5, "a.txt", "text/plain", `{"path":"/a.txt"}`)
-	if err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-	if len(api.sendMessage) != 0 {
-		t.Fatalf("短 caption 不应发额外消息，实际 %d 条", len(api.sendMessage))
-	}
-	if len(api.sendMedia) != 1 {
-		t.Fatalf("应发 1 条媒体消息，实际 %d", len(api.sendMedia))
-	}
-	if got := api.sendMedia[0].Message; got != `{"path":"/a.txt"}` {
-		t.Fatalf("caption 错误: %q", got)
-	}
-	if part.MessageID == 0 || part.DocumentID == 0 || part.Size != 5 {
-		t.Fatalf("Part 字段不完整: %+v", part)
-	}
-}
-
-// TestUploadTooLarge 超过单文件上限直接拒绝，不调用任何 RPC。
-func TestUploadTooLarge(t *testing.T) {
-	api := newFakeAPI()
-	s := newTestStore(api)
-
-	_, err := s.Upload(context.Background(), strings.NewReader("x"), MaxFileSize+1, "big.bin", "application/octet-stream", "c")
-	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("应返回 ErrTooLarge，实际 %v", err)
-	}
-	if len(api.sendMedia) != 0 || len(api.sendMessage) != 0 {
-		t.Fatal("超限不应调用发消息接口")
-	}
-}
-
-// TestUploadCaptionInline 节点 caption 直接写进文件消息，不额外发元信息消息。
-func TestUploadCaptionInline(t *testing.T) {
-	api := newFakeAPI()
-	api.uploadSize = 3
-	s := newTestStore(api)
-	body := `{"v":2,"t":"f","n":"a.txt","p":0,"s":"abc"}`
-
-	_, err := s.Upload(context.Background(), bytes.NewReader([]byte("abc")), 3, "a.txt", "text/plain", body)
-	if err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-	if len(api.sendMessage) != 0 {
-		t.Fatalf("不该发元信息消息，实际 %+v", api.sendMessage)
-	}
-	if len(api.sendMedia) != 1 || api.sendMedia[0].Message != body {
-		t.Fatalf("caption 应原样写入，实际 %+v", api.sendMedia)
-	}
-}
-
-// TestRename 改名只修改 caption，并带上正确的 peer 与消息号。
-func TestRename(t *testing.T) {
-	api := newFakeAPI()
-	s := newTestStore(api)
-
-	if err := s.Rename(context.Background(), 55, `{"path":"/b.txt"}`); err != nil {
-		t.Fatalf("Rename: %v", err)
-	}
-	if len(api.editMessage) != 1 {
-		t.Fatalf("应调用 1 次 editMessage，实际 %d", len(api.editMessage))
-	}
-	req := api.editMessage[0]
-	if req.ID != 55 || req.Message != `{"path":"/b.txt"}` {
-		t.Fatalf("editMessage 参数错误: id=%d msg=%q", req.ID, req.Message)
-	}
-	if peer, ok := req.Peer.(*tg.InputPeerChannel); !ok || peer.ChannelID != 42 {
-		t.Fatalf("peer 错误: %+v", req.Peer)
-	}
 }
 
 // TestResolveChannelCached 频道只解析一次，后续复用 access_hash。

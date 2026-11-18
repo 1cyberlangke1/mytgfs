@@ -15,11 +15,24 @@ package telegramstore
 // 输出：fn 的结果与错误
 // 预期：只对 IsStaleChannel 的错误重试；第二次仍失败就原样返回
 func retryStale[T any](s *Store, fn func() (T, error)) (T, error) {
+	return retryStaleExtra(s, nil, fn)
+}
+
+// retryStaleExtra 是带额外清理的重试：跨卷复制要连源卷的缓存一起清掉。
+//
+// 输入：s 目标 store；extra 重跑前额外执行的动作（可为 nil）；fn 完整操作
+// 输出：fn 的结果与错误
+// 预期：仍是「清缓存 + 整段重跑一次」，只是多一条统一的清理入口，
+// 避免 copy.go / resume.go 各自手写一遍同样的判断
+func retryStaleExtra[T any](s *Store, extra func(), fn func() (T, error)) (T, error) {
 	v, err := fn()
 	if err == nil || !IsStaleChannel(err) {
 		return v, err
 	}
 	s.dropChannel()
+	if extra != nil {
+		extra()
+	}
 	return fn()
 }
 

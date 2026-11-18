@@ -112,21 +112,24 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 	if size < 0 || size > MaxFileSize {
 		return nil, ErrTooLarge
 	}
-	ch, err := s.resolve(ctx)
+	// access_hash 过期时 retryStale 会清缓存并整段重跑，闭包里重新 resolve
+	var part *Part
+	err := retryStaleErr(s, func() error {
+		ch, rerr := s.resolve(ctx)
+		if rerr != nil {
+			return rerr
+		}
+		p, uerr := s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
+		if uerr != nil {
+			return uerr
+		}
+		part = p
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	part, err := s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
-	if err == nil || !IsStaleChannel(err) {
-		return part, err
-	}
-	// 本地缓存的 access_hash 可能过期：清缓存重新解析后重试一次
-	s.dropChannel()
-	ch, rerr := s.resolve(ctx)
-	if rerr != nil {
-		return nil, err
-	}
-	return s.uploadOnce(ctx, ch, r, size, key, name, mime, caption, o)
+	return part, nil
 }
 
 // uploadOnce 用给定的频道信息跑一次完整上传。
@@ -320,7 +323,6 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 	var (
 		mu        sync.Mutex
 		firstErr  error
-		doneN     int
 		doneBytes atomic.Int64
 	)
 	// 续传时先把已完成的分片算进进度，面板不会从 0 重来
@@ -371,7 +373,6 @@ func (s *Store) sendParts(ctx context.Context, r io.ReaderAt, size int64, resume
 				}
 				mu.Lock()
 				done[idx] = true
-				doneN++
 				doneBytes.Add(int64(n))
 				// 按时间落盘：快网络少写盘，慢网络也不会丢太多进度
 				due := time.Since(lastSave) >= resumeSaveInterval

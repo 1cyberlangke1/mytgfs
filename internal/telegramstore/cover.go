@@ -173,7 +173,7 @@ func (s *Store) BotUsername(ctx context.Context) (string, error) {
 			return user.Username, nil
 		}
 	}
-	return "", fmt.Errorf("%s", i18n.T("err.bot_not_found"))
+	return "", fmt.Errorf("%s", i18n.T("err.bot_not_found", "self"))
 }
 
 // InvalidateCover 让头像与频道元数据缓存立即失效。

@@ -46,20 +46,23 @@ type RefreshSource interface {
 // 输入：ref 源文件所在卷的刷新源；src 源记录；name/mime/caption 同 Copy
 // 输出：新消息 Part；refreshed 为刷新后的源 Part（未刷新时为 nil，调用方应写回源索引）
 // 预期：消息发到 s 的频道，源频道不变；跨频道时 file_reference 可能失效，必须用源 Store 刷新
+// copyResult 是 CopyFrom 的返回值打包：retryStaleExtra 只支持单返回值。
+type copyResult struct {
+	part      *Part
+	refreshed *Part
+}
+
 func (s *Store) CopyFrom(ctx context.Context, ref RefreshSource, src *Part, name, mime, caption string) (*Part, *Part, error) {
-	run := func() (*Part, *Part, error) {
-		return s.copyWithRefresh(ctx, ref, src, name, mime, caption)
-	}
-	part, refreshed, err := run()
-	if err == nil || !IsStaleChannel(err) {
-		return part, refreshed, err
-	}
-	// 源卷与目标卷的 access_hash 都可能过期，各自清一次再跑
-	s.dropChannel()
-	if st, ok := ref.(*Store); ok && st != s {
-		st.dropChannel()
-	}
-	return run()
+	// 源卷与目标卷的 access_hash 都可能过期，重跑前各自清一次
+	res, err := retryStaleExtra(s, func() {
+		if st, ok := ref.(*Store); ok && st != s {
+			st.dropChannel()
+		}
+	}, func() (copyResult, error) {
+		part, refreshed, cerr := s.copyWithRefresh(ctx, ref, src, name, mime, caption)
+		return copyResult{part: part, refreshed: refreshed}, cerr
+	})
+	return res.part, res.refreshed, err
 }
 
 // copyWithRefresh 是 Copy/CopyFrom 的共同实现。

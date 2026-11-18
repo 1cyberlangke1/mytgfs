@@ -1,61 +1,11 @@
 package telegramstore
 
-import (
-	"context"
-	"io"
-	"math/rand"
+// 发送文档消息的返回值解析：把 MessagesSendMedia 的 Updates 转成 Part。
+// 供 copy.go / resume.go 共用；上传入口是 UploadResumable。
 
-	"github.com/gotd/td/telegram/uploader"
+import (
 	"github.com/gotd/td/tg"
 )
-
-// Upload 上传文件并发送到频道。
-//
-// 输入：r 数据源；size 字节数；name 文件名；mime MIME；caption 说明文字
-// 输出：Part
-// 预期：
-//   - size > MaxFileSize 立即返回 ErrTooLarge
-//   - 节点正文（名字+父号+摘要）直接作为 caption 写进文件消息
-//   - 崩溃在 sendMedia 之前：服务端丢弃临时文件，无副作用
-//   - 崩溃在 sendMedia 之后：可能留下孤儿消息，需要外部对账
-func (s *Store) Upload(ctx context.Context, r io.Reader, size int64, name, mime, caption string) (*Part, error) {
-	if size < 0 || size > MaxFileSize {
-		return nil, ErrTooLarge
-	}
-	ch, err := s.resolve(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
-
-	up := uploader.NewUploader(s.api).WithPartSize(512 * 1024)
-	inputFile, err := up.Upload(ctx, uploader.NewUpload(name, r, size))
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.throttle(ctx); err != nil {
-		return nil, err
-	}
-	updates, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer: peer,
-		Media: &tg.InputMediaUploadedDocument{
-			File:     inputFile,
-			MimeType: mime,
-			Attributes: []tg.DocumentAttributeClass{
-				&tg.DocumentAttributeFilename{FileName: name},
-			},
-		},
-		Message:  caption,
-		RandomID: rand.Int63(),
-	})
-	if err != nil {
-		return nil, DescribeError(s.noteErr(err))
-	}
-
-	return partFromUpdates(updates)
-}
 
 // partFromUpdates 把「发送文档消息」的返回转成 Part。
 //
