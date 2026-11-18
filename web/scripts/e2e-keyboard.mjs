@@ -1,4 +1,4 @@
-// 桌面壳 e2e：键盘导航 + 假数据下的文件/设置/下载操作。
+// 桌面壳 e2e：键盘导航 + 假数据下的文件/设置/队列/同名冲突/下载操作。
 //
 // 输入：MYTGFS_E2E_EXE 指向 `go build -tags e2e` 的壳（Windows 建议加 -H=windowsgui）
 //       MYTGFS_E2E_PORT 可选，默认 9339
@@ -1115,7 +1115,146 @@ try {
   }
   check('Esc 从设置页回到导航', settingsToNav === true);
 
-  // ---- 7. 下载页：假文件渲染，Esc 逐层退回导航；安卓同样有下载页，只是没有「打开文件夹」 ----
+  // ---- 7. 操作队列：假任务可取消并落「已取消」 ----
+  await clickNav('#overview');
+  await waitFor('切到概览页', async () => (await tabHash()) === '#overview');
+  const queueCancelLabel = await waitFor('操作队列渲染假任务', () =>
+    evaluate(`(() => {
+      const btn = [...document.querySelectorAll('button[aria-label]')].find((b) =>
+        (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
+      );
+      return btn ? btn.getAttribute('aria-label') : false;
+    })()`)
+  );
+  check('服务端队列任务给出取消按钮', typeof queueCancelLabel === 'string', queueCancelLabel);
+
+  const queueClicked = await evaluate(`(() => {
+    const btn = [...document.querySelectorAll('button[aria-label]')].find((b) =>
+      (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
+    );
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  check('队列取消按钮可点击', queueClicked === true);
+
+  const queueCancelled = await waitFor('队列任务落已取消', () =>
+    evaluate(`(() => {
+      const main = document.querySelector('main');
+      return !!main && main.textContent.includes('已取消');
+    })()`)
+  );
+  check('取消后任务显示已取消', queueCancelled === true);
+
+  const queueCancelGone = await evaluate(`(() => {
+    const main = document.querySelector('main');
+    if (!main) return null;
+    return [...main.querySelectorAll('button[aria-label]')].some((b) =>
+      (b.getAttribute('aria-label') || '').startsWith('取消 queued-demo.bin')
+    );
+  })()`);
+  check('已取消任务不再给取消按钮', queueCancelGone === false);
+
+  // ---- 8. 同名冲突：选一个根目录已存在的名字，确认前必须问怎么处理 ----
+  if (!isAndroid) {
+    await clickNav('#files');
+    await waitFor('切回文件页', async () => (await tabHash()) === '#files');
+    await waitFor('文件行渲染', () => evaluate(`document.querySelectorAll('[data-file-id]').length > 0`));
+
+    // 用 DataTransfer 造一个与根目录 notes.txt 同名的文件，走真实的上传入口
+    const staged = await evaluate(`(() => {
+      const input = [...document.querySelectorAll('input[type=file]')].find((el) => !el.webkitdirectory);
+      if (!input) return 'no-input';
+      const dt = new DataTransfer();
+      dt.items.add(new File(['hello'], 'notes.txt', { type: 'text/plain' }));
+      input.files = dt.files;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return 'ok';
+    })()`);
+    check('上传输入可注入文件', staged === 'ok', String(staged));
+
+    const planOpen = await waitFor('上传清单打开', () =>
+      evaluate(`(() => {
+        const d = document.querySelector('dialog[open]');
+        return !!d && (d.textContent || '').includes('准备上传');
+      })()`)
+    );
+    check('选文件后先出上传清单', planOpen === true);
+
+    const started = await evaluate(`(() => {
+      const d = document.querySelector('dialog[open]');
+      if (!d) return false;
+      const btn = [...d.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '开始上传');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    check('清单里点开始上传', started === true);
+
+    const conflictOpen = await waitFor('同名冲突弹窗打开', () =>
+      evaluate(`(() => {
+        const d = document.querySelector('dialog[open]');
+        return !!d && (d.textContent || '').includes('有同名文件');
+      })()`)
+    );
+    check('同名文件弹出冲突选择', conflictOpen === true);
+
+    const suggested = await evaluate(`(() => {
+      const d = document.querySelector('dialog[open]');
+      return !!d && (d.textContent || '').includes('notes (2).txt');
+    })()`);
+    check('给出不冲突的改名建议', suggested === true);
+
+    const skipAll = await evaluate(`(() => {
+      const d = document.querySelector('dialog[open]');
+      if (!d) return false;
+      const btn = [...d.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '全部跳过');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    check('全部跳过可点', skipAll === true);
+
+    const confirmDisabled = await waitFor('全部跳过时确认禁用', () =>
+      evaluate(`(() => {
+        const d = document.querySelector('dialog[open]');
+        if (!d) return false;
+        const btn = [...d.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '继续上传');
+        return btn ? btn.disabled : false;
+      })()`)
+    );
+    check('全部跳过时不允许确认', confirmDisabled === true);
+
+    const conflictCancel = await evaluate(`(() => {
+      const d = document.querySelector('dialog[open]');
+      if (!d) return false;
+      const btn = [...d.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '取消');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    check('冲突弹窗可取消', conflictCancel === true);
+
+    const planBack = await waitFor('取消冲突后回到清单', () =>
+      evaluate(`(() => {
+        const d = document.querySelector('dialog[open]');
+        return !!d && (d.textContent || '').includes('准备上传');
+      })()`)
+    );
+    check('取消冲突后回到上传清单', planBack === true);
+
+    // 关掉清单，后面的下载页断言不受弹窗遮挡
+    await evaluate(`(() => {
+      const d = document.querySelector('dialog[open]');
+      const btn = d && [...d.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '取消');
+      if (btn) btn.click();
+      return true;
+    })()`);
+    await waitFor('上传清单关闭', () => evaluate(`document.querySelectorAll('dialog[open]').length === 0`));
+  }
+
+  // ---- 9. 下载页：假文件渲染，Esc 逐层退回导航；安卓同样有下载页，只是没有「打开文件夹」 ----
   if (isAndroid) {
     // 侧栏在手机布局里仍留在 DOM（CSS 隐藏），所以按 href 断言而不是数个数
     const downloadsLinks = await evaluate(

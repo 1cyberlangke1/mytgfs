@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,65 @@ import (
 
 // mockVolume 是假卷名；面板侧栏与文件接口都用它。
 const mockVolume = "demo"
+
+// mockJob 是一条假队列任务：初始排队，取消接口会把它落成 cancelled。
+//
+// 字段与 queue.Item 的 JSON 形状一致，面板按同一套键渲染。
+type mockJob struct {
+	ID      int64  `json:"id"`
+	Volume  string `json:"volume"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Attempt int    `json:"attempt"`
+	Done    int64  `json:"done,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+}
+
+// mockQueue 是假队列的唯一来源；e2e 单进程，用互斥锁串行化读写。
+var mockQueue = struct {
+	sync.Mutex
+	jobs []mockJob
+}{jobs: []mockJob{{
+	ID: 1, Volume: mockVolume, Kind: "upload", Name: "queued-demo.bin", State: "queued", Size: 4096,
+}}}
+
+// mockQueueSnapshot 复制一份队列，避免调用方持锁渲染。
+//
+// 输入：无
+// 输出：当前假队列的副本
+// 预期：/api/state 每次返回同一批任务，取消后状态跟着变
+func mockQueueSnapshot() []mockJob {
+	mockQueue.Lock()
+	defer mockQueue.Unlock()
+	out := make([]mockJob, len(mockQueue.jobs))
+	copy(out, mockQueue.jobs)
+	return out
+}
+
+// mockCancelJob 处理取消请求。
+//
+// 输入：任务号
+// 输出：HTTP 状态码与是否命中
+// 预期：排队中/执行中改为 cancelled；不存在 404；已结束 409
+func mockCancelJob(id int64) int {
+	mockQueue.Lock()
+	defer mockQueue.Unlock()
+	for i := range mockQueue.jobs {
+		job := &mockQueue.jobs[i]
+		if job.ID != id {
+			continue
+		}
+		switch job.State {
+		case "queued", "running":
+			job.State = "cancelled"
+			return http.StatusOK
+		default:
+			return http.StatusConflict
+		}
+	}
+	return http.StatusNotFound
+}
 
 // mockEmpty 报告是否用「空卷」跑 e2e：state 报 0 条、/api/files 一律返回空树，
 // 用于复现空卷下的界面行为（骨架屏不应在刷新时重放）。
@@ -83,6 +143,32 @@ func E2EMock(next http.Handler) http.Handler {
 // 输出：true 表示已处理
 // 预期：未匹配的路径返回 false，交给真面板
 func mockRoute(w http.ResponseWriter, r *http.Request) bool {
+	// 单条任务取消：DELETE /api/queue/{vol}/{id}
+	if strings.HasPrefix(r.URL.Path, "/api/queue/") {
+		if r.Method != http.MethodDelete {
+			replyJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return true
+		}
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/queue/"), "/")
+		if len(parts) != 2 || parts[0] != mockVolume {
+			replyJSONError(w, http.StatusNotFound, "job not found")
+			return true
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || id <= 0 {
+			replyJSONError(w, http.StatusBadRequest, "bad id")
+			return true
+		}
+		switch code := mockCancelJob(id); code {
+		case http.StatusOK:
+			replyJSON(w, code, map[string]any{"cancelled": true})
+		case http.StatusConflict:
+			replyJSONError(w, code, "job finished")
+		default:
+			replyJSONError(w, code, "job not found")
+		}
+		return true
+	}
 	switch r.URL.Path {
 	case "/api/state":
 		if r.Method != http.MethodGet {
@@ -103,6 +189,10 @@ func mockRoute(w http.ResponseWriter, r *http.Request) bool {
 		if mockEmpty() {
 			count, used = 0, 0
 		}
+		queue := mockQueueSnapshot()
+		if mockEmpty() {
+			queue = nil
+		}
 		replyJSON(w, http.StatusOK, map[string]any{
 			"volumes": []volumeState{{
 				ID:      mockVolume,
@@ -121,8 +211,27 @@ func mockRoute(w http.ResponseWriter, r *http.Request) bool {
 				"cover":        false,
 				"rebuild":      false,
 			},
-			"status": map[string]any{"state_code": "online"},
+			"status": map[string]any{"state_code": "online", "queue": queue},
 		})
+		return true
+	case "/api/queue":
+		if r.Method != http.MethodDelete {
+			replyJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return true
+		}
+		var kept []mockJob
+		var removed int
+		mockQueue.Lock()
+		for _, job := range mockQueue.jobs {
+			if job.State == "done" || job.State == "failed" || job.State == "cancelled" {
+				removed++
+				continue
+			}
+			kept = append(kept, job)
+		}
+		mockQueue.jobs = kept
+		mockQueue.Unlock()
+		replyJSON(w, http.StatusOK, map[string]any{"removed": removed})
 		return true
 	case "/api/files":
 		if r.Method != http.MethodGet {
