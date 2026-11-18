@@ -22,10 +22,31 @@ import { Modal } from './Modal';
  *
  * 桌面壳（Wails responsewriter_windows.go 用 bytes.Buffer，且明确不实现
  * http.Flusher）与安卓壳（nativeServeAsset 返回整份 byte[]）的出口都只能
- * 「整份交一次」，所以媒体一旦内联就必然整份进内存。超过这个值改成
+ * 「整份交一次」，所以图片/文本/PDF 一旦内联就必然整份进内存。超过这个值改成
  * 「下载后用系统应用打开」，两个平台走同一条路，不再按平台分支。
+ *
+ * 视频与音频不吃这个限制：它们走 /api/file 的 Range 窗口，服务端每次只回
+ * 一段（安卓壳 1 MiB、Go 侧窗口同样有上限），内存里始终只有当前窗口。
  */
 const INLINE_PREVIEW_MAX_BYTES = 32 << 20;
+
+/**
+ * inlinePreviewBlocked 判断某条目是否只能下载、不能内嵌预览。
+ *
+ * 输入：size 字节数；category 文件分类；isDir 是否目录；hasStream 是否有本地流覆盖
+ * 输出：true 表示应显示「文件较大，请下载后打开」
+ * 预期：视频/音频永远走 Range 窗口，不受体积上限约束；目录与本地流覆盖也不拦
+ */
+export function inlinePreviewBlocked(
+  size: number,
+  category: string,
+  isDir: boolean,
+  hasStream: boolean
+): boolean {
+  if (isDir || hasStream) return false;
+  if (category === 'video' || category === 'audio') return false;
+  return size > INLINE_PREVIEW_MAX_BYTES;
+}
 
 interface FilePreviewModalProps {
   file: FileItem | null;
@@ -86,11 +107,14 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
               // 缩略图只在读远端文件时有意义：本地下载预览直接用 streamOverride
               const thumbUrl = streamOverride ? '' : thumbURL(file.volumeId, fullPath);
               const imgSrc = showOriginal || !thumbUrl ? file.previewUrl : thumbUrl;
-              // 安卓侧 /api/file 走桥整份读取：大媒体一旦内联预览就要整份进内存
-              // 再交给 WebView，所以超过阈值改成「下载后用系统应用打开」
-              // 桌面与安卓的响应出口都只能整份交付：超过阈值统一改走「下载后打开」
-              const inlineTooBig =
-                file.size > INLINE_PREVIEW_MAX_BYTES && !streamOverride && !file.isDir;
+              // 视频/音频走 /api/file 的 Range 窗口，内存只占当前窗口，
+              // 因此不受 32 MiB 内联上限约束；图片/文本/PDF 仍然整份读取。
+              const inlineTooBig = inlinePreviewBlocked(
+                file.size,
+                file.category,
+                file.isDir,
+                Boolean(streamOverride)
+              );
               const tooBigCard = (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 text-center">
                   <HardDrive className="w-10 h-10 text-slate-500 mb-1" />
