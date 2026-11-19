@@ -17,9 +17,11 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"mytgfs/internal/config"
 	"mytgfs/internal/crypto"
@@ -27,6 +29,45 @@ import (
 	"mytgfs/internal/sessionstore"
 	"mytgfs/internal/tgclient"
 )
+
+// loginRetries 是 500 类错误的额外重试次数。
+const loginRetries = 2
+
+// isTransientRPC 判断是否为 Telegram 的 500 类内部错误。
+//
+// 输入：任意 error
+// 输出：true 表示服务端临时故障，稍后重试可能成功
+// 预期：只认 500（RPC_CALL_FAIL）；420 限流与 400 参数错误不算
+func isTransientRPC(err error) bool {
+	e, ok := tgerr.As(err)
+	if !ok {
+		return false
+	}
+	return e.Code == 500
+}
+
+// retryTransient 对 500 类错误做有限次退避重试。
+//
+// 输入：ctx；fn 单次调用
+// 输出：成功返回 nil；不可重试或重试用尽返回最后一次错误
+// 预期：退避 1s、2s；ctx 取消立即返回
+func retryTransient(ctx context.Context, fn func() error) error {
+	var err error
+	for attempt := 0; attempt <= loginRetries; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if !isTransientRPC(err) || attempt == loginRetries {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		}
+	}
+	return err
+}
 
 // 默认路径与 CLI 约定一致（定义集中在 config 包）。
 const (
@@ -286,21 +327,43 @@ func (s *Service) FinishUserLogin(ctx context.Context, in FinishRequest) (Finish
 
 	var out FinishResult
 	err = client.Run(ctx, func(ctx context.Context) error {
-		_, serr := client.Auth().SignIn(ctx, phone, strings.TrimSpace(in.Code), strings.TrimSpace(in.PhoneCodeHash))
+		// Telegram 偶尔在登录后立刻回 500（RPC_CALL_FAIL），隔几秒再试就正常：
+		// 对 500 类做有限重试，其它错误原样返回
+		var serr error
+		serr = retryTransient(ctx, func() error {
+			_, e := client.Auth().SignIn(ctx, phone, strings.TrimSpace(in.Code), strings.TrimSpace(in.PhoneCodeHash))
+			return e
+		})
 		switch {
 		case errors.Is(serr, auth.ErrPasswordAuthNeeded):
 			if strings.TrimSpace(in.Password) == "" {
 				out.NeedPassword = true
 				return nil
 			}
-			if _, perr := client.Auth().Password(ctx, in.Password); perr != nil {
+			var perr error
+			perr = retryTransient(ctx, func() error {
+				_, e := client.Auth().Password(ctx, in.Password)
+				return e
+			})
+			if perr != nil {
 				return fmt.Errorf("%s: %w", i18n.T("err.user_login_prefix"), perr)
 			}
 		case serr != nil:
+			if isTransientRPC(serr) {
+				return fmt.Errorf("%s: %w", i18n.T("err.user_login_transient"), serr)
+			}
 			return fmt.Errorf("%s: %w", i18n.T("err.user_login_prefix"), serr)
 		}
-		self, serr := client.Self(ctx)
+		var self *tg.User
+		serr = retryTransient(ctx, func() error {
+			var e error
+			self, e = client.Self(ctx)
+			return e
+		})
 		if serr != nil {
+			if isTransientRPC(serr) {
+				return fmt.Errorf("%s: %w", i18n.T("err.user_login_transient"), serr)
+			}
 			return fmt.Errorf("%s: %w", i18n.T("err.self_prefix"), serr)
 		}
 		out.User = identityOf(self, false)

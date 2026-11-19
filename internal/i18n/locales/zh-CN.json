@@ -188,6 +188,7 @@
   "err.upload_too_large": "这个分片超过文件剩余大小，已拒绝",
   "err.user_banned_in_channel": "bot 已被频道封禁",
   "err.user_login_prefix": "user 登录失败",
+  "err.user_login_transient": "Telegram 服务端暂时出错（已自动重试），请稍后再试一次",
   "err.user_session_missing": "还没有 user 会话：请先用 mytgfs auth login 登录一次",
   "err.web_events_unavailable": "事件通道不可用",
   "err.web_bad_json": "请求内容不是合法 JSON",

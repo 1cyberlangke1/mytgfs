@@ -188,6 +188,7 @@
   "err.upload_too_large": "this chunk is larger than the remaining file size and was rejected",
   "err.user_banned_in_channel": "the bot is banned in this channel",
   "err.user_login_prefix": "user login failed",
+  "err.user_login_transient": "Telegram server returned a temporary error (already retried), please try again shortly",
   "err.user_session_missing": "no user session yet: run mytgfs auth login once",
   "err.web_events_unavailable": "the event stream is unavailable",
   "err.web_bad_json": "request body is not valid JSON",
