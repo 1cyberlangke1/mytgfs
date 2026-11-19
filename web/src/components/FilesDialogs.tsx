@@ -161,32 +161,36 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitNewFolder}
-          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
-          <h3
-            id="modal-new-folder-title"
-            className="text-base font-semibold text-zinc-950 dark:text-white"
-          >
-            {t.files.modalNewFolderTitle}
-          </h3>
-          <div className="space-y-1.5">
-            <label
-              htmlFor="new-folder-name-input"
-              className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60">
+            <h3
+              id="modal-new-folder-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
             >
-              {t.files.modalNewFolderLabel}
-            </label>
-            <Input
-              id="new-folder-name-input"
-              type="text"
-              required
-              autoFocus
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder={t.files.modalNewFolderPlaceholder}
-            />
+              {t.files.modalNewFolderTitle}
+            </h3>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <div className="space-y-1.5">
+              <label
+                htmlFor="new-folder-name-input"
+                className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                {t.files.modalNewFolderLabel}
+              </label>
+              <Input
+                id="new-folder-name-input"
+                type="text"
+                required
+                autoFocus
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                placeholder={t.files.modalNewFolderPlaceholder}
+              />
+            </div>
+          </div>
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button type="button" variant="outline" onClick={() => setShowNewFolderModal(false)}>
               {t.files.cancel}
             </Button>
@@ -206,66 +210,70 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitRenameMove}
-          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
-          <h3
-            id="modal-rename-move-title"
-            className="text-base font-semibold text-zinc-950 dark:text-white"
-          >
-            {t.files.modalRenameMoveTitle}
-          </h3>
-          <div className="space-y-1.5">
-            <label
-              htmlFor="rename-item-input"
-              className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60">
+            <h3
+              id="modal-rename-move-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
             >
-              {t.files.modalRenameLabel}
-            </label>
-            <Input
-              id="rename-item-input"
-              type="text"
-              required
-              value={editName}
-              aria-invalid={Boolean(
-                validateEntryName(editName, editingItem, editTargetFolderId, files, t)
+              {t.files.modalRenameMoveTitle}
+            </h3>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <div className="space-y-1.5">
+              <label
+                htmlFor="rename-item-input"
+                className="block text-xs font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                {t.files.modalRenameLabel}
+              </label>
+              <Input
+                id="rename-item-input"
+                type="text"
+                required
+                value={editName}
+                aria-invalid={Boolean(
+                  validateEntryName(editName, editingItem, editTargetFolderId, files, t)
+                )}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+              {validateEntryName(editName, editingItem, editTargetFolderId, files, t) && (
+                <p className="text-[11px] text-red-600 dark:text-red-400">
+                  {validateEntryName(editName, editingItem, editTargetFolderId, files, t)}
+                </p>
               )}
-              onChange={(e) => setEditName(e.target.value)}
-            />
-            {validateEntryName(editName, editingItem, editTargetFolderId, files, t) && (
-              <p className="text-[11px] text-red-600 dark:text-red-400">
-                {validateEntryName(editName, editingItem, editTargetFolderId, files, t)}
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                {t.files.moveTargetTree}
+              </span>
+              <FolderTree
+                dirs={volumeDirectories}
+                value={editTargetFolderId}
+                onChange={setEditTargetFolderId}
+                disabledIds={
+                  new Set(
+                    volumeDirectories
+                      .filter((d) => !canMoveItemsToFolder(files, [editingItem.id], d.id))
+                      .map((d) => d.id)
+                  )
+                }
+                rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
+                ariaLabel={t.files.modalMoveTargetLabel}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                {t.files.movePreview}:{' '}
+                {joinPath(
+                  targetPathText(files, editingItem.volumeId, editTargetFolderId),
+                  editName.trim() || '…'
+                )}
               </p>
-            )}
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
-              {t.files.moveTargetTree}
-            </span>
-            <FolderTree
-              dirs={volumeDirectories}
-              value={editTargetFolderId}
-              onChange={setEditTargetFolderId}
-              disabledIds={
-                new Set(
-                  volumeDirectories
-                    .filter((d) => !canMoveItemsToFolder(files, [editingItem.id], d.id))
-                    .map((d) => d.id)
-                )
-              }
-              rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
-              ariaLabel={t.files.modalMoveTargetLabel}
-            />
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
-              {t.files.movePreview}:{' '}
-              {joinPath(
-                targetPathText(files, editingItem.volumeId, editTargetFolderId),
-                editName.trim() || '…'
-              )}
-            </p>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button type="button" variant="outline" onClick={() => setEditingItem(null)}>
               {t.files.cancel}
             </Button>
@@ -285,38 +293,42 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       >
         <form
           onSubmit={submitBatchMove}
-          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
-          <h3
-            id="modal-batch-move-title"
-            className="text-base font-semibold text-zinc-950 dark:text-white"
-          >
-            {t.files.modalBatchMoveTitle}
-          </h3>
-          <div className="space-y-1.5">
-            <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
-              {t.files.moveTargetTree}
-            </span>
-            <FolderTree
-              dirs={volumeDirectories}
-              value={batchTargetFolderId}
-              onChange={setBatchTargetFolderId}
-              disabledIds={
-                new Set(
-                  volumeDirectories
-                    .filter((d) => !canMoveItemsToFolder(files, Array.from(selectedIds), d.id))
-                    .map((d) => d.id)
-                )
-              }
-              rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
-              ariaLabel={t.files.modalMoveTargetLabel}
-            />
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
-              {t.files.movePreview}: {targetPathText(files, activeVolumeId, batchTargetFolderId)} ·{' '}
-              {formatPlural(selectedIds.size, t.plurals.selectedItems, locale)}
-            </p>
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60">
+            <h3
+              id="modal-batch-move-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.files.modalBatchMoveTitle}
+            </h3>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                {t.files.moveTargetTree}
+              </span>
+              <FolderTree
+                dirs={volumeDirectories}
+                value={batchTargetFolderId}
+                onChange={setBatchTargetFolderId}
+                disabledIds={
+                  new Set(
+                    volumeDirectories
+                      .filter((d) => !canMoveItemsToFolder(files, Array.from(selectedIds), d.id))
+                      .map((d) => d.id)
+                  )
+                }
+                rootLabel={`/${currentVolume?.name ?? ''} (${t.files.rootCrumb})`}
+                ariaLabel={t.files.modalMoveTargetLabel}
+              />
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono" dir="ltr">
+                {t.files.movePreview}: {targetPathText(files, activeVolumeId, batchTargetFolderId)} ·{' '}
+                {formatPlural(selectedIds.size, t.plurals.selectedItems, locale)}
+              </p>
+            </div>
+          </div>
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button type="button" variant="outline" onClick={() => setShowBatchMoveModal(false)}>
               {t.files.cancel}
             </Button>
@@ -334,23 +346,27 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-delete-confirm-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
-          <h3
-            id="modal-delete-confirm-title"
-            className="text-base font-semibold text-zinc-950 dark:text-white"
-          >
-            {t.files.modalConfirmDeleteTitle}
-          </h3>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-            {deleteConfirmIds.length === 1
-              ? interpolate(
-                  t.files.modalConfirmDeleteDesc,
-                  { name: files.find((f) => f.id === deleteConfirmIds[0])?.name || '' },
-                  locale
-                )
-              : formatPlural(deleteConfirmIds.length, t.plurals.batchDeleteConfirm, locale)}
-          </p>
-          <div className="flex items-center justify-end gap-2 pt-2">
+        <div className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60">
+            <h3
+              id="modal-delete-confirm-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.files.modalConfirmDeleteTitle}
+            </h3>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              {deleteConfirmIds.length === 1
+                ? interpolate(
+                    t.files.modalConfirmDeleteDesc,
+                    { name: files.find((f) => f.id === deleteConfirmIds[0])?.name || '' },
+                    locale
+                  )
+                : formatPlural(deleteConfirmIds.length, t.plurals.batchDeleteConfirm, locale)}
+            </p>
+          </div>
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button
               type="button"
               variant="outline"
@@ -384,55 +400,57 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
             onCreateVolume(name, newVolume.title.trim());
             setShowCreateVolume(false);
           }}
-          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
-          <div>
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-1">
             <h3
               id="modal-create-volume-title"
               className="text-base font-semibold text-zinc-950 dark:text-white"
             >
               {t.volume.createTitle}
             </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{t.volume.createDesc}</p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.volume.createDesc}</p>
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="volume-name" className="block text-xs font-medium">
-              {t.volume.nameLabel}
-            </label>
-            <Input
-              id="volume-name"
-              required
-              autoFocus
-              dir="ltr"
-              pattern="[A-Za-z0-9_-]{1,32}"
-              aria-invalid={volumeFormError ? true : undefined}
-              aria-describedby="volume-name-hint"
-              value={newVolume.name}
-              onChange={(e) => {
-                setVolumeFormError('');
-                setNewVolume((v) => ({ ...v, name: e.target.value }));
-              }}
-            />
-            <p id="volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              {t.volume.nameHint}
-            </p>
-            {volumeFormError && (
-              <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
-                {volumeFormError}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <div className="space-y-1.5">
+              <label htmlFor="volume-name" className="block text-xs font-medium">
+                {t.volume.nameLabel}
+              </label>
+              <Input
+                id="volume-name"
+                required
+                autoFocus
+                dir="ltr"
+                pattern="[A-Za-z0-9_-]{1,32}"
+                aria-invalid={volumeFormError ? true : undefined}
+                aria-describedby="volume-name-hint"
+                value={newVolume.name}
+                onChange={(e) => {
+                  setVolumeFormError('');
+                  setNewVolume((v) => ({ ...v, name: e.target.value }));
+                }}
+              />
+              <p id="volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.nameHint}
               </p>
-            )}
+              {volumeFormError && (
+                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                  {volumeFormError}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="volume-title" className="block text-xs font-medium">
+                {t.volume.titleLabel}
+              </label>
+              <Input
+                id="volume-title"
+                value={newVolume.title}
+                onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
+              />
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="volume-title" className="block text-xs font-medium">
-              {t.volume.titleLabel}
-            </label>
-            <Input
-              id="volume-title"
-              value={newVolume.title}
-              onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
-            />
-          </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button type="button" variant="outline" onClick={() => setShowCreateVolume(false)}>
               {t.files.cancel}
             </Button>
@@ -466,9 +484,9 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
             onAttachVolume(name, id);
             setShowAttachVolume(false);
           }}
-          className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
         >
-          <div>
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-1">
             <h3
               id="modal-attach-volume-title"
               className="text-base font-semibold text-zinc-950 dark:text-white"
@@ -478,120 +496,122 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{t.volume.attachDesc}</p>
           </div>
 
-          {canListChannels && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium">{t.volume.pickChannel}</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={loadChannels}
-                  disabled={channelsState === 'loading'}
-                >
-                  {channelsState === 'loading' ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <List className="w-3.5 h-3.5" />
-                  )}
-                  <span>{t.volume.loadChannels}</span>
-                </Button>
-              </div>
-              {channelsState === 'error' && (
-                <p className="text-[11px] text-rose-500 break-words">
-                  {t.volume.channelsFailed}: {channelsError}
-                </p>
-              )}
-              {channelsState === 'ready' && channels.length === 0 && (
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {t.volume.channelsEmpty}
-                </p>
-              )}
-              {channels.length > 0 && (
-                <div
-                  className="max-h-40 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800 custom-scrollbar"
-                  role="listbox"
-                  aria-label={t.volume.pickChannel}
-                >
-                  {channels.map((ch) => (
-                    <button
-                      key={ch.id}
-                      type="button"
-                      role="option"
-                      aria-selected={String(ch.chat_id) === attachForm.chatId}
-                      onClick={() => pickChannel(ch)}
-                      className={`w-full text-left px-3 py-2 transition-colors ${
-                        String(ch.chat_id) === attachForm.chatId
-                          ? 'bg-sky-50 dark:bg-sky-500/10'
-                          : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
-                      }`}
-                    >
-                      <span className="block text-xs font-medium truncate text-zinc-900 dark:text-zinc-100">
-                        {ch.title || ch.username || String(ch.id)}
-                      </span>
-                      <span
-                        className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
-                        dir="ltr"
-                      >
-                        {ch.chat_id}
-                        {ch.username ? ` · @${ch.username}` : ''}
-                        {ch.creator ? ' · owner' : ch.admin ? ' · admin' : ''}
-                      </span>
-                    </button>
-                  ))}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            {canListChannels && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium">{t.volume.pickChannel}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={loadChannels}
+                    disabled={channelsState === 'loading'}
+                  >
+                    {channelsState === 'loading' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <List className="w-3.5 h-3.5" />
+                    )}
+                    <span>{t.volume.loadChannels}</span>
+                  </Button>
                 </div>
+                {channelsState === 'error' && (
+                  <p className="text-[11px] text-rose-500 break-words">
+                    {t.volume.channelsFailed}: {channelsError}
+                  </p>
+                )}
+                {channelsState === 'ready' && channels.length === 0 && (
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {t.volume.channelsEmpty}
+                  </p>
+                )}
+                {channels.length > 0 && (
+                  <div
+                    className="max-h-40 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800 custom-scrollbar"
+                    role="listbox"
+                    aria-label={t.volume.pickChannel}
+                  >
+                    {channels.map((ch) => (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        role="option"
+                        aria-selected={String(ch.chat_id) === attachForm.chatId}
+                        onClick={() => pickChannel(ch)}
+                        className={`w-full text-left px-3 py-2 transition-colors ${
+                          String(ch.chat_id) === attachForm.chatId
+                            ? 'bg-sky-50 dark:bg-sky-500/10'
+                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <span className="block text-xs font-medium truncate text-zinc-900 dark:text-zinc-100">
+                          {ch.title || ch.username || String(ch.id)}
+                        </span>
+                        <span
+                          className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
+                          dir="ltr"
+                        >
+                          {ch.chat_id}
+                          {ch.username ? ` · @${ch.username}` : ''}
+                          {ch.creator ? ' · owner' : ch.admin ? ' · admin' : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label htmlFor="attach-volume-name" className="block text-xs font-medium">
+                {t.volume.nameLabel}
+              </label>
+              <Input
+                id="attach-volume-name"
+                required
+                autoFocus
+                dir="ltr"
+                pattern="[A-Za-z0-9_-]{1,32}"
+                aria-invalid={attachFormError ? true : undefined}
+                aria-describedby="attach-volume-name-hint"
+                value={attachForm.name}
+                onChange={(e) => {
+                  setAttachFormError('');
+                  setAttachForm((v) => ({ ...v, name: e.target.value }));
+                }}
+              />
+              <p id="attach-volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.nameHint}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
+                {t.volume.chatIdLabel}
+              </label>
+              <Input
+                id="attach-volume-chat"
+                required
+                dir="ltr"
+                inputMode="numeric"
+                aria-invalid={attachFormError ? true : undefined}
+                aria-describedby="attach-volume-chat-hint"
+                value={attachForm.chatId}
+                onChange={(e) => {
+                  setAttachFormError('');
+                  setAttachForm((v) => ({ ...v, chatId: e.target.value }));
+                }}
+              />
+              <p id="attach-volume-chat-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.volume.chatIdHint}
+              </p>
+              {attachFormError && (
+                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                  {attachFormError}
+                </p>
               )}
             </div>
-          )}
-
-          <div className="space-y-1.5">
-            <label htmlFor="attach-volume-name" className="block text-xs font-medium">
-              {t.volume.nameLabel}
-            </label>
-            <Input
-              id="attach-volume-name"
-              required
-              autoFocus
-              dir="ltr"
-              pattern="[A-Za-z0-9_-]{1,32}"
-              aria-invalid={attachFormError ? true : undefined}
-              aria-describedby="attach-volume-name-hint"
-              value={attachForm.name}
-              onChange={(e) => {
-                setAttachFormError('');
-                setAttachForm((v) => ({ ...v, name: e.target.value }));
-              }}
-            />
-            <p id="attach-volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              {t.volume.nameHint}
-            </p>
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
-              {t.volume.chatIdLabel}
-            </label>
-            <Input
-              id="attach-volume-chat"
-              required
-              dir="ltr"
-              inputMode="numeric"
-              aria-invalid={attachFormError ? true : undefined}
-              aria-describedby="attach-volume-chat-hint"
-              value={attachForm.chatId}
-              onChange={(e) => {
-                setAttachFormError('');
-                setAttachForm((v) => ({ ...v, chatId: e.target.value }));
-              }}
-            />
-            <p id="attach-volume-chat-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              {t.volume.chatIdHint}
-            </p>
-            {attachFormError && (
-              <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
-                {attachFormError}
-              </p>
-            )}
-          </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button type="button" variant="outline" onClick={() => setShowAttachVolume(false)}>
               {t.files.cancel}
             </Button>
@@ -612,8 +632,8 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-delete-volume-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
-          <div className="flex items-start gap-3">
+        <div className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 flex items-start gap-3">
             <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
               <AlertTriangle className="w-5 h-5" />
             </div>
@@ -629,20 +649,22 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
               </p>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="delete-volume-name" className="block text-xs font-medium">
-              {interpolate(t.volume.typeToConfirm, { name: currentVolume.name }, locale)}
-            </label>
-            <Input
-              id="delete-volume-name"
-              dir="ltr"
-              autoFocus
-              value={deleteVolumeInput}
-              onChange={(e) => setDeleteVolumeInput(e.target.value)}
-              placeholder={currentVolume.name}
-            />
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <div className="space-y-1.5">
+              <label htmlFor="delete-volume-name" className="block text-xs font-medium">
+                {interpolate(t.volume.typeToConfirm, { name: currentVolume.name }, locale)}
+              </label>
+              <Input
+                id="delete-volume-name"
+                dir="ltr"
+                autoFocus
+                value={deleteVolumeInput}
+                onChange={(e) => setDeleteVolumeInput(e.target.value)}
+                placeholder={currentVolume.name}
+              />
+            </div>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button
               type="button"
               variant="outline"
@@ -676,17 +698,21 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
         labelledBy="modal-rebuild-title"
         panelClassName="w-full max-w-md"
       >
-        <div className="w-full max-w-md rounded-2xl surface-card p-6 space-y-4 shadow-xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
-          <h3
-            id="modal-rebuild-title"
-            className="text-base font-semibold text-zinc-950 dark:text-white"
-          >
-            {t.files.rebuildConfirmTitle}
-          </h3>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-            {t.files.rebuildConfirmDesc}
-          </p>
-          <div className="flex items-center justify-end gap-2 pt-2">
+        <div className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden">
+          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60">
+            <h3
+              id="modal-rebuild-title"
+              className="text-base font-semibold text-zinc-950 dark:text-white"
+            >
+              {t.files.rebuildConfirmTitle}
+            </h3>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              {t.files.rebuildConfirmDesc}
+            </p>
+          </div>
+          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
             <Button
               type="button"
               variant="outline"

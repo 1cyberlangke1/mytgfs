@@ -322,81 +322,85 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                       )}
                     </div>
 
-                    {/* Right/Bottom: Structured Metadata & Primary Actions */}
-                    <div className="lg:col-span-4 p-6 flex flex-col justify-between space-y-6">
-                      <div className="space-y-4">
-                        {file.thumbnailUrl && !imgFailed && (
-                          <div>
-                            <span className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
-                              {t.files.detailThumbnail}
-                            </span>
-                            <img
-                              src={file.thumbnailUrl}
-                              alt={`${file.name} thumbnail`}
-                              referrerPolicy="no-referrer"
-                              onError={() => setImgFailed(true)}
-                              className="w-24 h-16 object-cover rounded-lg border border-slate-200 dark:border-slate-800"
-                            />
-                          </div>
-                        )}
-
-                        <dl className="space-y-3 text-xs">
-                          <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
-                            <dt className="text-slate-500 dark:text-slate-400">
-                              {t.files.detailCategory}
-                            </dt>
-                            <dd className="font-mono text-slate-900 dark:text-slate-100">
-                              {t.categories[file.category] || file.category}
-                            </dd>
-                          </div>
-                          <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
-                            <dt className="text-slate-500 dark:text-slate-400">
-                              {t.files.detailSize}
-                            </dt>
-                            <dd
-                              dir="ltr"
-                              className="font-mono tabular-nums text-slate-900 dark:text-slate-100 text-end"
-                            >
-                              {formatBytes(file.size, 2, locale)} ({formatNumber(file.size, locale)} B)
-                            </dd>
-                          </div>
-                          <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
-                            <dt className="text-slate-500 dark:text-slate-400">
-                              {t.files.detailUpdated}
-                            </dt>
-                            <dd className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                              {formatDateTime(file.updatedAt, locale)}
-                            </dd>
-                          </div>
-                          <div className="py-2">
-                            <dt className="text-slate-500 dark:text-slate-400 mb-1">
-                              {t.files.detailPath}
-                            </dt>
-                            <dd
-                              dir="ltr"
-                              className="font-mono text-[11px] text-slate-800 dark:text-slate-200 break-all bg-slate-100 dark:bg-slate-800/70 px-2.5 py-1.5 rounded-md text-left"
-                            >
-                              {fullPath}
-                            </dd>
-                          </div>
-                        </dl>
-                      </div>
-
-                      {!file.isDir && canDownload && (
-                        <div className="space-y-2.5 pt-4 border-t border-slate-200 dark:border-slate-800">
-                          <Button
-                            type="button"
-                            variant="accent"
-                            size="lg"
-                            onClick={() => onDownload(file)}
-                            className="w-full"
-                          >
-                            <Download className="w-4 h-4" />
-                            <span>{actionLabel ?? t.files.actionDownload}</span>
-                          </Button>
+                    {/* Right/Bottom: Structured Metadata */}
+                    <div className="lg:col-span-4 p-6 flex flex-col space-y-4">
+                      {file.thumbnailUrl && !imgFailed && (
+                        <div>
+                          <span className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
+                            {t.files.detailThumbnail}
+                          </span>
+                          <img
+                            src={file.thumbnailUrl}
+                            alt={`${file.name} thumbnail`}
+                            referrerPolicy="no-referrer"
+                            onError={() => setImgFailed(true)}
+                            className="w-24 h-16 object-cover rounded-lg border border-slate-200 dark:border-slate-800"
+                          />
                         </div>
                       )}
+
+                      <dl className="space-y-3 text-xs">
+                        <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
+                          <dt className="text-slate-500 dark:text-slate-400">
+                            {t.files.detailCategory}
+                          </dt>
+                          <dd className="font-mono text-slate-900 dark:text-slate-100">
+                            {t.categories[file.category] || file.category}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
+                          <dt className="text-slate-500 dark:text-slate-400">
+                            {t.files.detailSize}
+                          </dt>
+                          <dd
+                            dir="ltr"
+                            className="font-mono tabular-nums text-slate-900 dark:text-slate-100 text-end"
+                          >
+                            {formatBytes(file.size, 2, locale)} ({formatNumber(file.size, locale)} B)
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2 py-2 border-b border-slate-100 dark:border-slate-800/80">
+                          <dt className="text-slate-500 dark:text-slate-400">
+                            {t.files.detailUpdated}
+                          </dt>
+                          <dd className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
+                            {formatDateTime(file.updatedAt, locale)}
+                          </dd>
+                        </div>
+                        <div className="py-2">
+                          <dt className="text-slate-500 dark:text-slate-400 mb-1">
+                            {t.files.detailPath}
+                          </dt>
+                          <dd
+                            dir="ltr"
+                            className="font-mono text-[11px] text-slate-800 dark:text-slate-200 break-all bg-slate-100 dark:bg-slate-800/70 px-2.5 py-1.5 rounded-md text-left"
+                          >
+                            {fullPath}
+                          </dd>
+                        </div>
+                      </dl>
                     </div>
+                  </div>
+
+                  {/* 底部固定操作栏：多端统一吸底，避免长内容或移动端键盘把主操作挤出视口 */}
+                  <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-slate-200/80 dark:border-slate-800/80 flex items-center justify-end gap-2 bg-slate-50/50 dark:bg-slate-900/50">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={onClose}
+                    >
+                      {t.files.closeDetail}
+                    </Button>
+                    {!file.isDir && canDownload && (
+                      <Button
+                        type="button"
+                        variant="accent"
+                        onClick={() => onDownload(file)}
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{actionLabel ?? t.files.actionDownload}</span>
+                      </Button>
+                    )}
                   </div>
                 </>
               );
