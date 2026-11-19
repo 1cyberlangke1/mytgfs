@@ -98,6 +98,16 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+      - name: 死代码检查 (deadcode)
+        if: runner.os == 'Linux'
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.52.0
+          out=$(deadcode -test ./...)
+          if [ -n "$out" ]; then
+            echo "❌ 发现不可达死代码："
+            echo "$out"
+            exit 1
+          fi
       # Linux 额外开竞态检测与覆盖率；Windows/macOS 跑普通测试覆盖平台分支。
       - name: 测试（竞态 + 覆盖率）
         if: runner.os == 'Linux'
