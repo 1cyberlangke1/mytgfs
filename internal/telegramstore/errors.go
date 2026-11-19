@@ -85,6 +85,7 @@ func IsChannelGone(err error) bool {
 	}
 	return goneErrors[e.Type]
 }
+
 // IsChannelUnavailable 判断错误是否表示频道侧不可用。
 //
 // 输入：任意 error
