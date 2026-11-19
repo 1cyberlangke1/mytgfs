@@ -19,7 +19,9 @@ param(
     [string]$Proxy = '',
     [switch]$NoGradle,
     # e2e 包：编译期挂假数据层，供 CI 里的模拟器跑键盘用例
-    [switch]$E2E
+    [switch]$E2E,
+    # CI 里前端已由 frontend job 产出：跳过 npm build，直接嵌入 internal/web/dist
+    [switch]$SkipWebBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,16 +38,23 @@ if (-not $version) { $version = 'dev' }
 $version = $version.Trim() -replace '^v', ''
 
 # 前端产物：Go 侧 embed internal/web/dist，先重建成最新再编 .so
-Push-Location (Join-Path $root 'web')
-npm run build
-if ($LASTEXITCODE -ne 0) {
-    Pop-Location
-    throw '前端构建失败: npm run build'
-}
-Pop-Location
 $embedDist = Join-Path $root 'internal\web\dist'
-if (Test-Path $embedDist) { Remove-Item -Recurse -Force $embedDist }
-Copy-Item -Recurse (Join-Path $root 'web\dist') $embedDist
+if ($SkipWebBuild) {
+    # CI 已经把产物放进 embed 目录：再构建一次就是重复工作
+    if (-not (Test-Path (Join-Path $embedDist 'index.html'))) {
+        throw '前端产物不存在：-SkipWebBuild 需要先把 web-dist 放到 internal/web/dist'
+    }
+} else {
+    Push-Location (Join-Path $root 'web')
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw '前端构建失败: npm run build'
+    }
+    Pop-Location
+    if (Test-Path $embedDist) { Remove-Item -Recurse -Force $embedDist }
+    Copy-Item -Recurse (Join-Path $root 'web\dist') $embedDist
+}
 
 $sdk = $env:ANDROID_HOME
 if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }

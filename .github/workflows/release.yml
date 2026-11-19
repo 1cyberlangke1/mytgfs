@@ -41,24 +41,28 @@ jobs:
           echo "跟踪 CI run $run_id"
           gh run watch "$run_id" --repo "$REPO" --exit-status --interval 20
 
-  # 前端产物：不再复用 CI 工作流，这里产一份给 build 矩阵嵌入（dist 不入库）。
-  # 只构建一次，三个平台共享；lint/单测已由 gate 等待的那次 CI 覆盖。
+  # 前端产物：直接取同一提交那次的 CI 产物，不再重跑 npm ci + vite build；
+  # lint/单测也由 gate 等待的那次 CI 覆盖，这里重复跑只是浪费。
   frontend:
     needs: gate
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-      - name: 安装前端依赖
-        working-directory: web
-        run: npm ci --no-audit --no-fund
-      - name: 构建前端
-        working-directory: web
-        run: npm run build
+      - name: 从 CI 运行里取前端产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20" \
+            | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty')
+          if [ -z "$run_id" ]; then
+            echo "提交 $SHA 没有 CI 运行记录，拿不到前端产物" >&2
+            exit 1
+          fi
+          rm -rf web/dist
+          gh run download "$run_id" --repo "$REPO" -n web-dist -D web/dist
       - name: 上传前端产物
         uses: actions/upload-artifact@v7
         with:
@@ -88,6 +92,7 @@ jobs:
             gui: ''
             archive: tar.gz
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       # 前端产物由 ci 的 frontend job 构建并上传，这里直接复用，
@@ -119,11 +124,26 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
       # Wails v3 桌面壳在 Linux 走 cgo + GTK4/WebKitGTK 6.0，缺开发包会导致 pkg-config 失败
+      # 与 ci.yml 一致：缓存 deb 文件，安装交给 apt-get 真正执行
+      - name: 恢复 apt 下载缓存
+        if: runner.os == 'Linux'
+        uses: actions/cache@v6
+        with:
+          path: ~/apt-archives
+          key: apt-deb-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-deb-${{ runner.os }}-
       - name: 安装 Linux 桌面依赖
         if: runner.os == 'Linux'
         run: |
+          set -euo pipefail
+          mkdir -p "$HOME/apt-archives"
+          sudo chmod 777 "$HOME/apt-archives"
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+          sudo apt-get install -y --no-install-recommends \
+            -o Dir::Cache::Archives="$HOME/apt-archives" \
+            libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+          sudo ldconfig
       - name: 构建
         shell: bash
         run: |
@@ -177,6 +197,7 @@ jobs:
     name: android (ubuntu-24.04, arm64-v8a, apk)
     needs: gate
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/release.jks
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -189,19 +210,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       - uses: gradle/actions/setup-gradle@v4
-      - name: 安装前端依赖
-        working-directory: web
-        run: npm ci --no-audit --no-fund
+      # 前端直接用 CI 那次的产物，不再 npm ci + vite build
+      - name: 下载前端产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20" \
+            | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty')
+          if [ -z "$run_id" ]; then
+            echo "提交 $SHA 没有 CI 运行记录，拿不到前端产物" >&2
+            exit 1
+          fi
+          rm -rf internal/web/dist
+          gh run download "$run_id" --repo "$REPO" -n web-dist -D internal/web/dist
       # NDK 解压后有 2 GB 多，命中缓存就跳过下载安装
       - name: 恢复 Android NDK
         id: ndk
@@ -226,7 +255,7 @@ jobs:
           printf '%s\n' "$KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE_FILE"
           test -s "$ANDROID_KEYSTORE_FILE"
       - name: 构建 arm64 正式包
-        run: pwsh -NoProfile -File build-android.ps1 -Abi arm64-v8a -Task assembleRelease
+        run: pwsh -NoProfile -File build-android.ps1 -Abi arm64-v8a -Task assembleRelease -SkipWebBuild
       - name: 上传 APK
         uses: actions/upload-artifact@v7
         with:
@@ -237,6 +266,7 @@ jobs:
   publish:
     needs: [build, android]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       # 只取发布包：本工作流的 frontend job 也会上传 web-dist，全下会把
       # index.html 一起传进 Release。
