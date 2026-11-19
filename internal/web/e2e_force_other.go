@@ -8,4 +8,3 @@ package web
 // 输出：false
 // 预期：其它平台只看 MYTGFS_E2E_MOCK 环境变量
 func forcedE2E() bool { return false }
-
