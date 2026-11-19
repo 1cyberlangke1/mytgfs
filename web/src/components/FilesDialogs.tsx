@@ -52,6 +52,7 @@ interface FilesDialogsProps {
 
   showCreateVolume: boolean;
   setShowCreateVolume: (open: boolean) => void;
+  canAttachVolume: boolean;
   newVolume: { name: string; title: string };
   setNewVolume: React.Dispatch<React.SetStateAction<{ name: string; title: string }>>;
   volumeFormError: string;
@@ -122,6 +123,7 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
   confirmDelete,
   showCreateVolume,
   setShowCreateVolume,
+  canAttachVolume,
   newVolume,
   setNewVolume,
   volumeFormError,
@@ -383,245 +385,264 @@ export const FilesDialogs: React.FC<FilesDialogsProps> = ({
       </Modal>
     )}
 
-    {showCreateVolume && (
-      <Modal
-        onClose={() => setShowCreateVolume(false)}
-        labelledBy="modal-create-volume-title"
-        panelClassName="w-full max-w-md"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const name = newVolume.name.trim();
-            if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
-              setVolumeFormError(t.volume.invalidName);
-              return;
-            }
-            onCreateVolume(name, newVolume.title.trim());
-            setShowCreateVolume(false);
-          }}
-          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
-        >
-          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-1">
-            <h3
-              id="modal-create-volume-title"
-              className="text-base font-semibold text-zinc-950 dark:text-white"
-            >
-              {t.volume.createTitle}
-            </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.volume.createDesc}</p>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
-            <div className="space-y-1.5">
-              <label htmlFor="volume-name" className="block text-xs font-medium">
-                {t.volume.nameLabel}
-              </label>
-              <Input
-                id="volume-name"
-                required
-                autoFocus
-                dir="ltr"
-                pattern="[A-Za-z0-9_-]{1,32}"
-                aria-invalid={volumeFormError ? true : undefined}
-                aria-describedby="volume-name-hint"
-                value={newVolume.name}
-                onChange={(e) => {
-                  setVolumeFormError('');
-                  setNewVolume((v) => ({ ...v, name: e.target.value }));
-                }}
-              />
-              <p id="volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                {t.volume.nameHint}
+    {(showCreateVolume || showAttachVolume) && (() => {
+      const isCreate = showCreateVolume;
+      const closeAll = () => {
+        setShowCreateVolume(false);
+        setShowAttachVolume(false);
+      };
+      return (
+        <Modal onClose={closeAll} labelledBy="modal-volume-title" panelClassName="w-full max-w-md">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (isCreate) {
+                const name = newVolume.name.trim();
+                if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+                  setVolumeFormError(t.volume.invalidName);
+                  return;
+                }
+                onCreateVolume(name, newVolume.title.trim());
+              } else {
+                const name = attachForm.name.trim();
+                const id = Number(attachForm.chatId.trim());
+                if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+                  setAttachFormError(t.volume.invalidName);
+                  return;
+                }
+                if (!Number.isInteger(id) || id === 0) {
+                  setAttachFormError(t.volume.chatIdInvalid);
+                  return;
+                }
+                onAttachVolume(name, id);
+              }
+              closeAll();
+            }}
+            className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
+          >
+            <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-1">
+              <h3
+                id="modal-volume-title"
+                className="text-base font-semibold text-zinc-950 dark:text-white"
+              >
+                {isCreate ? t.volume.createTitle : t.volume.attachTitle}
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {isCreate ? t.volume.createDesc : t.volume.attachDesc}
               </p>
-              {volumeFormError && (
-                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
-                  {volumeFormError}
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="volume-title" className="block text-xs font-medium">
-                {t.volume.titleLabel}
-              </label>
-              <Input
-                id="volume-title"
-                value={newVolume.title}
-                onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
-              />
-            </div>
-          </div>
-          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
-            <Button type="button" variant="outline" onClick={() => setShowCreateVolume(false)}>
-              {t.files.cancel}
-            </Button>
-            <Button type="submit" variant="accent">
-              {t.volume.createConfirm}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-    )}
-
-    {showAttachVolume && (
-      <Modal
-        onClose={() => setShowAttachVolume(false)}
-        labelledBy="modal-attach-volume-title"
-        panelClassName="w-full max-w-md"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const name = attachForm.name.trim();
-            const id = Number(attachForm.chatId.trim());
-            if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
-              setAttachFormError(t.volume.invalidName);
-              return;
-            }
-            if (!Number.isInteger(id) || id === 0) {
-              setAttachFormError(t.volume.chatIdInvalid);
-              return;
-            }
-            onAttachVolume(name, id);
-            setShowAttachVolume(false);
-          }}
-          className="w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden"
-        >
-          <div className="p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60 space-y-1">
-            <h3
-              id="modal-attach-volume-title"
-              className="text-base font-semibold text-zinc-950 dark:text-white"
-            >
-              {t.volume.attachTitle}
-            </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{t.volume.attachDesc}</p>
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
-            {canListChannels && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium">{t.volume.pickChannel}</span>
-                  <Button
+              {/* 二选一：新建频道 / 添加已有频道，同一弹窗内切换 */}
+              <div role="tablist" aria-label={t.volume.createTitle} className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isCreate}
+                  onClick={() => {
+                    setNewVolume({ name: '', title: '' });
+                    setVolumeFormError('');
+                    setShowAttachVolume(false);
+                    setShowCreateVolume(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    isCreate
+                      ? 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800/60'
+                  }`}
+                >
+                  {t.volume.createBtn}
+                </button>
+                {canAttachVolume && (
+                  <button
                     type="button"
-                    variant="outline"
-                    onClick={loadChannels}
-                    disabled={channelsState === 'loading'}
+                    role="tab"
+                    aria-selected={!isCreate}
+                    onClick={() => {
+                      setAttachForm({ name: '', chatId: '' });
+                      setAttachFormError('');
+                      setShowCreateVolume(false);
+                      setShowAttachVolume(true);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      !isCreate
+                        ? 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300'
+                        : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800/60'
+                    }`}
                   >
-                    {channelsState === 'loading' ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <List className="w-3.5 h-3.5" />
-                    )}
-                    <span>{t.volume.loadChannels}</span>
-                  </Button>
-                </div>
-                {channelsState === 'error' && (
-                  <p className="text-[11px] text-rose-500 break-words">
-                    {t.volume.channelsFailed}: {channelsError}
-                  </p>
-                )}
-                {channelsState === 'ready' && channels.length === 0 && (
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                    {t.volume.channelsEmpty}
-                  </p>
-                )}
-                {channels.length > 0 && (
-                  <div
-                    className="max-h-40 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800 custom-scrollbar"
-                    role="listbox"
-                    aria-label={t.volume.pickChannel}
-                  >
-                    {channels.map((ch) => (
-                      <button
-                        key={ch.id}
-                        type="button"
-                        role="option"
-                        aria-selected={String(ch.chat_id) === attachForm.chatId}
-                        onClick={() => pickChannel(ch)}
-                        className={`w-full text-left px-3 py-2 transition-colors ${
-                          String(ch.chat_id) === attachForm.chatId
-                            ? 'bg-sky-50 dark:bg-sky-500/10'
-                            : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
-                        }`}
-                      >
-                        <span className="block text-xs font-medium truncate text-zinc-900 dark:text-zinc-100">
-                          {ch.title || ch.username || String(ch.id)}
-                        </span>
-                        <span
-                          className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
-                          dir="ltr"
-                        >
-                          {ch.chat_id}
-                          {ch.username ? ` · @${ch.username}` : ''}
-                          {ch.creator ? ' · owner' : ch.admin ? ' · admin' : ''}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                    {t.volume.attachBtn}
+                  </button>
                 )}
               </div>
-            )}
-
-            <div className="space-y-1.5">
-              <label htmlFor="attach-volume-name" className="block text-xs font-medium">
-                {t.volume.nameLabel}
-              </label>
-              <Input
-                id="attach-volume-name"
-                required
-                autoFocus
-                dir="ltr"
-                pattern="[A-Za-z0-9_-]{1,32}"
-                aria-invalid={attachFormError ? true : undefined}
-                aria-describedby="attach-volume-name-hint"
-                value={attachForm.name}
-                onChange={(e) => {
-                  setAttachFormError('');
-                  setAttachForm((v) => ({ ...v, name: e.target.value }));
-                }}
-              />
-              <p id="attach-volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                {t.volume.nameHint}
-              </p>
             </div>
-            <div className="space-y-1.5">
-              <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
-                {t.volume.chatIdLabel}
-              </label>
-              <Input
-                id="attach-volume-chat"
-                required
-                dir="ltr"
-                inputMode="numeric"
-                aria-invalid={attachFormError ? true : undefined}
-                aria-describedby="attach-volume-chat-hint"
-                value={attachForm.chatId}
-                onChange={(e) => {
-                  setAttachFormError('');
-                  setAttachForm((v) => ({ ...v, chatId: e.target.value }));
-                }}
-              />
-              <p id="attach-volume-chat-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                {t.volume.chatIdHint}
-              </p>
-              {attachFormError && (
-                <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
-                  {attachFormError}
-                </p>
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-4 overscroll-contain">
+              {isCreate ? (
+                <>
+                  <div className="space-y-1.5">
+                    <label htmlFor="volume-name" className="block text-xs font-medium">
+                      {t.volume.nameLabel}
+                    </label>
+                    <Input
+                      id="volume-name"
+                      required
+                      autoFocus
+                      dir="ltr"
+                      pattern="[A-Za-z0-9_-]{1,32}"
+                      aria-invalid={volumeFormError ? true : undefined}
+                      aria-describedby="volume-name-hint"
+                      value={newVolume.name}
+                      onChange={(e) => {
+                        setVolumeFormError('');
+                        setNewVolume((v) => ({ ...v, name: e.target.value }));
+                      }}
+                    />
+                    <p id="volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      {t.volume.nameHint}
+                    </p>
+                    {volumeFormError && (
+                      <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                        {volumeFormError}
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="volume-title" className="block text-xs font-medium">
+                      {t.volume.titleLabel}
+                    </label>
+                    <Input
+                      id="volume-title"
+                      value={newVolume.title}
+                      onChange={(e) => setNewVolume((v) => ({ ...v, title: e.target.value }))}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  {canListChannels && (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-medium">{t.volume.pickChannel}</span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={loadChannels}
+                          disabled={channelsState === 'loading'}
+                        >
+                          {channelsState === 'loading' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <List className="w-3.5 h-3.5" />
+                          )}
+                          <span>{t.volume.loadChannels}</span>
+                        </Button>
+                      </div>
+                      {channelsState === 'error' && (
+                        <p className="text-[11px] text-rose-500 break-words">
+                          {t.volume.channelsFailed}: {channelsError}
+                        </p>
+                      )}
+                      {channelsState === 'ready' && channels.length === 0 && (
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          {t.volume.channelsEmpty}
+                        </p>
+                      )}
+                      {channels.length > 0 && (
+                        <div
+                          className="max-h-40 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-200 dark:divide-zinc-800 custom-scrollbar"
+                          role="listbox"
+                          aria-label={t.volume.pickChannel}
+                        >
+                          {channels.map((ch) => (
+                            <button
+                              key={ch.id}
+                              type="button"
+                              role="option"
+                              aria-selected={String(ch.chat_id) === attachForm.chatId}
+                              onClick={() => pickChannel(ch)}
+                              className={`w-full text-left px-3 py-2 transition-colors ${
+                                String(ch.chat_id) === attachForm.chatId
+                                  ? 'bg-sky-50 dark:bg-sky-500/10'
+                                  : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
+                              }`}
+                            >
+                              <span className="block text-xs font-medium truncate text-zinc-900 dark:text-zinc-100">
+                                {ch.title || ch.username || String(ch.id)}
+                              </span>
+                              <span
+                                className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
+                                dir="ltr"
+                              >
+                                {ch.chat_id}
+                                {ch.username ? ` · @${ch.username}` : ''}
+                                {ch.creator ? ' · owner' : ch.admin ? ' · admin' : ''}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="attach-volume-name" className="block text-xs font-medium">
+                      {t.volume.nameLabel}
+                    </label>
+                    <Input
+                      id="attach-volume-name"
+                      required
+                      autoFocus
+                      dir="ltr"
+                      pattern="[A-Za-z0-9_-]{1,32}"
+                      aria-invalid={attachFormError ? true : undefined}
+                      aria-describedby="attach-volume-name-hint"
+                      value={attachForm.name}
+                      onChange={(e) => {
+                        setAttachFormError('');
+                        setAttachForm((v) => ({ ...v, name: e.target.value }));
+                      }}
+                    />
+                    <p id="attach-volume-name-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      {t.volume.nameHint}
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="attach-volume-chat" className="block text-xs font-medium">
+                      {t.volume.chatIdLabel}
+                    </label>
+                    <Input
+                      id="attach-volume-chat"
+                      required
+                      dir="ltr"
+                      inputMode="numeric"
+                      aria-invalid={attachFormError ? true : undefined}
+                      aria-describedby="attach-volume-chat-hint"
+                      value={attachForm.chatId}
+                      onChange={(e) => {
+                        setAttachFormError('');
+                        setAttachForm((v) => ({ ...v, chatId: e.target.value }));
+                      }}
+                    />
+                    <p id="attach-volume-chat-hint" className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      {t.volume.chatIdHint}
+                    </p>
+                    {attachFormError && (
+                      <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                        {attachFormError}
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
             </div>
-          </div>
-          <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
-            <Button type="button" variant="outline" onClick={() => setShowAttachVolume(false)}>
-              {t.files.cancel}
-            </Button>
-            <Button type="submit" variant="accent">
-              {t.volume.attachConfirm}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-    )}
+            <div className="p-4 sm:p-5 pt-3 shrink-0 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-end gap-2 bg-zinc-50/50 dark:bg-zinc-900/50">
+              <Button type="button" variant="outline" onClick={closeAll}>
+                {t.files.cancel}
+              </Button>
+              <Button type="submit" variant="accent">
+                {isCreate ? t.volume.createConfirm : t.volume.attachConfirm}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      );
+    })()}
 
     {showDeleteVolume && currentVolume && (
       <Modal

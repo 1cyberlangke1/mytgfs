@@ -12,7 +12,6 @@ import {
   FolderPlus,
   HardDrive,
   LayoutGrid,
-  Link2,
   List,
   Pencil,
   Plus,
@@ -791,24 +790,6 @@ export const FilesView: React.FC<FilesViewProps> = ({
           </Button>
         )}
 
-        {canAttachVolume && (
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setAttachForm({ name: '', chatId: '' });
-              setAttachFormError('');
-              setChannels([]);
-              setChannelsState('idle');
-              setChannelsError('');
-              setShowAttachVolume(true);
-            }}
-          >
-            <Link2 className="w-3.5 h-3.5" />
-            <span>{t.volume.attachBtn}</span>
-          </Button>
-        )}
-
         {canDeleteVolume && currentVolume && (
           <Button
             type="button"
@@ -1494,6 +1475,7 @@ export const FilesView: React.FC<FilesViewProps> = ({
         setDeleteConfirmIds={setDeleteConfirmIds}
         confirmDelete={confirmDelete}
         showCreateVolume={showCreateVolume}
+        canAttachVolume={canAttachVolume}
         setShowCreateVolume={setShowCreateVolume}
         newVolume={newVolume}
         setNewVolume={setNewVolume}
