@@ -7,7 +7,7 @@
 // 预期：视频/音频永远走 Range 不受 32MB 约束，弹窗底部操作栏固定吸底，避免长内容挤出视口。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { FileItem } from '../types';
 import { DICTIONARY } from '../utils/i18n';
 import { FilePreviewModal, inlinePreviewBlocked } from './FilePreviewModal';
@@ -103,20 +103,26 @@ describe('FilePreviewModal 底部固定操作栏', () => {
     });
     expect(downloadBtn).toBeTruthy();
 
-    const closeBtn = screen.getByRole('button', {
-      name: DICTIONARY.zh!.files.closeDetail,
-    });
-    expect(closeBtn).toBeTruthy();
-
     // 底部操作栏具有 shrink-0 与 border-t，保证吸底固定
     const footer = downloadBtn.closest('div');
     expect(footer?.className).toContain('shrink-0');
     expect(footer?.className).toContain('border-t');
 
+    // 弹窗同时具有顶栏 X 按钮与底栏「关闭」按钮
+    const closeButtons = screen.getAllByRole('button', {
+      name: DICTIONARY.zh!.files.closeDetail,
+    });
+    expect(closeButtons.length).toBe(2);
+
+    const footerCloseBtn = within(footer!).getByRole('button', {
+      name: DICTIONARY.zh!.files.closeDetail,
+    });
+    expect(footerCloseBtn).toBeTruthy();
+
     fireEvent.click(downloadBtn);
     expect(onDownload).toHaveBeenCalledWith(file);
 
-    fireEvent.click(closeBtn);
+    fireEvent.click(footerCloseBtn);
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -159,8 +165,9 @@ describe('FilePreviewModal 底部固定操作栏', () => {
     expect(
       screen.queryByRole('button', { name: DICTIONARY.zh!.files.actionDownload })
     ).toBeNull();
-    expect(
-      screen.getByRole('button', { name: DICTIONARY.zh!.files.closeDetail })
-    ).toBeTruthy();
+    const closeButtons = screen.getAllByRole('button', {
+      name: DICTIONARY.zh!.files.closeDetail,
+    });
+    expect(closeButtons.length).toBe(2);
   });
 });
