@@ -27,6 +27,8 @@ var (
 	ErrNoMessage = errors.New(i18n.T("err.no_message"))
 	// ErrBadRange 表示读取区间越界。
 	ErrBadRange = errors.New(i18n.T("err.bad_range"))
+	// ErrOffline 表示卷已按本地索引挂起，但还没接上 Telegram。
+	ErrOffline = errors.New(i18n.T("err.not_connected"))
 )
 
 // channelErrors 把「频道这一侧不可用」的 RPC 错误映射到 i18n key。
@@ -60,6 +62,29 @@ var messageGoneErrors = map[string]bool{
 	"CHANNEL_MESSAGE_ID_INVALID": true,
 }
 
+// goneErrors 是「频道已经不可用」的错误集合：被删、被踢、已迁移。
+//
+// 与 channelErrors 里那些可修复的权限问题分开：权限不足还能改设置救回来，
+// 这些错误重试不会好转，上层应把卷从列表里摘掉而不是一直失败。
+var goneErrors = map[string]bool{
+	"CHANNEL_INVALID":      true,
+	"CHANNEL_PRIVATE":      true,
+	"CHANNEL_INACCESSIBLE": true,
+	"PEER_ID_INVALID":      true,
+}
+
+// IsChannelGone 判断错误是否表示频道已经不可用。
+//
+// 输入：任意 error（可带包裹）
+// 输出：true 表示该卷无法再同步，应停止使用
+// 预期：只认 RPC 错误类型，不匹配错误文本
+func IsChannelGone(err error) bool {
+	e, ok := errors.AsType[*tgerr.Error](err)
+	if !ok {
+		return false
+	}
+	return goneErrors[e.Type]
+}
 // IsChannelUnavailable 判断错误是否表示频道侧不可用。
 //
 // 输入：任意 error

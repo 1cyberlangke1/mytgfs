@@ -1,12 +1,13 @@
 import React from 'react';
 import { LayoutGroup, motion } from 'motion/react';
 import { Globe } from 'lucide-react';
-import type { Locale, NavTab } from '../types';
+import type { ConnectionStatus, Locale, NavTab } from '../types';
 import { formatBytes } from '../utils/fsLogic';
 import { formatNumber } from '../utils/i18n';
 import { LOCALE_OPTIONS, Translations } from '../utils/i18n';
 import { BrandEmblemSvg } from './VisualAssets';
-import { Button, IOS_BOUNCE_SPRING, IOS_SPRING, Select } from './ui';
+import { Button, cn, IOS_BOUNCE_SPRING, IOS_SPRING, Select } from './ui';
+import { connectionVisual, TONE_ICON, TONE_PILL } from './connectionStatus';
 import { runViewTransition } from '../utils/viewTransition';
 import type { NavItem } from './AppSidebar';
 
@@ -16,6 +17,8 @@ interface PhoneTopBarProps {
   setLocale: (locale: Locale) => void;
   totalBytes: number;
   setActiveTab: (tab: NavTab) => void;
+  /** Telegram 连接状态：手机上侧栏被隐藏，只能靠顶栏展示 */
+  connectionStatus: ConnectionStatus;
   themeNext: 'light' | 'dark' | 'system';
   themeLabel: string;
   themeIconClass: string;
@@ -23,9 +26,9 @@ interface PhoneTopBarProps {
   setTheme: (mode: 'light' | 'dark' | 'system') => void;
 }
 
-// PhoneTopBar 是手机宽度的顶栏：品牌 + 总占用 + 语言/主题。
+// PhoneTopBar 是手机宽度的顶栏：品牌 + 连接状态 + 语言/主题。
 //
-// 输入：当前语言、主题与总占用
+// 输入：当前语言、主题、总占用与 TG 连接状态
 // 输出：<header>（md 以上隐藏）
 // 预期：只负责展示与回调，不持有状态
 export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
@@ -34,12 +37,15 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
   setLocale,
   totalBytes,
   setActiveTab,
+  connectionStatus,
   themeNext,
   themeLabel,
   themeIconClass,
   ThemeIcon,
   setTheme,
-}) => (
+}) => {
+  const { Icon, tone, spinning } = connectionVisual(connectionStatus);
+  return (
   <header className="md:hidden sticky top-0 z-30 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white/85 dark:bg-[#0C0E14]/85 backdrop-blur-xl px-3.5 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
     <div className="flex items-center justify-between gap-2">
       <motion.a
@@ -65,6 +71,27 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
           </div>
         </div>
       </motion.a>
+
+      {/* 连接状态紧贴品牌右侧：中间空白正好放它，异常时颜色与文案一起变 */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label={`${t.connection.label}: ${t.connection[connectionStatus]}`}
+        className={cn(
+          'ms-2 flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-[3px] text-[11px] leading-none',
+          TONE_PILL[tone]
+        )}
+      >
+        <Icon
+          className={cn('w-3.5 h-3.5 shrink-0', TONE_ICON[tone], spinning && 'animate-spin')}
+          aria-hidden="true"
+        />
+        <span className="truncate max-[359px]:hidden">
+          {t.connection[connectionStatus]}
+        </span>
+      </div>
+
+      <div className="flex-1" />
 
       <div className="flex items-center gap-1.5 min-w-0">
         <div className="relative flex items-center">
@@ -99,7 +126,8 @@ export const PhoneTopBar: React.FC<PhoneTopBarProps> = ({
       </div>
     </div>
   </header>
-);
+  );
+};
 
 interface PhoneTabBarProps {
   t: Translations;

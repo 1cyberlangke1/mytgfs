@@ -76,7 +76,7 @@ func TestAutoSyncAppliesAndNotifies(t *testing.T) {
 			case notified <- struct{}{}:
 			default:
 			}
-		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil)
+		}, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil, nil)
 	}()
 
 	select {
@@ -142,7 +142,7 @@ func TestAutoSyncInvalidatesCoverOnPtsMove(t *testing.T) {
 		case hooked <- struct{}{}:
 		default:
 		}
-	})
+	}, nil)
 
 	deadline := time.After(3 * time.Second)
 	sawEmpty, sawHook := false, false
@@ -170,7 +170,7 @@ func TestAutoSyncNilNotify(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		AutoSyncWhile(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil)
+		AutoSyncWhile(ctx, nil, idx, &fakeDiffer{}, fakeNodes{}, 20*time.Millisecond, nil, nil, nil, nil)
 	}()
 	time.Sleep(60 * time.Millisecond)
 	cancel()
@@ -187,7 +187,7 @@ func TestAutoSyncWhileHonorsSwitch(t *testing.T) {
 	ctx := t.Context()
 	var on atomic.Bool
 	d := &fakeDiffer{}
-	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, on.Load, nil)
+	go AutoSyncWhile(ctx, nil, idx, d, fakeNodes{}, 20*time.Millisecond, nil, on.Load, nil, nil)
 
 	time.Sleep(60 * time.Millisecond)
 	d.mu.Lock()

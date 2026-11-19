@@ -96,7 +96,7 @@ func (h *TelegramHistory) channel(ctx context.Context) (*tg.Channel, error) {
 			return ch, nil
 		}
 	}
-	return nil, fmt.Errorf(i18n.T("err.channel_unavailable"), h.ChannelID)
+	return nil, ChannelUnavailableError{ChannelID: h.ChannelID}
 }
 
 // historyMessages 摊平三种返回形态。

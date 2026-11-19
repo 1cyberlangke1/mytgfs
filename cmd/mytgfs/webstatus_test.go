@@ -29,13 +29,13 @@ func TestWebStatusSummarizesVolumes(t *testing.T) {
 
 	vols := []*webVolume{{vf: &app.VolumeFS{Name: "demo", Index: idx}}}
 
-	got := webStatus(ctx, vols)
+	got := webStatus(ctx, vols, "online")
 	m, ok := got.(map[string]any)
 	if !ok {
 		t.Fatalf("返回类型 = %T", got)
 	}
-	if m["state_code"] != "local" {
-		t.Errorf("state_code = %v，期望 local", m["state_code"])
+	if m["state_code"] != "online" {
+		t.Errorf("state_code = %v，期望 online", m["state_code"])
 	}
 	list, ok := m["volumes"].([]map[string]any)
 	if !ok || len(list) != 1 {
@@ -60,7 +60,7 @@ func TestWebStatusFollowsRegistryOrder(t *testing.T) {
 		{vf: &app.VolumeFS{Name: "demo", Index: idx}},
 		{vf: &app.VolumeFS{Name: "demo2", Index: idx}},
 	}
-	got := webStatus(ctx, vols)
+	got := webStatus(ctx, vols, "online")
 	list := got.(map[string]any)["volumes"].([]map[string]any)
 	if len(list) != 2 || list[0]["name"] != "demo" || list[1]["name"] != "demo2" {
 		t.Fatalf("volumes 顺序错误: %#v", list)
@@ -79,16 +79,30 @@ func TestWebStatusReportsIndexError(t *testing.T) {
 	}
 
 	vols := []*webVolume{{vf: &app.VolumeFS{Name: "demo", Index: idx}}}
-	got := webStatus(ctx, vols)
+	got := webStatus(ctx, vols, "online")
 	list := got.(map[string]any)["volumes"].([]map[string]any)
 	if len(list) != 1 || list[0]["error"] == nil {
 		t.Fatalf("期望带 error 的卷记录，得到 %#v", list)
 	}
 }
 
+// TestWebStatusKeepsConnectionCode 连接状态码原样透出。
+//
+// 输入：connecting / reconnecting / auth_lost
+// 输出：state_code 与输入一致
+// 预期：本地索引可用不等于 TG 已连接，面板必须看到真实连接状态
+func TestWebStatusKeepsConnectionCode(t *testing.T) {
+	for _, code := range []string{"connecting", "reconnecting", "auth_lost"} {
+		m := webStatus(t.Context(), nil, code).(map[string]any)
+		if m["state_code"] != code {
+			t.Errorf("state_code = %v, want %s", m["state_code"], code)
+		}
+	}
+}
+
 // TestWebStatusEmpty 没有任何卷时返回空列表而不是 nil。
 func TestWebStatusEmpty(t *testing.T) {
-	got := webStatus(t.Context(), nil)
+	got := webStatus(t.Context(), nil, "connecting")
 	m := got.(map[string]any)
 	list, ok := m["volumes"].([]map[string]any)
 	if !ok || len(list) != 0 {

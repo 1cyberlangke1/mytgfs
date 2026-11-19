@@ -13,9 +13,19 @@ import (
 	"mytgfs/internal/logging"
 	"mytgfs/internal/push"
 	tgsync "mytgfs/internal/sync"
+	"mytgfs/internal/telegramstore"
 	"sync"
 	"time"
 )
+
+// IsVolumeGone 判断同步错误是否表示卷的频道已经不可用。
+//
+// 输入：任意 error
+// 输出：true 表示频道被删/被踢/已迁移，重试不会好转
+// 预期：调用方据此把卷从配置与运行时摘掉，避免面板一直显示不同步
+func IsVolumeGone(err error) bool {
+	return telegramstore.IsChannelGone(err) || tgsync.IsChannelUnavailable(err)
+}
 
 func SyncInterval(seconds int) time.Duration {
 	switch {
@@ -68,8 +78,9 @@ type coverInvalidator interface {
 // 每轮先问 enabled：返回 false 时跳过本轮（只等下一个 tick）。
 // onPtsMoved 在本轮 pts 有推进时调用（含头像/权限等非文件更新），
 // 装配根用它失效头像缓存——事件驱动，不额外轮询 Telegram。
+// onGone 在频道被删/被踢这类不可恢复错误时调用一次，调用后本循环退出。
 
-func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool, onPtsMoved func()) {
+func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), idx *index.Index, d tgsync.ChannelDiffer, st tgsync.NodeSource, interval time.Duration, mu *sync.Mutex, enabled func() bool, onPtsMoved func(), onGone func(error)) {
 	if interval <= 0 {
 		// 导出函数自己兜住非法间隔：time.NewTicker 对 <=0 会 panic
 		interval = time.Minute
@@ -91,6 +102,12 @@ func AutoSyncWhile(ctx context.Context, notify func(changed, removed []string), 
 			}
 			switch {
 			case err != nil:
+				// 频道被删/被踢这类错误重试不会好转：交给上层摘卷后退出，
+				// 否则面板会一直显示这个卷「不同步」却给不出原因
+				if onGone != nil && IsVolumeGone(err) {
+					onGone(err)
+					return
+				}
 				logging.Warn("log.autosync_failed", err)
 			default:
 				if (res.Pulled > 0 || res.Deleted > 0) && notify != nil {

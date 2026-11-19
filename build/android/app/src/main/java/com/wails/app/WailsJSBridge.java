@@ -6,6 +6,11 @@ import java.util.concurrent.Executors;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import com.wails.app.BuildConfig;
+import android.graphics.Bitmap;
+import android.media.MediaMetadataRetriever;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 
 /**
  * WailsJSBridge provides the JavaScript interface that allows the web frontend
@@ -17,6 +22,10 @@ import com.wails.app.BuildConfig;
 public class WailsJSBridge {
     private static final String TAG = "WailsJSBridge";
     private static final boolean DEBUG = BuildConfig.DEBUG;
+    // 缩略图预算与最坏每像素位数：缩放比例由这两个数反推，不写死尺寸
+    private static final int THUMB_BUDGET_BYTES = 32 * 1024;
+    private static final double THUMB_WORST_BPP = 2.5;
+    private static final int THUMB_QUALITY = 55;
     // Pooled threads avoid unbounded thread creation under high call volume.
     private static final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -447,21 +456,97 @@ public class WailsJSBridge {
         try (android.os.ParcelFileDescriptor pfd =
                      webView.getContext().getContentResolver().openFileDescriptor(doc, "r")) {
             if (pfd == null) return false;
+            // 视频先抽一帧小图：Go 侧要按本地路径读取，失败就不带缩略图
+            String thumb = makeThumb(doc);
             String q = "?vol=" + enc(vol)
                     + "&dir=" + enc(dir)
                     + "&rel=" + enc(rel)
                     + "&name=" + enc(rel)
-                    + "&path=" + enc("/proc/self/fd/" + pfd.getFd());
+                    + "&path=" + enc("/proc/self/fd/" + pfd.getFd())
+                    + (thumb == null ? "" : "&thumb=" + enc(thumb));
             // 走 Bridge.Do RPC：asset 通道只转发 GET，POST 到不了 Go 的处理函数
             boolean ok = postViaRuntime("/api/upload/adopt" + q, "");
             if (!ok) {
                 Log.w(TAG, "adopt rejected: " + rel);
+                if (thumb != null) {
+                    // 入队失败：小图留在 cache 里只会越积越多
+                    //noinspection ResultOfMethodCallIgnored
+                    new File(thumb).delete();
+                }
             }
             return ok;
         } catch (Exception e) {
             Log.e(TAG, "adopt failed: " + rel, e);
             return false;
         }
+    }
+
+    /**
+     * makeThumb 用系统解码器抽一帧，压成小 JPEG 交给 Go 当文档缩略图。
+     *
+     * 输入：doc 用户选中的内容 Uri
+     * 输出：cache 里的 JPEG 绝对路径；非视频或解码失败返回 null
+     * 预期：按 32KB 预算与最坏 bpp 算出缩放比例，质量 55%，只编码一次
+     */
+    private String makeThumb(android.net.Uri doc) {
+        android.content.ContentResolver cr = webView.getContext().getContentResolver();
+        String mime = null;
+        try {
+            mime = cr.getType(doc);
+        } catch (Throwable ignored) {
+        }
+        if (mime == null || !mime.startsWith("video/")) return null;
+        MediaMetadataRetriever r = new MediaMetadataRetriever();
+        try {
+            r.setDataSource(webView.getContext(), doc);
+            Bitmap frame = r.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            if (frame == null) frame = r.getFrameAtTime(0);
+            if (frame == null) return null;
+            int w = frame.getWidth();
+            int h = frame.getHeight();
+            if (w <= 0 || h <= 0) return null;
+            byte[] best = null;
+            try {
+                // 缩放比例按 32KB 预算与最坏 bpp 反推，与网页端同一套算法
+                double maxPixels = THUMB_BUDGET_BYTES * 8.0 / THUMB_WORST_BPP;
+                double scale = Math.min(1.0, Math.sqrt(maxPixels / ((double) w * h)));
+                int tw = Math.max(1, (int) Math.floor(w * scale));
+                int th = Math.max(1, (int) Math.floor(h * scale));
+                Bitmap small = (tw == w && th == h)
+                        ? frame
+                        : Bitmap.createScaledBitmap(frame, tw, th, true);
+                best = compressJpeg(small, THUMB_QUALITY);
+                if (small != frame) small.recycle();
+            } finally {
+                frame.recycle();
+            }
+            if (best == null) return null;
+            File out = File.createTempFile("mytgfs-thumb-", ".jpg", webView.getContext().getCacheDir());
+            try (FileOutputStream fos = new FileOutputStream(out)) {
+                fos.write(best);
+            }
+            return out.getAbsolutePath();
+        } catch (Throwable t) {
+            Log.w(TAG, "thumb extract failed", t);
+            return null;
+        } finally {
+            try {
+                r.release();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /**
+     * compressJpeg 按给定质量把位图编码成 JPEG。
+     *
+     * 输入：bmp 位图；quality 0-100
+     * 输出：JPEG 字节；编码失败返回 null
+     */
+    private static byte[] compressJpeg(Bitmap bmp, int quality) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        if (!bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)) return null;
+        return out.toByteArray();
     }
 
     private static String enc(String s) {

@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"maps"
 	"math/rand"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -82,6 +83,8 @@ type UploadOption func(*uploadOpts)
 // uploadOpts 是一次上传的可选参数。
 type uploadOpts struct {
 	progress func(done, size int64)
+	// thumbPath 是本地小图路径：作为文档缩略图随消息一起发出去
+	thumbPath string
 }
 
 // WithUploadProgress 让上传按已完成字节汇报进度。
@@ -93,6 +96,15 @@ type uploadOpts struct {
 //	回调里不要做重活，每片都会调一次
 func WithUploadProgress(fn func(done, size int64)) UploadOption {
 	return func(o *uploadOpts) { o.progress = fn }
+}
+
+// WithUploadThumb 指定这次上传要附带的缩略图文件。
+//
+// 输入：path 本地小图路径（JPEG，建议长边 256、≤32KB）；空表示不带
+// 输出：UploadOption
+// 预期：文件读不到或超限时不阻断上传，只丢掉缩略图
+func WithUploadThumb(path string) UploadOption {
+	return func(o *uploadOpts) { o.thumbPath = path }
 }
 
 // UploadResumable 上传文件并在中断后从断点继续。
@@ -139,6 +151,8 @@ func (s *Store) UploadResumable(ctx context.Context, r io.ReaderAt, size int64, 
 // 预期：分片走断点续传；服务端临时区失效时清断点整份重传一次
 func (s *Store) uploadOnce(ctx context.Context, ch *tg.Channel, r io.ReaderAt, size int64, key, name, mime, caption string, o uploadOpts) (*Part, error) {
 	peer := &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}
+	// 缩略图先传：失败只丢缩略图，不阻断主文件
+	thumb := s.sendThumb(ctx, o.thumbPath)
 
 	partSize := uploadPartSizeFor(size)
 	total := partsOf(size, partSize)
@@ -160,7 +174,7 @@ func (s *Store) uploadOnce(ctx context.Context, ch *tg.Channel, r io.ReaderAt, s
 			return nil, err
 		}
 	}
-	part, err := s.sendUploaded(ctx, peer, resume, size, name, mime, caption)
+	part, err := s.sendUploaded(ctx, peer, resume, size, name, mime, caption, thumb)
 	if err == nil {
 		s.clearResume(key)
 		return part, nil
@@ -174,7 +188,7 @@ func (s *Store) uploadOnce(ctx context.Context, ch *tg.Channel, r io.ReaderAt, s
 	if err := s.sendParts(ctx, r, size, resume, done, key, o.progress); err != nil {
 		return nil, err
 	}
-	part, err = s.sendUploaded(ctx, peer, resume, size, name, mime, caption)
+	part, err = s.sendUploaded(ctx, peer, resume, size, name, mime, caption, thumb)
 	if err != nil {
 		return nil, err
 	}
@@ -475,10 +489,11 @@ func (s *Store) savePart(ctx context.Context, fileID int64, idx, total int, data
 
 // sendUploaded 把已上传的分片挂成频道消息。
 //
-// 输入：peer 目标频道；resume 断点（含 file_id 与片数）；size/name/mime/caption
+// 输入：peer 目标频道；resume 断点（含 file_id 与片数）；size/name/mime/caption；
+// thumb 已上传的缩略图（nil 表示没有）
 // 输出：Part
 // 预期：只发一次 sendMedia，不再传字节
-func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume *UploadResume, size int64, name, mime, caption string) (*Part, error) {
+func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume *UploadResume, size int64, name, mime, caption string, thumb tg.InputFileClass) (*Part, error) {
 	if err := s.throttle(ctx); err != nil {
 		return nil, err
 	}
@@ -488,15 +503,19 @@ func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume
 	} else {
 		file = &tg.InputFile{ID: resume.FileID, Parts: resume.TotalParts, Name: name}
 	}
-	updates, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer: peer,
-		Media: &tg.InputMediaUploadedDocument{
-			File:     file,
-			MimeType: mime,
-			Attributes: []tg.DocumentAttributeClass{
-				&tg.DocumentAttributeFilename{FileName: name},
-			},
+	media := &tg.InputMediaUploadedDocument{
+		File:     file,
+		MimeType: mime,
+		Attributes: []tg.DocumentAttributeClass{
+			&tg.DocumentAttributeFilename{FileName: name},
 		},
+	}
+	if thumb != nil {
+		media.Thumb = thumb
+	}
+	updates, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+		Peer:     peer,
+		Media:    media,
 		Message:  caption,
 		RandomID: rand.Int63(),
 	})
@@ -504,4 +523,36 @@ func (s *Store) sendUploaded(ctx context.Context, peer tg.InputPeerClass, resume
 		return nil, err
 	}
 	return partFromUpdates(updates)
+}
+
+// sendThumb 把本地小图上传成文档缩略图。
+//
+// 输入：ctx；path 本地 JPEG 路径（空表示不带）
+// 输出：可放进 InputMediaUploadedDocument.Thumb 的文件；失败返回 nil
+// 预期：读不到、不是 JPEG、超过 512KB 都当作没有缩略图，不阻断主文件
+func (s *Store) sendThumb(ctx context.Context, path string) tg.InputFileClass {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) < 4 || len(b) > 512<<10 {
+		return nil
+	}
+	// 只认 JPEG：别的格式 Telegram 不一定能生成 stripped 预览
+	if b[0] != 0xFF || b[1] != 0xD8 || b[2] != 0xFF {
+		return nil
+	}
+	if err := s.throttle(ctx); err != nil {
+		return nil
+	}
+	id := rand.Int63()
+	ok, err := s.api.UploadSaveFilePart(ctx, &tg.UploadSaveFilePartRequest{
+		FileID:   id,
+		FilePart: 0,
+		Bytes:    b,
+	})
+	if err != nil || !ok {
+		return nil
+	}
+	return &tg.InputFile{ID: id, Parts: 1, Name: "thumb.jpg"}
 }

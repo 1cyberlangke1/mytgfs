@@ -9,6 +9,7 @@ package web
 // 生命周期：
 //   POST /api/upload/init    建会话 + 临时文件
 //   PUT  /api/upload/chunk   追加一段（offset 必须等于已收字节数）
+//   PUT  /api/upload/thumb   给会话补一张缩略图（与分片并行）
 //   POST /api/upload/commit  提交入库并清理
 //   DELETE /api/upload       放弃并清理
 
@@ -61,6 +62,8 @@ type uploadSession struct {
 	sum hash.Hash
 	// adopted 表示临时文件已交给文件后端，本会话不再负责删除
 	adopted bool
+	// thumb 是 init 带上来的缩略图临时文件；交给队列后置空，由执行体删除
+	thumb string
 	// lastUsed 是纳秒时间戳：回收扫描与取会话并发读，用原子量避免数据竞争
 	lastUsed atomic.Int64
 	// busy 表示正在提交：回收协程不得关闭这个句柄
@@ -256,6 +259,7 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	temp := s.file.Name()
 	sha := hex.EncodeToString(s.sum.Sum(nil))
+	thumb := s.thumb
 	cerr := s.file.Close()
 	s.adopted = cerr == nil
 	s.mu.Unlock()
@@ -264,13 +268,20 @@ func (u *uploadAPI) handleCommit(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusInternalServerError, cerr.Error())
 		return
 	}
-	job, err := m.AdoptUpload(r.Context(), s.target, temp, done, sha)
+	job, err := m.AdoptUpload(r.Context(), s.target, temp, done, sha, thumb)
 	if err != nil {
 		// 临时文件已交给后端：失败时保留给队列重试，不在会话里删
 		u.drop(s.id)
+		if thumb != "" {
+			_ = os.Remove(thumb)
+		}
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
+	// 缩略图所有权随任务转移，由上传执行体在成功后删除
+	s.mu.Lock()
+	s.thumb = ""
+	s.mu.Unlock()
 	u.drop(s.id)
 	// job 是后台队列任务号：面板据此跟踪 Telegram 上传的真实字节进度
 	replyJSON(w, http.StatusOK, map[string]any{"path": s.target, "job": job})
@@ -286,6 +297,8 @@ type adoptRequest struct {
 	Rel  string `json:"rel"`
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// Thumb 是宿主抽帧后的本地 JPEG 路径（安卓原生选择器用）；空表示不带
+	Thumb string `json:"thumb,omitempty"`
 }
 
 // handleAdopt 接管宿主已落盘的文件（POST /api/upload/adopt）。
@@ -305,11 +318,12 @@ func (u *uploadAPI) handleAdopt(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query(); q.Get("path") != "" {
 		// 原生侧直接调用（无请求体）：参数全在 query
 		req = adoptRequest{
-			Vol:  q.Get("vol"),
-			Dir:  q.Get("dir"),
-			Rel:  q.Get("rel"),
-			Name: q.Get("name"),
-			Path: q.Get("path"),
+			Vol:   q.Get("vol"),
+			Dir:   q.Get("dir"),
+			Rel:   q.Get("rel"),
+			Name:  q.Get("name"),
+			Path:  q.Get("path"),
+			Thumb: q.Get("thumb"),
 		}
 	} else if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
@@ -372,8 +386,13 @@ func (u *uploadAPI) handleAdopt(w http.ResponseWriter, r *http.Request) {
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
-	job, err := m.AdoptUpload(r.Context(), target, src, st.Size(), sha)
+	thumb := acceptThumbPath(req.Thumb)
+	job, err := m.AdoptUpload(r.Context(), target, src, st.Size(), sha, thumb)
 	if err != nil {
+		if thumb != "" {
+			// 没有入队就没有执行体来删这张小图
+			_ = os.Remove(thumb)
+		}
 		replyJSONError(w, http.StatusBadRequest, fmError(err))
 		return
 	}
@@ -442,6 +461,95 @@ func ensureParents(ctx context.Context, m fm.Files, target string) error {
 	return nil
 }
 
+// thumbMaxBytes 是缩略图上限：前端按长边 256、质量 62% 出图，正常远小于这个值。
+const thumbMaxBytes = 64 << 10
+
+// saveThumb 校验并落盘一帧缩略图。
+//
+// 输入：tmpDir 临时目录；b 原始字节
+// 输出：临时文件路径；空串表示不合格（不是 JPEG / 超限 / 写盘失败）
+// 预期：任何不合格都静默丢弃，不能因为一张小图让整个上传失败
+func saveThumb(tmpDir string, b []byte) string {
+	if len(b) < 4 || len(b) > thumbMaxBytes {
+		return ""
+	}
+	if b[0] != 0xFF || b[1] != 0xD8 || b[2] != 0xFF {
+		return ""
+	}
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return ""
+	}
+	f, err := os.CreateTemp(tmpDir, ".mytgfs-thumb-*")
+	if err != nil {
+		return ""
+	}
+	name := f.Name()
+	if _, werr := f.Write(b); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return ""
+	}
+	if cerr := f.Close(); cerr != nil {
+		_ = os.Remove(name)
+		return ""
+	}
+	return name
+}
+
+// handleThumb 给会话补一张缩略图（PUT /api/upload/thumb?id=）。
+//
+// 输入：查询串 id；请求体是原始 JPEG
+// 输出：204；会话不存在 404、内容不合格 400
+// 预期：与分片上传并行进行，抽帧慢不挡内容上传；重复设置时删掉旧文件
+func (u *uploadAPI) handleThumb(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	s, ok := u.get(r.URL.Query().Get("id"))
+	if !ok {
+		replyJSONError(w, http.StatusNotFound, i18n.T("err.upload_no_session"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, thumbMaxBytes+1))
+	if err != nil || len(body) > thumbMaxBytes {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	name := saveThumb(u.tmpDir, body)
+	if name == "" {
+		replyJSONError(w, http.StatusBadRequest, i18n.T("err.upload_bad_request"))
+		return
+	}
+	s.mu.Lock()
+	old := s.thumb
+	s.thumb = name
+	s.mu.Unlock()
+	if old != "" {
+		_ = os.Remove(old)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// acceptThumbPath 校验宿主抽帧后给的缩略图路径。
+//
+// 输入：绝对路径（安卓侧写在 cache 里的小 JPEG）
+// 输出：可用路径；空串表示没有或不合格
+// 预期：读不到、超过 64KB、不是 JPEG 都丢弃；合格时所有权随任务交给执行体
+func acceptThumbPath(p string) string {
+	if p == "" || !filepath.IsAbs(p) {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil || len(b) < 4 || len(b) > thumbMaxBytes {
+		return ""
+	}
+	if b[0] != 0xFF || b[1] != 0xD8 || b[2] != 0xFF {
+		return ""
+	}
+	return p
+}
+
 // handleAbort 放弃会话（DELETE /api/upload?id=）。
 func (u *uploadAPI) handleAbort(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
@@ -501,10 +609,14 @@ func (u *uploadAPI) drop(id string) {
 	name := s.file.Name()
 	_ = s.file.Close()
 	adopted := s.adopted
+	thumb := s.thumb
 	s.mu.Unlock()
 	if adopted {
 		// 文件已经交给上传队列，删掉会把重放要用的内容弄丢
 		return
+	}
+	if thumb != "" {
+		_ = os.Remove(thumb)
 	}
 	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Warn(i18n.T("log.tmp_sweep_failed"), "path", name, "err", err)
@@ -568,9 +680,13 @@ func (u *uploadAPI) discard(s *uploadSession) bool {
 		return false
 	}
 	name := s.file.Name()
+	thumb := s.thumb
 	_ = s.file.Close()
 	s.mu.Unlock()
 	_ = os.Remove(name)
+	if thumb != "" {
+		_ = os.Remove(thumb)
+	}
 	return true
 }
 

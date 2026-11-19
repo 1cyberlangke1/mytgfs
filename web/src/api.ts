@@ -9,6 +9,7 @@
 
 import { isAndroid, openNativeFile } from './platform';
 import { wailsRuntime } from './runtime';
+import { makeVideoThumb } from './utils/videoThumb';
 
 export interface ApiFile {
   id: string;
@@ -404,6 +405,24 @@ export function discardUpload(id: string): Promise<void> {
     .catch(() => undefined);
 }
 
+// putUploadThumb 把抽帧结果发给服务端会话（PUT /api/upload/thumb?id=）。
+//
+// 输入：会话 id；JPEG Blob（长边 256、≤32KB）
+// 输出：Promise；服务端 204 表示已收
+// 预期：与分片上传并行，慢一点也只丢缩略图，不中断内容上传
+export function putUploadThumb(id: string, blob: Blob): Promise<void> {
+  return blob
+    .arrayBuffer()
+    .then((buf) =>
+      request(`/api/upload/thumb?id=${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'image/jpeg' },
+        body: buf,
+      })
+    )
+    .then(() => undefined);
+}
+
 // uploadFile 上传单个文件，onProgress 汇报 0..1 的「浏览器→服务端」进度。
 //
 // 输入：卷、目标目录、相对路径、落盘文件名、文件、进度回调、取消信号、断点、
@@ -428,6 +447,7 @@ export async function uploadFile(
   resume?: UploadResume,
   onSession?: (id: string) => void
 ): Promise<{ path: string; job: number }> {
+  // 新建会话时顺便抽一帧当缩略图：续传复用原会话，不再重复抽帧
   const session = resume?.id
     ? { id: resume.id }
     : await request<{ id: string }>('/api/upload/init', {
@@ -436,6 +456,12 @@ export async function uploadFile(
         body: JSON.stringify({ vol: volume, dir, rel, name, size: file.size }),
       });
   onSession?.(session.id);
+  // 抽帧与分片并行：抽帧慢不挡内容上传，提交前再等它一次
+  const thumbTask = resume?.id
+    ? Promise.resolve()
+    : makeVideoThumb(file).then((blob) =>
+        blob ? putUploadThumb(session.id, blob) : undefined
+      );
   let offset = resume?.offset ?? 0;
   try {
     while (offset < file.size) {
@@ -444,6 +470,7 @@ export async function uploadFile(
       const bytes = await file.slice(offset, end).arrayBuffer();
       offset = await putChunk(session.id, offset, bytes, file.size, onProgress, signal);
     }
+    await thumbTask;
     const done = await request<{ path: string; job?: number }>(
       `/api/upload/commit?id=${encodeURIComponent(session.id)}`,
       { method: 'POST' }
@@ -451,6 +478,7 @@ export async function uploadFile(
     onProgress?.(1);
     return { path: done?.path ?? '', job: done?.job ?? 0 };
   } catch (err) {
+    void thumbTask.catch(() => undefined);
     if (err instanceof ApiError && err.status === 0 && err.message === 'aborted') {
       throw new UploadPaused(session.id, offset);
     }

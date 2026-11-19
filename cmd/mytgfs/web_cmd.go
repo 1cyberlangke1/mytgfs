@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"mytgfs/internal/app"
@@ -105,124 +106,211 @@ func runWeb(args []string) {
 		&sessionstore.Encrypted{Path: app.DefaultSessionPath, Key: mustSessionKey()},
 		tgclient.Options{BotToken: cfg.BotToken()})
 
-	err = client.Run(ctx, func(ctx context.Context) error {
-		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-		if perr != nil {
-			return perr
+	// ---- 本地优先：面板与卷都不等 Telegram 建连 ----
+	//
+	// 本地索引在 SQLite 里：列目录、看大小、改名排队都不需要网络。
+	// 这里先备好装配根、注册表、封面服务与 HTTP 端口，连接循环稍后
+	// 才把真实客户端接线进来；未接线期间读写频道内容返回「还没连上」。
+	appRoot := app.New(cfg, app.Options{Push: pushHub, ConfigPath: cfgPath})
+	reg := app.NewVolumeRegistry[*webVolume]()
+	vsync, vstop := context.WithCancel(ctx)
+	var vwg sync.WaitGroup
+
+	// 封面服务在装配层创建：挂载循环要在 pts 变化时失效它的缓存
+	coverProvider := app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
+		wv, ok := reg.Get(name)
+		if !ok || wv.vf == nil {
+			return nil, false
 		}
-		defer closePool()
-		appRoot := app.New(cfg, app.Options{Push: pushHub, ConfigPath: cfgPath})
-		reg := app.NewVolumeRegistry[*webVolume]()
-		vsync, vstop := context.WithCancel(ctx)
-		var vwg sync.WaitGroup
+		return wv.vf, true
+	}, datadir.Path("thumbs"))
 
-		// 封面服务在装配层创建：挂载循环要在 pts 变化时失效它的缓存
-		coverProvider := app.NewCoverProvider(appRoot, func(name string) (*app.VolumeFS, bool) {
-			wv, ok := reg.Get(name)
-			if !ok || wv.vf == nil {
-				return nil, false
-			}
-			return wv.vf, true
-		}, datadir.Path("thumbs"))
+	// liveAPI/closeAPI 由连接循环接线：nil 表示还没连上或已经断开
+	var (
+		netMu    sync.Mutex
+		liveAPI  telegramstore.API
+		closeAPI func()
+		// connCode 是给面板看的 TG 连接状态码，本地索引可用不代表已经连上
+		connCode = "connecting"
+	)
+	connState := func() string {
+		netMu.Lock()
+		defer netMu.Unlock()
+		return connCode
+	}
 
-		// mountRuntime 打开一个卷并挂进运行时注册表，起该卷的自动同步协程。
-		// 启动与面板建卷/attach 共用这一条路径，两端永远走同一份逻辑；
-		// 同步参数挂载时现读：设置里改过的新卷立即用新值
-		mountRuntime := func(name string, chatID int64) {
-			vf, err := appRoot.OpenVolume(ctx, name, api)
-			if err != nil {
-				logging.Warn("tray.volume.open_failed", err, name)
-				return
-			}
-			wv := &webVolume{vf: vf, mgr: vf.Files, idx: vf.Index, store: vf.Store}
-			cur := appRoot.Config()
-			// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
-			if cur.Mount.SyncOn() {
-				syncInterval := trayapp.SyncInterval(cur.Mount.SyncSeconds)
-				syncOn := trayapp.SyncEnabled(cfgPath, cur.Mount.SyncOn())
-				differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: chatID}
-				vctx, vcancel := context.WithCancel(vsync)
-				done := make(chan struct{})
+	// gone 记录已确认不可用的卷：配置删不掉（旧单卷形态）时也不能再挂回来
+	var goneMu sync.Mutex
+	gone := map[string]bool{}
+	isGone := func(name string) bool {
+		goneMu.Lock()
+		defer goneMu.Unlock()
+		return gone[name]
+	}
+	// dropGoneVolume 由 reconcile 定义后再赋值：它要用对账把卷摘干净
+	var dropGoneVolume func(name string, cause error)
+
+	// attachMu 串行化接线：对账与连接循环都会补 attach，重复接线会起两份同步
+	var attachMu sync.Mutex
+
+	// attachVolume 给已本地挂载的卷接线，并起差异同步。
+	//
+	// 输入：卷名
+	// 输出：无
+	// 预期：未联网或已经接过的卷直接返回；proxy.Set 之后 Store 与 downloader 走网络
+	attachVolume := func(name string) {
+		attachMu.Lock()
+		defer attachMu.Unlock()
+		wv, ok := reg.Get(name)
+		if !ok || wv.proxy == nil || wv.attached || isGone(name) {
+			return
+		}
+		netMu.Lock()
+		api := liveAPI
+		netMu.Unlock()
+		if api == nil {
+			return
+		}
+		wv.proxy.Set(api)
+		wv.attached = true
+		cur := appRoot.Config()
+		// 别的端写入/删除后按频道差异自动跟上：面板读的是本地索引，不同步就一直是旧内容
+		if !cur.Mount.SyncOn() {
+			return
+		}
+		syncInterval := trayapp.SyncInterval(cur.Mount.SyncSeconds)
+		syncOn := trayapp.SyncEnabled(cfgPath, cur.Mount.SyncOn())
+		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: wv.chatID}
+		vctx, vcancel := context.WithCancel(vsync)
+		done := make(chan struct{})
+		wv.stop = func() { vcancel(); <-done }
+		vwg.Go(func() {
+			defer close(done)
+			trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, syncInterval, nil, syncOn, func() {
+				// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
+				coverProvider.InvalidateVolume(name)
+			}, func(err error) {
+				// 频道不可用：另起协程摘卷，别在同步协程里等自己退出
 				vwg.Go(func() {
-					defer close(done)
-					trayapp.AutoSyncWhile(vctx, trayapp.StatusNotifier(pushHub), wv.idx, differ, wv.store, syncInterval, nil, syncOn, func() {
-						// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
-						coverProvider.InvalidateVolume(name)
-					})
+					if dropGoneVolume != nil {
+						dropGoneVolume(name, err)
+					}
 				})
-				wv.stop = func() { vcancel(); <-done }
-			}
-			reg.Put(name, wv)
-		}
+			})
+		})
+	}
 
-		// reconcile 让运行时卷表与配置文件强制一致：
-		// 每次都从磁盘现读（外部编辑/CLI 建卷也会被收编），再对齐注册表。
-		// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
-		// reconcileMu 串行化对账：面板建卷/删卷与周期对账可能同时进来，
-		// 并发挂载会把同一个卷挂两次（两份队列抢同一个索引库）
-		var reconcileMu sync.Mutex
-		reconcile := func(force bool) {
-			reconcileMu.Lock()
-			defer reconcileMu.Unlock()
-			before := reg.Names()
-			cur, err := config.Load(cfgPath)
-			if err != nil {
-				logging.Warn("log.volume_warn", err)
-				return
-			}
-			appRoot.SetConfig(cur)
-			mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
-			for _, v := range mount {
-				mountRuntime(v.Name, v.ChatID)
-			}
-			for _, name := range unmount {
-				wv, ok := reg.Get(name)
-				if !ok {
-					continue
-				}
-				if wv.stop != nil {
-					wv.stop() // 先停自动同步，避免并发使用已关闭的索引
-				}
-				_ = wv.vf.Close() // 关队列与索引
-				reg.Delete(name)
-			}
-			// 卷集合没变就不推：周期对账每 15 秒一次，无条件推等于定时全量刷新
-			if !force && slices.Equal(before, reg.Names()) {
-				return
-			}
-			// 全部对齐完再推：面板一次刷新就能看到最终卷列表
-			pushHub.Publish(push.TopicStatus)
+	// mountRuntime 打开一个卷并挂进运行时注册表；已联网则顺手接线。
+	//
+	// 输入：卷名；频道 id
+	// 输出：无
+	// 预期：启动与面板建卷/attach 共用这一条路径，同步参数挂载时现读
+	mountRuntime := func(name string, chatID int64) {
+		if isGone(name) {
+			// 已确认失效的卷不再重挂
+			return
 		}
-		// 启动即对齐：配置里启用的卷全部挂上
+		proxy := telegramstore.NewAPIProxy()
+		vf, err := appRoot.OpenVolume(vsync, name, proxy)
+		if err != nil {
+			logging.Warn("tray.volume.open_failed", err, name)
+			return
+		}
+		wv := &webVolume{vf: vf, mgr: vf.Files, idx: vf.Index, store: vf.Store, proxy: proxy, chatID: chatID}
+		reg.Put(name, wv)
+		attachVolume(name)
+	}
+
+	// reconcile 让运行时卷表与配置文件强制一致：
+	// 每次都从磁盘现读（外部编辑/CLI 建卷也会被收编），再对齐注册表。
+	// 建卷/attach/删卷等一切配置变更都以调用它收尾，用户永远不需要重启
+	// reconcileMu 串行化对账：面板建卷/删卷与周期对账可能同时进来，
+	// 并发挂载会把同一个卷挂两次（两份队列抢同一个索引库）
+	var reconcileMu sync.Mutex
+	reconcile := func(force bool) {
+		reconcileMu.Lock()
+		defer reconcileMu.Unlock()
+		before := reg.Names()
+		cur, err := config.Load(cfgPath)
+		if err != nil {
+			logging.Warn("log.volume_warn", err)
+			return
+		}
+		appRoot.SetConfig(cur)
+		mount, unmount := app.VolumeSync(cur.Volumes, reg.Names())
+		for _, v := range mount {
+			mountRuntime(v.Name, v.ChatID)
+		}
+		for _, name := range unmount {
+			wv, ok := reg.Get(name)
+			if !ok {
+				continue
+			}
+			if wv.stop != nil {
+				wv.stop() // 先停自动同步，避免并发使用已关闭的索引
+			}
+			_ = wv.vf.Close() // 关队列与索引
+			reg.Delete(name)
+		}
+		// 卷集合没变就不推：周期对账每 15 秒一次，无条件推等于定时全量刷新
+		if !force && slices.Equal(before, reg.Names()) {
+			return
+		}
+		// 全部对齐完再推：面板一次刷新就能看到最终卷列表
+		pushHub.Publish(push.TopicStatus)
+	}
+	// 启动即对齐：配置里启用的卷全部挂上
+	// dropGoneVolume 把频道已失效的卷从配置与运行时摘掉。
+	//
+	// 输入：卷名；触发错误
+	// 输出：无
+	// 预期：只处理一次；配置删不掉（旧单卷形态）时只在本进程内隐藏
+	dropGoneVolume = func(name string, cause error) {
+		goneMu.Lock()
+		if gone[name] {
+			goneMu.Unlock()
+			return
+		}
+		gone[name] = true
+		goneMu.Unlock()
+		logging.Warn("log.volume_gone", cause, name)
+		if merr := appRoot.MutateConfig(func(path string) error {
+			rerr := config.RemoveVolume(path, name)
+			if errors.Is(rerr, config.ErrVolumeNotFound) {
+				return nil
+			}
+			return rerr
+		}); merr != nil {
+			logging.Warn("log.volume_gone_config", merr, name)
+		}
+		// 配置里已没有这个卷：对账会停同步、关索引并从注册表摘除
 		reconcile(true)
-		// 断点断片超过一天就清：Telegram 服务端临时区约一天过期，续不上的断点只会堆积
-		uploadcache.Sweep(datadir.Path("uploads"), 24*time.Hour)
-		// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编。
-		// 只有卷集合真的变了才推状态，否则等于每 15 秒给前端一次全量刷新
-		go func() {
-			interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
-			if interval <= 0 {
-				interval = trayapp.SyncInterval(0)
+	}
+	reconcile(true)
+	// 断点断片超过一天就清：Telegram 服务端临时区约一天过期，续不上的断点只会堆积
+	uploadcache.Sweep(datadir.Path("uploads"), 24*time.Hour)
+	// 定期从配置文件对账：CLI 建卷、手编 config.toml 的外部改动自动被收编。
+	// 只有卷集合真的变了才推状态，否则等于每 15 秒给前端一次全量刷新
+	go func() {
+		interval := trayapp.SyncInterval(cfg.Mount.SyncSeconds)
+		if interval <= 0 {
+			interval = trayapp.SyncInterval(0)
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reconcile(false)
 			}
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					reconcile(false)
-				}
-			}
-		}()
-		// 先停自动同步再关索引：顺序反了会写已关闭的库
-		defer func() {
-			vstop()
-			vwg.Wait()
-			closeWebVolumes(reg.Snapshot())
-		}()
-
-		return serve(web.Options{
+		}
+	}()
+	// 面板先起来：本地索引已挂好，端口与静态资源不等 Telegram 建连
+	serveErr := make(chan error, 1)
+	go func() {
+		serr := serve(web.Options{
 			Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}),
 			// 开机自启与命令行共用同一套系统注册项
 			Autostart: autostart.Control{},
@@ -347,21 +435,66 @@ func runWeb(args []string) {
 			},
 			// 面板自报状态：卷统计与上传队列都来自已打开的索引
 			Status: func(ctx context.Context) (any, error) {
-				return webStatus(ctx, reg.Snapshot()), nil
+				return webStatus(ctx, reg.Snapshot(), connState()), nil
 			},
 		})
-	})
-	if err == nil {
-		return
-	}
-	if tgclient.IsAuthLost(err) {
-		ui.Errf("%s\n", i18n.T("err.auth_lost_hint"))
-		if serr := serve(web.Options{Push: pushHub, Auth: authsvc.New(authsvc.Paths{ConfigPath: cfgPath}), Autostart: autostart.Control{}}); serr != nil {
-			fatal(serr.Error())
+		if serr != nil {
+			cancel() // 面板起不来：别让连接循环空等
 		}
-		return
+		serveErr <- serr
+	}()
+
+	// 连接循环：拿到已认证客户端后才接线；连上之前所有卷只读本地索引
+	err = client.Run(ctx, func(ctx context.Context) error {
+		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
+		if perr != nil {
+			return perr
+		}
+		netMu.Lock()
+		liveAPI = api
+		closeAPI = closePool
+		connCode = "online"
+		netMu.Unlock()
+		// 接线本地已挂载的卷；之后新增/删除的卷由对账与面板操作收编
+		for _, name := range reg.Names() {
+			attachVolume(name)
+		}
+		pushHub.Publish(push.TopicStatus)
+		<-ctx.Done()
+		return nil
+	})
+
+	// 连接循环结束：先断线再停同步，避免在飞请求继续打失效的客户端
+	netMu.Lock()
+	liveAPI = nil
+	pool := closeAPI
+	closeAPI = nil
+	connCode = "reconnecting"
+	netMu.Unlock()
+	for _, wv := range reg.Snapshot() {
+		if wv.proxy != nil {
+			wv.proxy.Set(nil)
+		}
 	}
-	fatal(err.Error())
+	if pool != nil {
+		pool()
+	}
+	vstop()
+	vwg.Wait()
+	if err != nil && ctx.Err() == nil {
+		if !tgclient.IsAuthLost(err) {
+			fatal(err.Error())
+		}
+		netMu.Lock()
+		connCode = "auth_lost"
+		netMu.Unlock()
+		// 会话失效：面板仍可用本地索引，提示用户去面板重新登录
+		ui.Errf("%s\n", i18n.T("err.auth_lost_hint"))
+	}
+	if serr := <-serveErr; serr != nil {
+		fatal(serr.Error())
+	}
+	closeWebVolumes(reg.Snapshot())
 }
 
 // webVolume 是一个卷在面板里用到的后端。
@@ -370,6 +503,11 @@ type webVolume struct {
 	mgr   *fm.Manager
 	idx   *index.Index
 	store *telegramstore.Store
+	// proxy 让卷在联网前就能用本地索引：Store 持它，接线后立即走网络
+	proxy  *telegramstore.APIProxy
+	chatID int64
+	// attached 表示该卷已接线；由连接循环与对账在锁内写
+	attached bool
 	// stop 停掉该卷的自动同步协程并等它退出；删卷时先调它再关索引，
 	// 避免同步协程并发使用已关闭的库。未启动同步的卷为 nil。
 	stop func()

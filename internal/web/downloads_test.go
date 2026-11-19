@@ -273,7 +273,7 @@ func (f fmFunc) Info(ctx context.Context, p string) (fm.Entry, error) {
 }
 func (fmFunc) Mkdir(context.Context, string) error             { return fs.ErrInvalid }
 func (fmFunc) Upload(context.Context, string, io.Reader) error { return fs.ErrInvalid }
-func (fmFunc) AdoptUpload(context.Context, string, string, int64, string) (int64, error) {
+func (fmFunc) AdoptUpload(context.Context, string, string, int64, string, string) (int64, error) {
 	return 0, fs.ErrInvalid
 }
 func (fmFunc) Remove(context.Context, string) error       { return fs.ErrInvalid }

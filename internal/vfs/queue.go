@@ -61,6 +61,8 @@ type uploadJob struct {
 	Base   string `json:"base"`
 	Body   string `json:"body"`
 	Parent int    `json:"parent"`
+	// Thumb 是本地小图路径（可选）：作为文档缩略图随消息发出
+	Thumb string `json:"thumb,omitempty"`
 }
 
 // errTargetGone 表示上传期间目标目录被删掉。
@@ -305,6 +307,9 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob, progress func(d
 	tmp, err := os.Open(p.Temp)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if p.Thumb != "" {
+				_ = os.Remove(p.Thumb)
+			}
 			_ = d.idx.DeletePending(ctx, p.Path)
 			return nil
 		}
@@ -362,5 +367,9 @@ func (d *FileSystem) uploadNow(ctx context.Context, p uploadJob, progress func(d
 		return cerr
 	}
 	_ = d.idx.DeletePending(ctx, p.Path)
+	if p.Thumb != "" {
+		// 缩略图已经随消息发出去，本地这份只在本次上传里用一次
+		_ = os.Remove(p.Thumb)
+	}
 	return os.Remove(p.Temp)
 }

@@ -211,6 +211,7 @@ func newMux(configPath string, opts Options) *router {
 	up := newUploadAPI(opts.Files, opts.TempDir)
 	rt.routeFunc("/api/upload/init", up.handleInit)
 	rt.routeFunc("/api/upload/chunk", up.handleChunk)
+	rt.routeFunc("/api/upload/thumb", up.handleThumb)
 	rt.routeFunc("/api/upload/commit", up.handleCommit)
 	// 按路径接管：选择器已把文件落盘，面板只传路径，字节不过桥
 	rt.routeFunc("/api/upload/adopt", up.handleAdopt)

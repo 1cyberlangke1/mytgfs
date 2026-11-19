@@ -1,20 +1,13 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Globe,
-  HardDrive,
-  Loader2,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+import { Globe, HardDrive, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { ConnectionStatus, Locale, NavTab } from '../types';
 import { computeOverviewSummary, formatBytes, volumeDisplayName } from '../utils/fsLogic';
 import { LOCALE_OPTIONS, Translations, formatNumber, formatPercent } from '../utils/i18n';
 import { BrandEmblemSvg } from './VisualAssets';
 import { CustomScrollArea } from './CustomScrollbar';
-import { Button, IOS_BOUNCE_SPRING, IOS_SOFT_SPRING, IOS_SPRING, Select } from './ui';
+import { Button, cn, IOS_BOUNCE_SPRING, IOS_SOFT_SPRING, IOS_SPRING, Select } from './ui';
+import { connectionVisual, TONE_ICON, TONE_TEXT } from './connectionStatus';
 import { runViewTransition } from '../utils/viewTransition';
 
 // OverviewSummary 直接取汇总函数的返回类型，避免两处手写同构结构。
@@ -77,7 +70,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   themeIconClass,
   ThemeIcon,
   setTheme,
-}) => (
+}) => {
+  const { Icon: ConnectionIcon, tone: connectionTone, spinning: connectionSpinning } =
+    connectionVisual(connectionStatus);
+  return (
   <motion.aside
     initial={false}
     animate={{ width: sidebarCollapsed ? 76 : 256 }}
@@ -256,25 +252,17 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {!sidebarCollapsed && (
           <div className="p-3 rounded-xl bg-zinc-100/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800/80">
             <div className="flex items-center gap-2 text-xs">
-              {connectionStatus === 'connected' ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-              ) : connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? (
-                <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
-              )}
+              <ConnectionIcon
+                className={cn(
+                  'w-4 h-4 shrink-0',
+                  TONE_ICON[connectionTone],
+                  connectionSpinning && 'animate-spin'
+                )}
+              />
               <span className="text-zinc-500 dark:text-zinc-400 truncate">
                 {t.connection.label}:
               </span>
-              <span
-                className={`font-medium truncate ${
-                  connectionStatus === 'connected'
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : connectionStatus === 'connecting' || connectionStatus === 'reconnecting'
-                    ? 'text-amber-600 dark:text-amber-400'
-                    : 'text-red-600 dark:text-red-400'
-                }`}
-              >
+              <span className={cn('font-medium truncate', TONE_TEXT[connectionTone])}>
                 {t.connection[connectionStatus]}
               </span>
             </div>
@@ -345,4 +333,5 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       </div>
     </CustomScrollArea>
   </motion.aside>
-);
+  );
+};

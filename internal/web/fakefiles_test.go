@@ -24,6 +24,8 @@ type fakeFiles struct {
 	adoptCalls int
 	// lastSha 是最后一次接管的摘要，用来断言摘要在收分片时就算好了
 	lastSha string
+	// lastThumb 是最后一次接管的缩略图路径，用来断言它随任务传了下去
+	lastThumb string
 }
 
 func newFakeFiles() *fakeFiles {
@@ -67,7 +69,7 @@ func (f *fakeFiles) Upload(ctx context.Context, p string, r io.Reader) error {
 // 输入：p 目标路径；temp 临时文件；size 字节数；sha 摘要（不校验）
 // 输出：固定的假任务号 1；error
 // 预期：记录一次接管调用，用来断言提交路径没有退回「再拷一份」
-func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64, sha string) (int64, error) {
+func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64, sha, thumb string) (int64, error) {
 	data, err := os.ReadFile(temp)
 	if err != nil {
 		return 0, err
@@ -77,6 +79,7 @@ func (f *fakeFiles) AdoptUpload(ctx context.Context, p, temp string, size int64,
 	}
 	f.adoptCalls++
 	f.lastSha = sha
+	f.lastThumb = thumb
 	f.uploads[p] = string(data)
 	return 1, nil
 }

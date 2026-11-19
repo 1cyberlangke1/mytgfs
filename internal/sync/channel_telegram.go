@@ -118,7 +118,7 @@ func (d *TelegramChannelDiffer) channelOf(ctx context.Context) (*tg.Channel, err
 			return ch, nil
 		}
 	}
-	return nil, fmt.Errorf(i18n.T("err.channel_unavailable"), d.ChannelID)
+	return nil, ChannelUnavailableError{ChannelID: d.ChannelID}
 }
 
 // idsOf 合并两批消息里的消息号。

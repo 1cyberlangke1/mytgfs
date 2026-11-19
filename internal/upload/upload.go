@@ -48,6 +48,8 @@ type Request struct {
 	SHA     string      // 内容 sha256（十六进制），同时作为续传键
 	Mime    string      // MIME；空则用 application/octet-stream
 	Caption string      // 已编码好的 caption
+	// ThumbPath 可选的本地缩略图路径（JPEG，小图）；空表示不带
+	ThumbPath string
 	// OnProgress 可选：按已上传字节回报进度，供队列与面板显示真实百分比
 	OnProgress func(done int64)
 }
@@ -97,7 +99,8 @@ func Write(ctx context.Context, idx Index, st Store, req Request) (*telegramstor
 			if req.OnProgress != nil {
 				req.OnProgress(done)
 			}
-		}))
+		}),
+		telegramstore.WithUploadThumb(req.ThumbPath))
 	if uerr != nil {
 		return nil, false, uerr
 	}

@@ -8,6 +8,8 @@ package trayapp
 import (
 	"fmt"
 	"net/url"
+
+	"mytgfs/internal/i18n"
 )
 
 // volumeMenuLabel 返回托盘卷入口的文字。
@@ -68,5 +70,25 @@ func stateCode(key string) string {
 		return "auth_lost"
 	default:
 		return "starting"
+	}
+}
+
+// StateText 把连接状态码翻成展示文案，与 stateCode 共用同一套键。
+//
+// 输入：状态码（online/connecting/reconnecting/auth_lost/starting）
+// 输出：当前语言的提示文本
+// 预期：未知码按「连接中」处理，不显示空白
+func StateText(code string) string {
+	switch code {
+	case "online":
+		return i18n.T("tray.state.connected")
+	case "reconnecting":
+		return i18n.T("tray.state.reconnecting")
+	case "auth_lost":
+		return i18n.T("tray.state.auth_lost")
+	case "starting":
+		return i18n.T("tray.state.starting")
+	default:
+		return i18n.T("tray.state.connecting")
 	}
 }

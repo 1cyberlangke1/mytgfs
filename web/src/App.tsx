@@ -6,6 +6,7 @@ import {
   Moon,
   Monitor,
   Sliders,
+  Smartphone,
   Sun,
 } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -1880,6 +1881,8 @@ export default function App() {
   // 预期：文案反映现状，不会把「跟随系统」误读成当前已经在跟随系统
   const themeNext: ThemeMode = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
+  // 手机顶栏的「跟随系统」用手机图标：只在够宽（桌面侧栏）时才用显示器
+  const PhoneThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Smartphone;
   const themeLabel =
     theme === 'light' ? t.header.themeLight : theme === 'dark' ? t.header.themeDark : t.header.themeSystem;
   const themeIconClass = `shrink-0 ${theme === 'light' ? 'text-amber-400' : 'text-zinc-700 dark:text-zinc-300'}`;
@@ -1903,10 +1906,11 @@ export default function App() {
         setLocale={setLocale}
         totalBytes={summary.totalBytes}
         setActiveTab={setActiveTab}
+        connectionStatus={connectionStatus}
         themeNext={themeNext}
         themeLabel={themeLabel}
         themeIconClass={themeIconClass}
-        ThemeIcon={ThemeIcon}
+        ThemeIcon={PhoneThemeIcon}
         setTheme={setTheme}
       />
 

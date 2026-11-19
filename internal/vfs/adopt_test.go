@@ -34,7 +34,7 @@ func TestAdoptRegistersNode(t *testing.T) {
 
 	temp, sha := writeTemp(t, "hello")
 	// 无队列的测试环境里同步执行，任务号固定为 0
-	if _, err := fsys.Adopt(ctx, "/a.txt", temp, 5, sha); err != nil {
+	if _, err := fsys.Adopt(ctx, "/a.txt", temp, 5, sha, ""); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 	n, ok, err := fsys.idx.NodeByPath(ctx, "/a.txt")
@@ -58,7 +58,7 @@ func TestAdoptRejectsEmpty(t *testing.T) {
 	defer cleanup()
 
 	temp, sha := writeTemp(t, "")
-	if _, err := fsys.Adopt(t.Context(), "/a.txt", temp, 0, sha); err == nil {
+	if _, err := fsys.Adopt(t.Context(), "/a.txt", temp, 0, sha, ""); err == nil {
 		t.Fatal("空文件不该接管成功")
 	}
 	if _, err := os.Stat(temp); !errors.Is(err, os.ErrNotExist) {
@@ -73,7 +73,7 @@ func TestAdoptMissingParent(t *testing.T) {
 	ctx := t.Context()
 
 	temp, sha := writeTemp(t, "hello")
-	if _, err := fsys.Adopt(ctx, "/nope/a.txt", temp, 5, sha); !errors.Is(err, os.ErrNotExist) {
+	if _, err := fsys.Adopt(ctx, "/nope/a.txt", temp, 5, sha, ""); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v，期望 os.ErrNotExist", err)
 	}
 	if _, ok, err := fsys.idx.NodeByPath(ctx, "/nope/a.txt"); err != nil || ok {

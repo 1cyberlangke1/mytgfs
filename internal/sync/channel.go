@@ -171,3 +171,24 @@ func applyChanged(ctx context.Context, idx *index.Index, st NodeSource, ids []in
 
 // ErrNoDiffer 表示调用方没有提供差异源。
 var ErrNoDiffer = errors.New(i18n.T("err.no_differ"))
+
+// ChannelUnavailableError 表示频道解析不出来：已删除，或 bot 已不在该频道内。
+//
+// 输入：channelID 配置里的频道号
+// 输出：错误文案走 i18n
+// 预期：这是「卷整体不可用」的信号，调用方应停止同步并摘掉该卷
+type ChannelUnavailableError struct{ ChannelID int64 }
+
+func (e ChannelUnavailableError) Error() string {
+	return fmt.Sprintf(i18n.T("err.channel_unavailable"), e.ChannelID)
+}
+
+// IsChannelUnavailable 判断错误是否表示频道已不存在或 bot 已不在其中。
+//
+// 输入：任意 error（可带包裹）
+// 输出：true 表示重试不会好转
+// 预期：与网络抖动、pts 失效区分开
+func IsChannelUnavailable(err error) bool {
+	_, ok := errors.AsType[ChannelUnavailableError](err)
+	return ok
+}

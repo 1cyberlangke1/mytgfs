@@ -8,6 +8,7 @@ package trayapp
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -180,7 +181,19 @@ func Run(opts Options) error {
 		fmgr   *fm.Manager
 		store  *telegramstore.Store
 		differ tgsync.ChannelDiffer
-		mu     sync.Mutex // 自动同步与手动同步互斥
+		// proxy 让卷在联网前就能用本地索引：Store 持它，attach 时再接线
+		proxy  *telegramstore.APIProxy
+		chatID int64
+		// attached 表示该卷已接线并起过同步协程；由连接循环置位，面板只读
+		attached atomic.Bool
+		// netMu 保护 closePool：挂载协程写，清理协程读
+		netMu     sync.Mutex
+		closePool func()
+		// syncWG 等 attach 起的同步协程退出；清理协程统一等它
+		syncWG sync.WaitGroup
+		// ctx 是该卷的生命周期上下文，接线时传给同步协程
+		ctx context.Context
+		mu  sync.Mutex // 自动同步与手动同步互斥
 		// cancel 停掉该卷的同步协程；done 在清理协程关完索引与连接池后关闭。
 		// 删卷时先摘列表再 cancel 并等 done，之后才能安全删除索引文件
 		//（Windows 下打开中的 SQLite 文件删除会失败）。
@@ -459,53 +472,86 @@ func Run(opts Options) error {
 		return web.NewHandler(cfgPath, webOpts)
 	}
 
-	// openVolume 把一个卷接进托盘：索引、存储与文件管理都由装配根给出
-	// openVolume 把一个卷接进托盘：索引、存储与文件管理都由装配根给出。
-	// 返回 true 表示挂载成功；失败时已在内部记日志并推送状态。
-	// lastMountErr 是最近一次挂载失败的原因：mountOne 在对账锁内写，
+	// lastMountErr 是最近一次挂载失败的原因：mountLocal/attach 在对账锁内写，
 	// 重试日志读它，才能说明「为什么还在重试」而不只是报卷名
 	var lastMountErr error
-	mountOne := func(name string, channelID int64) bool {
-		api, closePool, perr := client.PooledAPI(cfg.Mount.DownloadConnections())
-		if perr != nil {
-			lastMountErr = perr
-			logging.Warn("tray.volume.open_failed", perr, name)
-			pushHub.Publish(push.TopicStatus)
-			return false
+
+	// 联网状态：连接循环拿到真实客户端后置位。未置位时只挂本地索引，
+	// 面板照样能列目录；置位后把已挂载的卷接线并起同步。
+	var networkReady atomic.Bool
+
+	// attachMu 串行化接线：对账与连接循环都会补 attach，重复接线会起两份同步
+	var attachMu sync.Mutex
+
+	// gone 记录已确认不可用的卷：配置删不掉（旧单卷形态）时也不能再挂回来
+	var goneMu sync.Mutex
+	gone := map[string]bool{}
+	// isGone 判断卷是否已确认失效。
+	isGone := func(name string) bool {
+		goneMu.Lock()
+		defer goneMu.Unlock()
+		return gone[name]
+	}
+	// dropGoneVolume 把频道已失效的卷从配置与运行时摘掉。
+	//
+	// 输入：卷名；触发错误
+	// 输出：无
+	// 预期：只处理一次；旧单卷形态没有 [[volumes]] 段，只在本进程内隐藏
+	dropGoneVolume := func(name string, cause error) {
+		goneMu.Lock()
+		if gone[name] {
+			goneMu.Unlock()
+			return
 		}
+		gone[name] = true
+		goneMu.Unlock()
+		logging.Warn("log.volume_gone", cause, name)
+		if merr := appRoot.MutateConfig(func(path string) error {
+			rerr := config.RemoveVolume(path, name)
+			if errors.Is(rerr, config.ErrVolumeNotFound) {
+				return nil
+			}
+			return rerr
+		}); merr != nil {
+			logging.Warn("log.volume_gone_config", merr, name)
+		}
+		// 摘运行时：cancel 后由生命周期协程关索引并从账本摘除
+		if tv, ok := reg.Get(name); ok {
+			tv.cancel()
+			<-tv.done
+		}
+		pushHub.Publish(push.TopicStatus)
+		rebuildMenu()
+	}
+
+	// mountLocal 只依赖本地索引把卷挂起来。
+	//
+	// 输入：卷名；配置里的频道 id
+	// 输出：true 表示本地挂载成功
+	// 预期：索引、队列、目录立即可用；不建 differ、不起同步，
+	// 真正读写频道内容前的网络部分由 attach 补上
+	mountLocal := func(name string, channelID int64) bool {
+		proxy := telegramstore.NewAPIProxy()
 		vctx, vcancel := context.WithCancel(rootCtx)
 		// 索引、存储、文件系统语义与文件管理统一由装配根给出
-		vf, oerr := appRoot.OpenVolume(vctx, name, api)
+		vf, oerr := appRoot.OpenVolume(vctx, name, proxy)
 		if oerr != nil {
 			lastMountErr = oerr
 			logging.Warn("log.index_open_failed", oerr)
 			vcancel()
-			closePool()
 			pushHub.Publish(push.TopicStatus)
 			return false
 		}
-		idx, store, fsys, fmgr := vf.Index, vf.Store, vf.FS, vf.Files
-		differ := &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: channelID}
-		tv := &trayVolume{vf: vf, name: name, idx: idx, fsys: fsys, fmgr: fmgr, store: store, differ: differ, cancel: vcancel, done: make(chan struct{})}
+		tv := &trayVolume{
+			vf: vf, name: name, idx: vf.Index, fsys: vf.FS, fmgr: vf.Files,
+			store: vf.Store, proxy: proxy, chatID: channelID,
+			ctx: vctx, cancel: vcancel, done: make(chan struct{}),
+		}
 
 		reg.Put(name, tv)
 		// 卷已就绪：推一条 status，面板连上后立即拿到真实卷列表，无需定时重试
 		pushHub.Publish(push.TopicStatus)
 		rebuildMenu()
-
-		var vwg sync.WaitGroup
-		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
-		// 挂载时现读配置：设置里改过间隔的新卷立即用新值
-		interval := SyncInterval(appRoot.Config().Mount.SyncSeconds)
-		if interval <= 0 {
-			interval = SyncInterval(0)
-		}
-		vwg.Go(func() {
-			AutoSyncWhile(vctx, StatusNotifier(pushHub), idx, differ, store, interval, &tv.mu, syncOn, func() {
-				// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
-				coverProvider.InvalidateVolume(name)
-			})
-		})
 
 		mu.Lock()
 		cancels[name] = vcancel
@@ -514,9 +560,16 @@ func Run(opts Options) error {
 		// 卷常驻到退出或被删卷：vctx 取消后清理资源并把自己从账本摘除
 		wg.Go(func() {
 			<-vctx.Done()
-			vwg.Wait()
+			// attach 起的同步协程可能还在跑，先等它们放手再关索引
+			tv.syncWG.Wait()
 			_ = vf.Close()
-			closePool()
+			tv.netMu.Lock()
+			closePool := tv.closePool
+			tv.closePool = nil
+			tv.netMu.Unlock()
+			if closePool != nil {
+				closePool()
+			}
 			reg.Delete(name)
 			mu.Lock()
 			delete(cancels, name)
@@ -525,6 +578,78 @@ func Run(opts Options) error {
 			rebuildMenu()
 		})
 		return true
+	}
+
+	// attach 把已本地挂载的卷接到真实客户端，并起自动同步。
+	//
+	// 输入：tv 已挂载的卷
+	// 输出：true 表示接线成功
+	// 预期：proxy.Set 之后 Store 与 downloader 立即走网络；
+	// 每卷独占一个连接池，删卷时随卷关闭
+	attach := func(tv *trayVolume) bool {
+		attachMu.Lock()
+		defer attachMu.Unlock()
+		if tv.attached.Load() {
+			return true
+		}
+		api, closePool, perr := client.PooledAPI(appRoot.Config().Mount.DownloadConnections())
+		if perr != nil {
+			lastMountErr = perr
+			logging.Warn("tray.volume.open_failed", perr, tv.name)
+			pushHub.Publish(push.TopicStatus)
+			return false
+		}
+		tv.proxy.Set(api)
+		tv.netMu.Lock()
+		tv.closePool = closePool
+		tv.netMu.Unlock()
+		tv.differ = &tgsync.TelegramChannelDiffer{API: client.API(), ChannelID: tv.chatID}
+
+		// 负数表示默认关闭；协程仍然常驻，托盘菜单打开后下一轮即可同步
+		// 挂载时现读配置：设置里改过间隔的新卷立即用新值
+		interval := SyncInterval(appRoot.Config().Mount.SyncSeconds)
+		if interval <= 0 {
+			interval = SyncInterval(0)
+		}
+		tv.syncWG.Go(func() {
+			AutoSyncWhile(tv.ctx, StatusNotifier(pushHub), tv.idx, tv.differ, tv.store, interval, &tv.mu, syncOn, func() {
+				// pts 推进＝频道有更新：头像缓存失效重建，事件驱动不轮询
+				coverProvider.InvalidateVolume(tv.name)
+			}, func(err error) {
+				// 频道不可用：不能在这里直接卸载（会等自己退出），另起协程收尾
+				wg.Go(func() { dropGoneVolume(tv.name, err) })
+			})
+		})
+		tv.attached.Store(true)
+		// 接线完成：标题/封面现在才读得到，推一次让面板补齐
+		pushHub.Publish(push.TopicStatus)
+		return true
+	}
+
+	// mountOne 把一个卷接进托盘：本地索引先起，已联网则顺手接线。
+	//
+	// 输入：卷名；频道 id
+	// 输出：true 表示本地挂载成功；联网后接线失败仍算成功，交给重试循环补齐
+	// 预期：建卷/attach/周期对账都走这一条路径
+	mountOne := func(name string, channelID int64) bool {
+		if isGone(name) {
+			// 已确认失效的卷不再重挂：配置可能删不掉（旧单卷形态）
+			return true
+		}
+		tv, ok := reg.Get(name)
+		if !ok {
+			if !mountLocal(name, channelID) {
+				return false
+			}
+			tv, ok = reg.Get(name)
+			if !ok {
+				return false
+			}
+		}
+		if !networkReady.Load() || tv.attached.Load() {
+			return true
+		}
+		return attach(tv)
 	}
 
 	// isMounted 判断卷是否已经在托盘里。
@@ -579,10 +704,26 @@ func Run(opts Options) error {
 	allMounted := func() bool {
 		cur := appRoot.Config()
 		if len(cur.Volumes) == 0 {
-			return isMounted(app.DefaultVolumeName)
+			return isMounted(app.DefaultVolumeName) || isGone(app.DefaultVolumeName)
 		}
 		for _, v := range cur.Volumes {
-			if v.Enabled && !isMounted(v.Name) {
+			if v.Enabled && !isMounted(v.Name) && !isGone(v.Name) {
+				return false
+			}
+		}
+		return true
+	}
+	// allAttached 判断运行时账本里的卷是否都已接线。
+	//
+	// 输入：无
+	// 输出：未联网时恒 true；否则所有已挂载卷都已接线才 true
+	// 预期：本地挂载成功但接线失败的卷不会被当成「已完成」而停止重试
+	allAttached := func() bool {
+		if !networkReady.Load() {
+			return true
+		}
+		for _, name := range reg.Names() {
+			if tv, ok := reg.Get(name); ok && !tv.attached.Load() {
 				return false
 			}
 		}
@@ -593,13 +734,13 @@ func Run(opts Options) error {
 		cur := appRoot.Config()
 		var names []string
 		if len(cur.Volumes) == 0 {
-			if !isMounted(app.DefaultVolumeName) && cur.Telegram.ChannelID != 0 {
+			if !isMounted(app.DefaultVolumeName) && !isGone(app.DefaultVolumeName) && cur.Telegram.ChannelID != 0 {
 				names = append(names, app.DefaultVolumeName)
 			}
 			return names
 		}
 		for _, v := range cur.Volumes {
-			if v.Enabled && !isMounted(v.Name) {
+			if v.Enabled && !isMounted(v.Name) && !isGone(v.Name) {
 				names = append(names, v.Name)
 			}
 		}
@@ -610,7 +751,13 @@ func Run(opts Options) error {
 		wait := 2 * time.Second
 		for {
 			mountAll()
-			if allMounted() || ctx.Err() != nil {
+			// 本地已挂载但还没接线的卷：连接已就绪，这里补 attach
+			for _, name := range reg.Names() {
+				if tv, ok := reg.Get(name); ok && !tv.attached.Load() {
+					attach(tv)
+				}
+			}
+			if (allMounted() && allAttached()) || ctx.Err() != nil {
 				return
 			}
 			// 卷名 + 最近一次失败原因：只说「还在重试谁」会丢掉为什么
@@ -630,6 +777,9 @@ func Run(opts Options) error {
 	// 连接循环：断网由 gotd 内部无限重连；Run 只在永久错误或 ctx 取消时返回
 	wg.Go(func() {
 		rerr := client.Run(rootCtx, func(ctx context.Context) error {
+			// 连接就绪：先置位，再由 mountUntilAll 把本地已挂的卷接线、
+			// 并收编对账期间新增的卷
+			networkReady.Store(true)
 			mountUntilAll(ctx)
 			<-ctx.Done()
 			return nil
@@ -773,6 +923,10 @@ func Run(opts Options) error {
 		sysTray.SetMenu(buildMenu())
 		sysTray.SetTooltip(tooltipText())
 	})
+
+	// 先把配置里的卷按本地索引挂起来：面板首帧就有数据，不等 Telegram 建连。
+	// 索引为空时 OpenVolume 会走全量重建（要联网），放后台避免拖慢窗口创建
+	wg.Go(func() { reconcileVolumes() })
 
 	// 面板路由直接挂到 webview：不监听端口、不开浏览器
 	setHandler(buildPanel())

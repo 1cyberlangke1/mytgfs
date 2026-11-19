@@ -13,7 +13,8 @@ import (
 
 // Adopt 接管一个已经落盘的临时文件，直接入队上传。
 //
-// 输入：ctx；name 卷内目标路径；temp 临时文件路径；size 字节数；sha 内容摘要
+// 输入：ctx；name 卷内目标路径；temp 临时文件路径；size 字节数；sha 内容摘要；
+// thumb 缩略图临时路径（空表示不带）
 // 输出：任务 id（无队列时为 0）；error
 // 预期：
 //   - 与「写句柄 + Close」等价，但内容不再从临时文件拷一份到本卷临时目录
@@ -21,9 +22,12 @@ import (
 //     上传要跑几分钟，HTTP 提交不能一直挂着，真实进度由队列的 Report 推给面板
 //   - 临时文件所有权转移给本层：成功时由执行体删除，失败时保留待重试
 //   - 目标目录不存在时直接失败，不留无主消息
-func (d *FileSystem) Adopt(ctx context.Context, name, temp string, size int64, sha string) (int64, error) {
+func (d *FileSystem) Adopt(ctx context.Context, name, temp string, size int64, sha, thumb string) (int64, error) {
 	if size <= 0 {
 		_ = os.Remove(temp)
+		if thumb != "" {
+			_ = os.Remove(thumb)
+		}
 		return 0, errors.New(i18n.T("err.upload_empty"))
 	}
 	parent, base, ok, err := d.parentOf(ctx, name)
@@ -48,7 +52,7 @@ func (d *FileSystem) Adopt(ctx context.Context, name, temp string, size int64, s
 	}
 	return d.enqueueAsync(ctx, jobUpload, name, uploadJob{
 		Path: name, Temp: temp, Size: size, Sha: sha,
-		Base: base, Body: body, Parent: parent.ID,
+		Base: base, Body: body, Parent: parent.ID, Thumb: thumb,
 	})
 }
 

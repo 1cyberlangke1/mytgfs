@@ -11,17 +11,19 @@ package main
 import (
 	"context"
 
-	"mytgfs/internal/i18n"
 	"mytgfs/internal/queue"
+	"mytgfs/internal/trayapp"
 	"mytgfs/internal/vfs"
 )
 
 // webStatus 汇总各卷的条目数、占用量、下载进度与任务队列。
 //
-// 输入：ctx；vols 已打开的卷（按注册表顺序，面板建的新卷也在内）
+// 输入：ctx；vols 已打开的卷（按注册表顺序，面板建的新卷也在内）；
+// code 是 Telegram 连接状态码（online/connecting/reconnecting/auth_lost）
 // 输出：可直接 JSON 序列化的状态负载
-// 预期：单个卷读取失败只在该卷上带 error，不影响其它卷
-func webStatus(ctx context.Context, vols []*webVolume) any {
+// 预期：单个卷读取失败只在该卷上带 error，不影响其它卷；
+// state_code 反映真实的 TG 连接状态，不能因为本地索引可用就报「已连接」
+func webStatus(ctx context.Context, vols []*webVolume, code string) any {
 	list := make([]map[string]any, 0, len(vols))
 	var queued []queue.Item
 	var xfers []vfs.Transfer
@@ -41,8 +43,8 @@ func webStatus(ctx context.Context, vols []*webVolume) any {
 		queued = append(queued, snap.Queue...)
 	}
 	return map[string]any{
-		"state":      i18n.T("web.state_local"),
-		"state_code": "local",
+		"state":      trayapp.StateText(code),
+		"state_code": code,
 		"auth":       "ok",
 		"volumes":    list,
 		"transfers":  xfers,

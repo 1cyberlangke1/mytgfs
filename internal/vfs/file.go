@@ -96,6 +96,7 @@ func (f *file) commitAt(ctx context.Context, tmp *os.File, p uploadJob, progress
 		Size:       p.Size,
 		SHA:        p.Sha,
 		Caption:    p.Body,
+		ThumbPath:  p.Thumb,
 		OnProgress: progress,
 	})
 	if uerr != nil {
