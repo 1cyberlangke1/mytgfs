@@ -8,7 +8,6 @@ import { LOCALE_OPTIONS, Translations } from '../utils/i18n';
 import { BrandEmblemSvg } from './VisualAssets';
 import { Button, cn, IOS_BOUNCE_SPRING, IOS_SPRING, Select } from './ui';
 import { connectionVisual, TONE_ICON, TONE_PILL } from './connectionStatus';
-import { runViewTransition } from '../utils/viewTransition';
 import type { NavItem } from './AppSidebar';
 
 interface PhoneTopBarProps {
@@ -171,7 +170,8 @@ export const PhoneTabBar: React.FC<PhoneTabBarProps> = ({
               transition={IOS_BOUNCE_SPRING}
               onClick={(e) => {
                 e.preventDefault();
-                runViewTransition(() => setActiveTab(item.id));
+                // 与桌面侧栏一致：不做整页 View Transition 交叉淡化，避免切换瞬间内容被冲淡。
+                setActiveTab(item.id);
               }}
               aria-current={isActive ? 'page' : undefined}
               className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium select-none transition-colors z-10 ${

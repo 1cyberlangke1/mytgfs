@@ -108,6 +108,15 @@ export interface DownloadTask {
 
 export type SortField = 'name' | 'size' | 'updatedAt';
 export type SortOrder = 'asc' | 'desc';
+/** ManageableChannel 是 user 会话可管理的 Telegram 频道（建卷/挂卷用）。 */
+export interface ManageableChannel {
+  id: number;
+  title: string;
+  chat_id: number;
+  username: string;
+  creator: boolean;
+  admin: boolean;
+}
 export type NavTab = 'overview' | 'files' | 'settings' | 'downloads';
 // 语言包目录里的文件名即 Locale；新增语言只丢 JSON，不改类型
 export type Locale = string;

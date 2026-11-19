@@ -8,7 +8,6 @@ import { BrandEmblemSvg } from './VisualAssets';
 import { CustomScrollArea } from './CustomScrollbar';
 import { Button, cn, IOS_BOUNCE_SPRING, IOS_SOFT_SPRING, IOS_SPRING, Select } from './ui';
 import { connectionVisual, TONE_ICON, TONE_TEXT } from './connectionStatus';
-import { runViewTransition } from '../utils/viewTransition';
 
 // OverviewSummary 直接取汇总函数的返回类型，避免两处手写同构结构。
 export type OverviewSummary = ReturnType<typeof computeOverviewSummary>;
@@ -138,7 +137,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 transition={IOS_BOUNCE_SPRING}
                 onClick={(e) => {
                   e.preventDefault();
-                  runViewTransition(() => setActiveTab(item.id));
+                  // 页签切换直接改状态：整页 View Transition 交叉淡化会把内容冲成白一瞬，
+                  // 且快照会盖住页面自身的进入动画。
+                  setActiveTab(item.id);
                 }}
                 title={sidebarCollapsed ? item.label : undefined}
                 aria-current={isActive ? 'page' : undefined}

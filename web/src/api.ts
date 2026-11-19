@@ -1,100 +1,14 @@
-// 面板与本地 Go 服务之间的 JSON API 客户端。
+// 面板与本地 Go 服务之间的 JSON API：传输层 + 数据结构 + 各域端点。
 //
-// 所有请求同源（桌面壳走 webview，网页版走 127.0.0.1），
-// 因此没有鉴权头；错误统一抛 ApiError，由调用方转成 toast。
-//
-// 安卓壳的 shouldInterceptRequest 拿不到请求体、也会丢 query 串，
-// 所以安卓上所有 /api/* 都经 Wails 服务方法 mytgfs/internal/web.Bridge.Do 转发，
-// 前端仍按 fetch/Response 的语义使用，调用方不需要区分平台。
-
+// 所有请求同源（桌面壳走 webview，网页版走 127.0.0.1），没有鉴权头；
+// 错误统一抛 ApiError，由调用方转成 toast。安卓壳的 shouldInterceptRequest
+// 拿不到请求体也会丢 query 串，因此安卓上所有 /api/* 经 Wails 服务方法
+// mytgfs/internal/web.Bridge.Do 转发，调用方仍按 fetch 语义使用。
 import { isAndroid, openNativeFile } from './platform';
 import { wailsRuntime } from './runtime';
 import { makeVideoThumb } from './utils/videoThumb';
 
-export interface ApiFile {
-  id: string;
-  volumeId: string;
-  parentId: string | null;
-  name: string;
-  isDir: boolean;
-  size: number;
-  updatedAt: string;
-  category: string;
-  path: string;
-  thumbnailUrl?: string;
-  previewUrl?: string;
-}
-
-export interface ApiVolume {
-  id: string;
-  name: string;
-  /** 频道标题（Telegram 侧显示名）；空表示读不到，显示回落到 name */
-  title?: string;
-  entries: number;
-  used: number;
-  /** 频道头像版本（photo id）；空串表示没有头像 */
-  cover?: string;
-}
-
-export interface ApiTransfer {
-  path: string;
-  done: number;
-  total: number;
-  /** 来源类型：download 是真正的下载任务，stream 是媒体播放读取 */
-  kind?: string;
-}
-
-export interface ApiAutostart {
-  enabled: boolean;
-}
-
-export interface ApiQueueItem {
-  id: number;
-  volume: string;
-  kind: string;
-  name: string;
-  state: string;
-  attempt: number;
-  error?: string;
-  /** 已推进字节；未知时缺省 */
-  done?: number;
-  /** 总字节；非上传任务为 0 */
-  size?: number;
-}
-
-export interface ApiState {
-  volumes: ApiVolume[];
-  /** 已保存 api_id + api_hash；false 表示还没完成首次配置 */
-  login_ready?: boolean;
-  caps?: {
-    createVolume?: boolean;
-    deleteVolume?: boolean;
-    attachVolume?: boolean;
-    listChannels?: boolean;
-    login?: boolean;
-    autostart?: boolean;
-    cover?: boolean;
-    rebuild?: boolean;
-  };
-  status?: {
-    state?: string;
-    state_code?: string;
-    transfers?: ApiTransfer[];
-    queue?: ApiQueueItem[];
-  };
-}
-
-export interface ApiSettingDef {
-  key: string;
-  kind: 'string' | 'int' | 'bool';
-}
-
-export interface ApiSettings {
-  schema: ApiSettingDef[];
-  values: Record<string, string>;
-  rawConfigText: string;
-}
-
+/** ApiError 携带后端返回的可读原因与 HTTP 状态码。 */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -105,45 +19,29 @@ export class ApiError extends Error {
   }
 }
 
-// asMessage 兼容两种错误体：{error:{message}} 与 {error:"..."}。
-function asMessage(payload: unknown): string {
+/** asMessage 兼容两种错误体：{error:{message}} 与 {error:"..."}。 */
+export function asMessage(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const err = (payload as { error?: unknown }).error;
   if (!err) return '';
   if (typeof err === 'string') return err;
-  if (typeof err === 'object' && err && 'message' in err) {
-    return String((err as { message: unknown }).message);
-  }
+  if (typeof err === 'object' && err && 'message' in err) return String((err as { message: unknown }).message);
   return '';
 }
 
-// ---- 安卓传输桥 ----
-//
-// 桥只传文本（JSON）。文件字节不经这里：单文件由原生选择器给路径、服务端读盘；
-// 文件夹/剪贴板产生的 File 先写入应用缓存拿到路径，再走 /api/upload/adopt。
-// 因此整条链路上没有 base64，也没有额外的编码层。
-
-/** BridgeReply 与 Go 侧 web.BridgeResponse 一一对应。 */
 interface BridgeReply {
   status?: number;
   type?: string;
   body?: string;
 }
 
-// bridgeFetch 经 Wails 服务方法执行一次控制面请求。
-//
-// 输入：path 带完整 query；init.body 必须是字符串（JSON）
-// 输出：Response（状态码/头/文本正文由 Go 侧回填）
-// 预期：取消信号触发时调用 CancellablePromise.cancel，调用方按 aborted 处理；
-// 二进制请求体直接报错，避免又出现一条隐式编码通道
+// bridgeFetch 经 Wails 服务方法执行一次控制面请求；body 必须是字符串。
 async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> {
   const call = wailsRuntime()?.Call?.ByName;
   if (!call) throw new ApiError('desktop runtime unavailable', 0);
   const method = (init?.method ?? 'GET').toUpperCase();
   const raw = init?.body ?? null;
-  if (raw !== null && typeof raw !== 'string') {
-    throw new ApiError('binary body must not use the text bridge', 0);
-  }
+  if (raw !== null && typeof raw !== 'string') throw new ApiError('binary body must not use the text bridge', 0);
   const pending = call('mytgfs/internal/web.Bridge.Do', { method, path, body: raw ?? '' }) as Promise<unknown> & {
     cancel?: () => void;
   };
@@ -169,12 +67,13 @@ async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> 
   }
 }
 
-// rawFetch 是 fetch 的平台分派：安卓走文本桥，其余照旧。
-function rawFetch(path: string, init?: RequestInit): Promise<Response> {
+/** rawFetch 是 fetch 的平台分派：安卓走文本桥，其余照旧。 */
+export function rawFetch(path: string, init?: RequestInit): Promise<Response> {
   return isAndroid ? bridgeFetch(path, init) : fetch(path, init);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** request 发一次 JSON 请求并解析响应；非 2xx 抛 ApiError。 */
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await rawFetch(path, init);
   const text = await res.text();
   let payload: unknown = null;
@@ -185,18 +84,125 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       payload = null;
     }
   }
-  if (!res.ok) {
-    throw new ApiError(asMessage(payload) || `${res.status} ${res.statusText}`, res.status);
-  }
+  if (!res.ok) throw new ApiError(asMessage(payload) || `${res.status} ${res.statusText}`, res.status);
   return payload as T;
 }
 
-// getState 读取卷列表、连接状态与传输进度。
-export function getState(): Promise<ApiState> {
-  return request<ApiState>('/api/state');
+const json = (method: string, body: unknown, signal?: AbortSignal): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+  signal,
+});
+
+// ---- 数据结构（与 Go 侧 JSON 字段一一对应）----
+export interface ApiFile {
+  id: string;
+  volumeId: string;
+  parentId: string | null;
+  name: string;
+  isDir: boolean;
+  size: number;
+  updatedAt: string;
+  category: string;
+  path: string;
+  thumbnailUrl?: string;
+  previewUrl?: string;
+}
+export interface ApiVolume {
+  id: string;
+  name: string;
+  title?: string;
+  entries: number;
+  used: number;
+  cover?: string;
+}
+export interface ApiTransfer {
+  path: string;
+  done: number;
+  total: number;
+  kind?: string;
+}
+export interface ApiQueueItem {
+  id: number;
+  volume: string;
+  kind: string;
+  name: string;
+  state: string;
+  attempt: number;
+  error?: string;
+  done?: number;
+  size?: number;
+}
+export interface ApiState {
+  volumes: ApiVolume[];
+  login_ready?: boolean;
+  caps?: {
+    createVolume?: boolean;
+    deleteVolume?: boolean;
+    attachVolume?: boolean;
+    listChannels?: boolean;
+    login?: boolean;
+    autostart?: boolean;
+    cover?: boolean;
+    rebuild?: boolean;
+  };
+  status?: { state?: string; state_code?: string; transfers?: ApiTransfer[]; queue?: ApiQueueItem[] };
+}
+export interface ApiSettingDef {
+  key: string;
+  kind: 'string' | 'int' | 'bool';
+}
+export interface ApiSettings {
+  schema: ApiSettingDef[];
+  values: Record<string, string>;
+  rawConfigText: string;
+}
+export interface ApiAutostart {
+  enabled: boolean;
+}
+export interface ApiDownload {
+  name: string;
+  size: number;
+  mod: string;
+  path: string;
+}
+export interface ApiDownloadTask {
+  id: string;
+  name: string;
+  vol: string;
+  path: string;
+  size: number;
+  done: number;
+  state: 'running' | 'paused' | 'failed';
+  error?: string;
+}
+export interface ApiDownloads {
+  dir: string;
+  files: ApiDownload[];
+  tasks?: ApiDownloadTask[];
+}
+export interface ApiCredentials {
+  api_id: number;
+  api_hash_set: boolean;
+  bot_token_set: boolean;
+  bot_session: boolean;
+  user_session: boolean;
+}
+export interface ApiIdentity {
+  id: number;
+  username: string;
+  name: string;
+  bot: boolean;
 }
 
-// listFiles 拉取整卷条目（all=1）或单目录。
+// ---- 状态与同步 ----
+export const getState = () => request<ApiState>('/api/state');
+export const triggerSync = () => request('/api/sync', { method: 'POST' });
+export const rebuildVolume = (volume: string, signal?: AbortSignal) =>
+  request<{ files: number }>(`/api/rebuild?vol=${encodeURIComponent(volume)}`, { method: 'POST', signal });
+
+// ---- 文件 ----
 export async function listFiles(volume: string, all = false, dir = '/'): Promise<ApiFile[]> {
   const q = new URLSearchParams({ vol: volume });
   if (all) q.set('all', '1');
@@ -204,129 +210,48 @@ export async function listFiles(volume: string, all = false, dir = '/'): Promise
   const res = await request<{ files: ApiFile[] }>(`/api/files?${q.toString()}`);
   return res.files ?? [];
 }
-
-// mkdir 新建目录。
-export function mkdir(volume: string, dir: string, name: string): Promise<{ path: string }> {
-  return request('/api/files/mkdir', {
+export const mkdir = (volume: string, dir: string, name: string) =>
+  request<{ path: string }>('/api/files/mkdir', json('POST', { vol: volume, dir, name }));
+export const moveItems = (volume: string, paths: string[], to: string, dest?: string) =>
+  request<{ moved: number }>('/api/files/move', json('POST', { vol: volume, paths, to, dest }));
+export const removeItems = (volume: string, paths: string[]) =>
+  request<{ removed: number }>('/api/files/remove', json('POST', { vol: volume, paths }));
+export const fileURL = (volume: string, path: string, inline = false) => {
+  const q = new URLSearchParams({ vol: volume, path });
+  if (inline) q.set('inline', '1');
+  return `/api/file?${q.toString()}`;
+};
+export const thumbURL = (volume: string, path: string) =>
+  `/api/thumb?${new URLSearchParams({ vol: volume, path }).toString()}`;
+export async function uploadPoster(volume: string, path: string, poster: Blob): Promise<void> {
+  if (isAndroid) return;
+  const q = new URLSearchParams({ vol: volume, path });
+  const res = await rawFetch(`/api/poster?${q.toString()}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vol: volume, dir, name }),
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: poster,
   });
+  if (!res.ok) throw new ApiError((await res.text()).trim() || res.statusText, res.status);
 }
 
-// moveItems 把条目移动到目录；dest 非空时作为完整目标路径（改名用）。
-export function moveItems(
-  volume: string,
-  paths: string[],
-  to: string,
-  dest?: string
-): Promise<{ moved: number }> {
-  return request('/api/files/move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vol: volume, paths, to, dest }),
-  });
-}
-
-// removeItems 删除条目（目录递归）。
-export function removeItems(volume: string, paths: string[]): Promise<{ removed: number }> {
-  return request('/api/files/remove', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vol: volume, paths }),
-  });
-}
-
-/** MytgfsNativeBridge 声明安卓宿主注入的 Java 桥接口。
- * 方法均标注显式 this 约束，防止被脱离宿主对象解构调用。 */
-export interface MytgfsNativeBridge {
-  pickFileImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
-  pickFolderImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
-  pickCover?: (this: MytgfsNativeBridge, vol: string) => void;
-}
-
-// nativeImport 走安卓原生选择器：壳用 SAF 打开 fd，逐个交给服务端接管，
-// 字节不进 JS，也不在应用 cache 留副本。
-//
-// 输入：zone=file|folder；卷名；卷内目标目录
-// 输出：{uploaded, failed, failedNames}；用户取消时 {0,0,[]}
-// 预期：桌面端不会调用；回调名与壳里的 evaluateJavascript 一一对应；
-//       必须保留 native 宿主对象作为 receiver (this) 调用，避免 Chromium V8 报
-//       "Java bridge method can't be invoked on a non-injected object"；
-//       失败项名字由壳按相对路径回传，前端据此逐条提示
-function nativeImport(
-  zone: 'file' | 'folder',
-  volume: string,
-  dir: string
-): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
-  return new Promise((resolve, reject) => {
-    const w = window as unknown as {
-      mytgfsNative?: MytgfsNativeBridge;
-      _mytgfsFileImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
-      _mytgfsFolderImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
-    };
-    const native = w.mytgfsNative;
-    const hasMethod =
-      zone === 'file'
-        ? typeof native?.pickFileImport === 'function'
-        : typeof native?.pickFolderImport === 'function';
-    if (!native || !hasMethod) {
-      reject(new ApiError('native picker unavailable', 0));
-      return;
-    }
-    const done = (uploaded: number, failed: number, failedNames?: string[]) =>
-      resolve({ uploaded, failed, failedNames: failedNames ?? [] });
-    if (zone === 'file') {
-      w._mytgfsFileImport = (uploaded, failed, failedNames) => {
-        delete w._mytgfsFileImport;
-        done(uploaded, failed, failedNames);
-      };
-      native.pickFileImport!(volume, dir);
-    } else {
-      w._mytgfsFolderImport = (uploaded, failed, failedNames) => {
-        delete w._mytgfsFolderImport;
-        done(uploaded, failed, failedNames);
-      };
-      native.pickFolderImport!(volume, dir);
-    }
-  });
-}
-
-// importFileNative 用安卓原生单文件选择器（可多选）导入。
-//
-// 输入：卷名、卷内目标目录
-// 输出：{uploaded, failed, failedNames}
-// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache
-export function importFileNative(
-  volume: string,
-  dir: string
-): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
-  return nativeImport('file', volume, dir);
-}
-
-// importFolderNative 用安卓原生目录选择器递归导入。
-//
-// 输入：卷名、卷内目标目录
-// 输出：{uploaded, failed, failedNames}
-// 预期：字节由壳按 fd 直接交给服务端，不复制到 cache；空目录也会在远端建出来
-export function importFolderNative(
-  volume: string,
-  dir: string
-): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
-  return nativeImport('folder', volume, dir);
-}
-
-// UPLOAD_CHUNK 是分片大小。内容一律以原始字节发送：
-// 桌面壳的 Wails AssetServer 收不到 FormData/Blob 请求体（官方 issue #5845、
-// #6068），multipart 上传在桌面端会变成 0 字节文件，所以这里走分片接口。
-// 安卓不做分片：File 由原生通道写入缓存，再把路径交给 /api/upload/adopt。
+// ---- 上传（原始字节分片；桌面壳收不到 multipart 体）----
 const UPLOAD_CHUNK = 4 << 20;
 
-// putChunk 发送一段原始字节，返回服务端累计偏移。
-//
-// 输入：会话 id、该段起始偏移、这一段字节、文件总大小
-// 输出：Promise<number> 已收字节数
-// 预期：409 表示偏移对不上，交给调用方报错；进度按整文件比例上报
+/** UploadPaused 表示上传被用户暂停：服务端会话与已传字节仍在。 */
+export class UploadPaused extends Error {
+  constructor(
+    readonly id: string,
+    readonly offset: number
+  ) {
+    super('paused');
+    this.name = 'UploadPaused';
+  }
+}
+export interface UploadResume {
+  id: string;
+  offset: number;
+}
+
 function putChunk(
   id: string,
   offset: number,
@@ -337,14 +262,11 @@ function putChunk(
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const q = new URLSearchParams({ id, offset: String(offset) });
-    xhr.open('PUT', `/api/upload/chunk?${q.toString()}`);
+    xhr.open('PUT', `/api/upload/chunk?${new URLSearchParams({ id, offset: String(offset) }).toString()}`);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.responseType = 'text';
     xhr.upload.onprogress = (ev) => {
-      if (ev.lengthComputable && onProgress) {
-        onProgress(Math.min(1, (offset + ev.loaded) / Math.max(1, total)));
-      }
+      if (ev.lengthComputable && onProgress) onProgress(Math.min(1, (offset + ev.loaded) / Math.max(1, total)));
     };
     xhr.onerror = () => reject(new ApiError('network error', 0));
     xhr.onabort = () => reject(new ApiError('aborted', 0));
@@ -373,69 +295,19 @@ function putChunk(
   });
 }
 
-// UploadPaused 表示上传被用户暂停：服务端会话与已传字节仍在。
-//
-// 输入：会话 id、已传字节数
-// 输出：可由调用方保存后作为 resume 参数再次上传
-// 预期：暂停不删除会话，继续时从 offset 接着传
-export class UploadPaused extends Error {
-  constructor(
-    readonly id: string,
-    readonly offset: number
-  ) {
-    super('paused');
-    this.name = 'UploadPaused';
-  }
-}
-
-/** UploadResume 是续传所需的断点信息。 */
-export interface UploadResume {
-  id: string;
-  offset: number;
-}
-
-// discardUpload 丢弃服务端会话与其临时文件。
-//
-// 输入：会话 id
-// 输出：Promise；失败静默（会话也会被空闲回收）
-// 预期：取消上传时立即释放磁盘，不等一小时超时
-export function discardUpload(id: string): Promise<void> {
-  return request(`/api/upload?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const discardUpload = (id: string): Promise<void> =>
+  request(`/api/upload?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
     .then(() => undefined)
     .catch(() => undefined);
+
+export async function putUploadThumb(id: string, blob: Blob): Promise<void> {
+  await request(`/api/upload/thumb?id=${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: await blob.arrayBuffer(),
+  });
 }
 
-// putUploadThumb 把抽帧结果发给服务端会话（PUT /api/upload/thumb?id=）。
-//
-// 输入：会话 id；JPEG Blob（长边 256、≤32KB）
-// 输出：Promise；服务端 204 表示已收
-// 预期：与分片上传并行，慢一点也只丢缩略图，不中断内容上传
-export function putUploadThumb(id: string, blob: Blob): Promise<void> {
-  return blob
-    .arrayBuffer()
-    .then((buf) =>
-      request(`/api/upload/thumb?id=${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'image/jpeg' },
-        body: buf,
-      })
-    )
-    .then(() => undefined);
-}
-
-// uploadFile 上传单个文件，onProgress 汇报 0..1 的「浏览器→服务端」进度。
-//
-// 输入：卷、目标目录、相对路径、落盘文件名、文件、进度回调、取消信号、断点、
-//       onSession 会话建立后的回调（取消时据此丢弃服务端临时文件）
-// 输出：写入后的卷内路径 + 后台队列任务号（0 表示没有队列）
-// 预期：
-//   - name 是清单里改名后的文件名，由调用方决定；与 file.name 可以不同，
-//     这样改名落进 init 请求，省掉一次上传后的重命名调用
-//   - 进度只覆盖本段：真正的 Telegram 上传在提交后由队列继续，
-//     它的字节进度从 /api/state 的队列快照里读，不是这里伪造
-//   - 取消时抛 UploadPaused，会话保留，调用方可带断点继续
-//   - 会话已失效（404）时自动从头重传一次，而不是让用户手点
-//   - 其它错误丢弃服务端会话，不留半份临时文件
 export async function uploadFile(
   volume: string,
   dir: string,
@@ -447,189 +319,163 @@ export async function uploadFile(
   resume?: UploadResume,
   onSession?: (id: string) => void
 ): Promise<{ path: string; job: number }> {
-  // 新建会话时顺便抽一帧当缩略图：续传复用原会话，不再重复抽帧
   const session = resume?.id
     ? { id: resume.id }
-    : await request<{ id: string }>('/api/upload/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vol: volume, dir, rel, name, size: file.size }),
-      });
+    : await request<{ id: string }>('/api/upload/init', json('POST', { vol: volume, dir, rel, name, size: file.size }));
   onSession?.(session.id);
   // 抽帧与分片并行：抽帧慢不挡内容上传，提交前再等它一次
   const thumbTask = resume?.id
     ? Promise.resolve()
-    : makeVideoThumb(file).then((blob) =>
-        blob ? putUploadThumb(session.id, blob) : undefined
-      );
+    : makeVideoThumb(file).then((blob) => (blob ? putUploadThumb(session.id, blob) : undefined));
   let offset = resume?.offset ?? 0;
   try {
     while (offset < file.size) {
       const end = Math.min(offset + UPLOAD_CHUNK, file.size);
-      // 取原始 ArrayBuffer 而不是 Blob：Blob 请求体在桌面壳里同样不可靠
       const bytes = await file.slice(offset, end).arrayBuffer();
       offset = await putChunk(session.id, offset, bytes, file.size, onProgress, signal);
     }
     await thumbTask;
-    const done = await request<{ path: string; job?: number }>(
-      `/api/upload/commit?id=${encodeURIComponent(session.id)}`,
-      { method: 'POST' }
-    );
+    const done = await request<{ path: string; job?: number }>(`/api/upload/commit?id=${encodeURIComponent(session.id)}`, { method: 'POST' });
     onProgress?.(1);
     return { path: done?.path ?? '', job: done?.job ?? 0 };
   } catch (err) {
     void thumbTask.catch(() => undefined);
-    if (err instanceof ApiError && err.status === 0 && err.message === 'aborted') {
-      throw new UploadPaused(session.id, offset);
-    }
+    if (err instanceof ApiError && err.status === 0 && err.message === 'aborted') throw new UploadPaused(session.id, offset);
+    // 服务端会话过期（重启/超时）：自动重开一次
     if (err instanceof ApiError && err.status === 404 && (resume || offset > 0)) {
-      // 服务端会话过期（重启/超时）：自动重开一次
       return uploadFile(volume, dir, rel, name, file, onProgress, signal);
     }
-    void request(`/api/upload?id=${encodeURIComponent(session.id)}`, { method: 'DELETE' }).catch(
-      () => undefined
-    );
+    void discardUpload(session.id);
     throw err;
   }
 }
 
-// getSettings 读取结构化设置。
-export function getSettings(): Promise<ApiSettings> {
-  return request<ApiSettings>('/api/settings');
-}
-
-// saveSettings 写入结构化设置：只提交要改的键，其它沿用配置文件原值。
-export function saveSettings(values: Record<string, string>): Promise<{ saved: boolean }> {
-  return request('/api/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values }),
-  });
-}
-
-// getAutostart 读取开机自启状态（系统注册项）。
-export function getAutostart(): Promise<ApiAutostart> {
-  return request<ApiAutostart>('/api/autostart');
-}
-
-// setAutostart 开启或关闭开机自启。
-export function setAutostart(enabled: boolean): Promise<ApiAutostart> {
-  return request('/api/autostart', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-}
-
-// triggerSync 立即增量同步。
-export function triggerSync(): Promise<unknown> {
-  return request('/api/sync', { method: 'POST' });
-}
-
-// rebuildVolume 按频道历史全量重建指定卷的本地索引。
-//
-// 输入：volume 卷名；signal 可中断（取消即断开请求，服务端 r.Context() 随之取消）
-export function rebuildVolume(
-  volume: string,
-  signal?: AbortSignal
-): Promise<{ files: number }> {
-  const q = new URLSearchParams({ vol: volume });
-  return request(`/api/rebuild?${q.toString()}`, { method: 'POST', signal });
-}
-
-// clearQueue 删除服务端已结束（成功/失败/已取消）的任务记录。
-//
-// 输出：删除条数
-// 预期：排队中与执行中的任务不受影响；前端收到 status 推送后重取快照
-export function clearQueue(): Promise<{ removed: number }> {
-  return request('/api/queue', { method: 'DELETE' });
-}
-
-// cancelQueueJob 取消一条排队中/执行中的服务端队列任务。
-//
-// 输入：volume 卷名；id 任务号
-// 输出：{cancelled: true}；任务不存在 404、已结束 409
-// 预期：排队中立刻落 cancelled；执行中的上传被打断并丢弃临时文件，
-//       重启不会自己重传，前端刷新后该任务显示为已取消
-export function cancelQueueJob(volume: string, id: number): Promise<{ cancelled: boolean }> {
-  return request(`/api/queue/${encodeURIComponent(volume)}/${id}`, { method: 'DELETE' });
-}
-
-// createVolume 新建卷：后端建 Telegram 频道并写配置。
-//
-// 输入：name/title；signal 可中断（取消后服务端会把刚建出的空频道删掉）
-export function createVolume(
-  name: string,
-  title: string,
-  signal?: AbortSignal
-): Promise<{ name: string; channel_id: number; chat_id: number }> {
-  return request('/api/volumes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, title }),
-    signal,
-  });
-}
-
-// listChannels 列出 user 账号里可管理的频道，供「添加已有频道」下拉使用。
-//
-// 输入：无；输出：频道数组（chat_id 已转成 -100... 形式）
-// 预期：!user 会话时抛 ApiError，调用方显示原因
-export function listChannels(): Promise<{
-  channels: {
-    id: number;
-    chat_id: number;
-    title: string;
-    username: string;
-    creator: boolean;
-    admin: boolean;
-  }[];
-}> {
-  return request('/api/channels');
-}
-
-// attachVolume 把已有频道挂成卷：后端只读校验后写配置。
-export function attachVolume(
-  name: string,
-  chatId: number
-): Promise<{ name: string; channel_id: number; chat_id: number; title: string }> {
-  return request('/api/volumes/attach', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, chat_id: chatId }),
-  });
-}
-
-// deleteVolume 删除卷：删频道、移出配置、删本地索引，不可撤销。
-export function deleteVolume(name: string): Promise<{ removed: boolean }> {
-  return request(`/api/volumes?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-}
-
-// fileURL 返回下载/预览地址；inline 用于内嵌播放。
-export function fileURL(volume: string, path: string, inline = false): string {
-  const q = new URLSearchParams({ vol: volume, path });
-  if (inline) q.set('inline', '1');
-  return `/api/file?${q.toString()}`;
-}
-
-// thumbURL 返回缩略图地址。
-export function thumbURL(volume: string, path: string): string {
-  const q = new URLSearchParams({ vol: volume, path });
-  return `/api/thumb?${q.toString()}`;
-}
-
-// coverURL 返回频道头像地址；version 是 photo id，换头像后 URL 自然失效。
-export function coverURL(volume: string, version?: string): string {
+// ---- 卷管理 ----
+export const createVolume = (name: string, title: string, signal?: AbortSignal) =>
+  request<{ name: string; channel_id: number; chat_id: number }>('/api/volumes', json('POST', { name, title }, signal));
+export const listChannels = () =>
+  request<{ channels: { id: number; chat_id: number; title: string; username: string; creator: boolean; admin: boolean }[] }>(
+    '/api/channels'
+  );
+export const attachVolume = (name: string, chatId: number) =>
+  request<{ name: string; channel_id: number; chat_id: number; title: string }>(
+    '/api/volumes/attach',
+    json('POST', { name, chat_id: chatId })
+  );
+export const deleteVolume = (name: string) =>
+  request<{ removed: boolean }>(`/api/volumes?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const coverURL = (volume: string, version?: string) => {
   const q = new URLSearchParams({ vol: volume });
   if (version) q.set('v', version);
   return `/api/cover?${q.toString()}`;
+};
+export async function setCover(volume: string, file: File): Promise<void> {
+  const res = await rawFetch(`/api/cover?${new URLSearchParams({ vol: volume }).toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  if (!res.ok) throw new ApiError((await res.text()).trim() || res.statusText, res.status);
+}
+export async function setVolumeTitle(volume: string, title: string): Promise<void> {
+  const res = await rawFetch(`/api/cover?${new URLSearchParams({ vol: volume }).toString()}`, json('PUT', { title }));
+  if (!res.ok) throw new ApiError((await res.text()).trim() || res.statusText, res.status);
 }
 
-// pickCoverNative 调安卓原生图片选择器：壳把 SAF 的 fd 交给 Go 读。
-//
-// 输入：卷名
-// 输出：true 表示服务端已接受新头像；用户取消返回 false
-// 预期：图片不复制到 cache，也不经过 JS 字节
+// ---- 服务端队列 ----
+export const clearQueue = () => request<{ removed: number }>('/api/queue', { method: 'DELETE' });
+export const cancelQueueJob = (volume: string, id: number) =>
+  request<{ cancelled: boolean }>(`/api/queue/${encodeURIComponent(volume)}/${id}`, { method: 'DELETE' });
+
+// ---- 下载目录 ----
+export const localFileURL = (name: string) => `/api/downloads/file?name=${encodeURIComponent(name)}`;
+export async function openDownloadedFile(name: string): Promise<{ opened: boolean }> {
+  const res = await request<{ opened: boolean; path?: string }>(`/api/downloads/open-file?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+  });
+  if (!res.opened && isAndroid && res.path) {
+    openNativeFile(res.path);
+    return { opened: true };
+  }
+  return { opened: res.opened };
+}
+export const getDownloads = () => request<ApiDownloads>('/api/downloads');
+export const startDownload = (volume: string, path: string) =>
+  request<{ task: ApiDownloadTask }>('/api/downloads', json('POST', { vol: volume, path }));
+export const pauseDownload = (id: string) =>
+  request<{ ok: boolean }>('/api/downloads/task', json('POST', { id, action: 'pause' }));
+export const resumeDownload = (id: string) =>
+  request<{ ok: boolean }>('/api/downloads/task', json('POST', { id, action: 'resume' }));
+export const cancelDownload = (id: string) =>
+  request<{ removed: boolean }>(`/api/downloads?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const removeDownload = (name: string) =>
+  request<{ removed: boolean }>(`/api/downloads?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const openDownloads = () => request<{ opened: boolean }>('/api/downloads/open', { method: 'POST' });
+
+// ---- 设置与自启 ----
+export const getSettings = () => request<ApiSettings>('/api/settings');
+export const saveSettings = (values: Record<string, string>) =>
+  request<{ saved: boolean }>('/api/settings', json('PUT', { values }));
+export const getAutostart = () => request<ApiAutostart>('/api/autostart');
+export const setAutostart = (enabled: boolean) => request<ApiAutostart>('/api/autostart', json('POST', { enabled }));
+
+// ---- 凭证与登录 ----
+export const getCredentials = () => request<ApiCredentials>('/api/credentials');
+export const saveCredentials = (body: { api_id?: number; api_hash?: string; bot_token?: string }) =>
+  request<{ status: ApiCredentials; restart_required: boolean }>('/api/credentials', json('PUT', body));
+export const loginBot = (token: string) =>
+  request<{ user: ApiIdentity; restart_required: boolean }>('/api/login/bot', json('POST', { token }));
+export const startUserLogin = (phone: string) =>
+  request<{ phone_code_hash: string; timeout: number }>('/api/login/user/start', json('POST', { phone }));
+export const finishUserLogin = (body: { phone: string; code: string; phone_code_hash: string; password?: string }) =>
+  request<{ need_password: boolean; user: ApiIdentity }>('/api/login/user/code', json('POST', body));
+export const getIdentity = (kind: 'bot' | 'user') =>
+  request<{ user: ApiIdentity }>(`/api/identity?kind=${kind}`);
+
+// ---- 安卓原生选择器桥（壳注入 window.mytgfsNative）----
+export interface MytgfsNativeBridge {
+  pickFileImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
+  pickFolderImport?: (this: MytgfsNativeBridge, v: string, d: string) => void;
+  pickCover?: (this: MytgfsNativeBridge, vol: string) => void;
+}
+
+// nativeImport 走安卓原生选择器：壳用 SAF 打开 fd 交给服务端接管，字节不进 JS。
+function nativeImport(
+  zone: 'file' | 'folder',
+  volume: string,
+  dir: string
+): Promise<{ uploaded: number; failed: number; failedNames: string[] }> {
+  return new Promise((resolve, reject) => {
+    const w = window as unknown as {
+      mytgfsNative?: MytgfsNativeBridge;
+      _mytgfsFileImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
+      _mytgfsFolderImport?: (uploaded: number, failed: number, failedNames?: string[]) => void;
+    };
+    const native = w.mytgfsNative;
+    const hasMethod = zone === 'file' ? typeof native?.pickFileImport === 'function' : typeof native?.pickFolderImport === 'function';
+    if (!native || !hasMethod) {
+      reject(new ApiError('native picker unavailable', 0));
+      return;
+    }
+    const done = (uploaded: number, failed: number, failedNames?: string[]) =>
+      resolve({ uploaded, failed, failedNames: failedNames ?? [] });
+    if (zone === 'file') {
+      w._mytgfsFileImport = (uploaded, failed, failedNames) => {
+        delete w._mytgfsFileImport;
+        done(uploaded, failed, failedNames);
+      };
+      native.pickFileImport!(volume, dir);
+    } else {
+      w._mytgfsFolderImport = (uploaded, failed, failedNames) => {
+        delete w._mytgfsFolderImport;
+        done(uploaded, failed, failedNames);
+      };
+      native.pickFolderImport!(volume, dir);
+    }
+  });
+}
+export const importFileNative = (volume: string, dir: string) => nativeImport('file', volume, dir);
+export const importFolderNative = (volume: string, dir: string) => nativeImport('folder', volume, dir);
 export function pickCoverNative(volume: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const w = window as unknown as {
@@ -647,227 +493,4 @@ export function pickCoverNative(volume: string): Promise<boolean> {
     };
     native.pickCover(volume);
   });
-}
-
-// setCover 上传一张原图并写成频道头像（服务端裁方压缩，仅桌面/网页端）。
-export async function setCover(volume: string, file: File): Promise<void> {
-  const q = new URLSearchParams({ vol: volume });
-  const res = await rawFetch(`/api/cover?${q.toString()}`, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  });
-  if (!res.ok) {
-    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
-  }
-}
-
-// setVolumeTitle 改频道标题（面板显示名）。
-export async function setVolumeTitle(volume: string, title: string): Promise<void> {
-  const q = new URLSearchParams({ vol: volume });
-  const res = await rawFetch(`/api/cover?${q.toString()}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
-  });
-  if (!res.ok) {
-    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
-  }
-}
-
-// ---- 下载目录（服务端落盘）----
-
-// ApiDownload 是下载目录里的一个文件。
-export interface ApiDownload {
-  name: string;
-  size: number;
-  mod: string;
-  /** 本地绝对路径；安卓导出到系统下载目录时用它定位沙盒文件 */
-  path: string;
-}
-
-// ApiDownloadTask 是一次进行中的下载。
-export interface ApiDownloadTask {
-  id: string;
-  name: string;
-  vol: string;
-  path: string;
-  size: number;
-  done: number;
-  state: 'running' | 'paused' | 'failed';
-  error?: string;
-}
-
-// ApiDownloads 是目录路径、文件列表与进行中的任务。
-export interface ApiDownloads {
-  dir: string;
-  files: ApiDownload[];
-  tasks?: ApiDownloadTask[];
-}
-
-// localFileURL 返回下载目录里某个文件的直链。
-//
-// 输入：name 下载目录内的文件名
-// 输出：可喂给 img/video/audio/iframe 的 URL
-// 预期：服务端走 ServeContent，支持 Range
-export function localFileURL(name: string): string {
-  return `/api/downloads/file?name=${encodeURIComponent(name)}`;
-}
-
-// openDownloadedFile 用系统默认程序打开已下载文件。
-//
-// 输入：name 文件名
-// 输出：{opened:true}
-// 预期：桌面由服务端拉起系统程序；安卓服务端拿不到文件管理器，
-//       改用它回传的绝对路径走 FileProvider + 系统选择器（用户自己选应用）
-export async function openDownloadedFile(name: string): Promise<{ opened: boolean }> {
-  const res = await request<{ opened: boolean; path?: string }>(
-    `/api/downloads/open-file?name=${encodeURIComponent(name)}`,
-    { method: 'POST' }
-  );
-  if (!res.opened && isAndroid && res.path) {
-    openNativeFile(res.path);
-    return { opened: true };
-  }
-  return { opened: res.opened };
-}
-
-// getDownloads 列出已下载文件与进行中的任务。
-export function getDownloads(): Promise<ApiDownloads> {
-  return request<ApiDownloads>('/api/downloads');
-}
-
-// startDownload 启动后台下载并立即返回任务。
-//
-// 输出：202 的任务快照；进度靠事件推送，不再阻塞请求
-export function startDownload(
-  volume: string,
-  path: string
-): Promise<{ task: ApiDownloadTask }> {
-  return request('/api/downloads', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vol: volume, path }),
-  });
-}
-
-// pauseDownload / resumeDownload 控制单个下载任务。
-export function pauseDownload(id: string): Promise<{ ok: boolean }> {
-  return request('/api/downloads/task', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, action: 'pause' }),
-  });
-}
-
-export function resumeDownload(id: string): Promise<{ ok: boolean }> {
-  return request('/api/downloads/task', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, action: 'resume' }),
-  });
-}
-
-// cancelDownload 取消任务并删除临时文件。
-export function cancelDownload(id: string): Promise<{ removed: boolean }> {
-  return request(`/api/downloads?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-// removeDownload 删除本地副本。
-export function removeDownload(name: string): Promise<{ removed: boolean }> {
-  return request(`/api/downloads?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-}
-
-// openDownloads 用系统文件管理器打开下载目录。
-export function openDownloads(): Promise<{ opened: boolean }> {
-  return request('/api/downloads/open', { method: 'POST' });
-}
-
-// ApiCredentials 是凭证与登录态：只有「有没有」，没有密钥内容。
-export interface ApiCredentials {
-  api_id: number;
-  api_hash_set: boolean;
-  bot_token_set: boolean;
-  bot_session: boolean;
-  user_session: boolean;
-}
-
-// ApiIdentity 是登录后的账号身份。
-export interface ApiIdentity {
-  id: number;
-  username: string;
-  name: string;
-  bot: boolean;
-}
-
-// getCredentials 读取 api_id 与「密钥已保存」标记。
-export function getCredentials(): Promise<ApiCredentials> {
-  return request<ApiCredentials>('/api/credentials');
-}
-
-// saveCredentials 保存 api_id / api_hash / bot token；空字段表示不修改。
-export function saveCredentials(body: {
-  api_id?: number;
-  api_hash?: string;
-  bot_token?: string;
-}): Promise<{ status: ApiCredentials; restart_required: boolean }> {
-  return request('/api/credentials', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-// loginBot 用 bot token 登录；token 为空时用已保存的 token。
-export function loginBot(token: string): Promise<{ user: ApiIdentity; restart_required: boolean }> {
-  return request('/api/login/bot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token }),
-  });
-}
-
-// startUserLogin 给手机号发验证码，返回后续要带回来的 phone_code_hash。
-export function startUserLogin(
-  phone: string
-): Promise<{ phone_code_hash: string; timeout: number }> {
-  return request('/api/login/user/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone }),
-  });
-}
-
-// finishUserLogin 提交验证码；need_password 为 true 时带 password 再调一次。
-export function finishUserLogin(body: {
-  phone: string;
-  code: string;
-  phone_code_hash: string;
-  password?: string;
-}): Promise<{ need_password: boolean; user: ApiIdentity }> {
-  return request('/api/login/user/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-// getIdentity 读取已保存会话的账号身份。
-export function getIdentity(kind: 'bot' | 'user'): Promise<{ user: ApiIdentity }> {
-  return request(`/api/identity?kind=${kind}`);
-}
-
-// uploadPoster 上传浏览器从视频里抽出的封面 JPEG。
-export async function uploadPoster(volume: string, path: string, poster: Blob): Promise<void> {
-  // 安卓不做帧提取：视频字节不在 JS 里，保留 Telegram 缩略图或占位图
-  if (isAndroid) return;
-  const q = new URLSearchParams({ vol: volume, path });
-  const res = await rawFetch(`/api/poster?${q.toString()}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'image/jpeg' },
-    body: poster,
-  });
-  if (!res.ok) {
-    throw new ApiError((await res.text()).trim() || res.statusText, res.status);
-  }
 }
