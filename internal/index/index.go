@@ -370,19 +370,6 @@ func (i *Index) PathByMessageID(ctx context.Context, messageID int) (string, boo
 	return p, true, nil
 }
 
-// DeleteByMessageID 按消息号删除节点。
-//
-// 输入：messageID 频道消息 ID
-// 输出：error
-// 预期：不存在时不算错误
-func (i *Index) DeleteByMessageID(ctx context.Context, messageID int) error {
-	if messageID <= 0 {
-		return nil
-	}
-	_, err := i.db.ExecContext(ctx, `DELETE FROM nodes WHERE id = ?`, messageID)
-	return err
-}
-
 // GetMeta 读取一条持久化的整数状态。
 func (i *Index) GetMeta(ctx context.Context, key string) (int64, bool, error) {
 	var v int64

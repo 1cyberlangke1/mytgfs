@@ -25,7 +25,7 @@ export function thumbScale(width: number, height: number): number {
 export const THUMB_MAX_PIXELS = (THUMB_BUDGET_BYTES * 8) / THUMB_WORST_BPP;
 
 // isVideoFile 判断这个文件值不值得抽帧。
-export function isVideoFile(file: File): boolean {
+function isVideoFile(file: File): boolean {
   return (
     file.type.startsWith('video/') ||
     /\.(mp4|m4v|mov|mkv|webm|avi|ogv|3gp)$/i.test(file.name)

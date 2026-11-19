@@ -10,7 +10,7 @@ import { Button, cn, IOS_BOUNCE_SPRING, IOS_SOFT_SPRING, IOS_SPRING, Select } fr
 import { connectionVisual, TONE_ICON, TONE_TEXT } from './connectionStatus';
 
 // OverviewSummary 直接取汇总函数的返回类型，避免两处手写同构结构。
-export type OverviewSummary = ReturnType<typeof computeOverviewSummary>;
+type OverviewSummary = ReturnType<typeof computeOverviewSummary>;
 
 export interface NavItem {
   id: NavTab;

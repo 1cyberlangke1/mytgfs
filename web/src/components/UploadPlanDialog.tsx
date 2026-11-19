@@ -31,7 +31,7 @@ export interface UploadPlanDialogProps {
 }
 
 /** ThumbPreview 是「哪张缩略图、在哪儿」的悬停预览请求。 */
-export interface ThumbPreview {
+interface ThumbPreview {
   url: string;
   rect: DOMRect;
 }

@@ -58,7 +58,6 @@
     "languageLabel": "切换语言"
   },
   "header": {
-    "quickUpload": "上传文件",
     "skipToContent": "跳到主要内容",
     "themeLight": "浅色",
     "themeDark": "深色",
@@ -149,7 +148,6 @@
     "sortAsc": "升序",
     "sortDesc": "降序",
     "uploadFileBtn": "上传文件",
-    "uploadFileHint": "上传文件（单文件上限 2GB）",
     "refreshBtn": "刷新",
     "rebuildBtn": "重建目录",
     "rebuildConfirmTitle": "重建当前卷的目录？",

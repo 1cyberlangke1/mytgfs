@@ -169,9 +169,6 @@ func applyChanged(ctx context.Context, idx *index.Index, st NodeSource, ids []in
 	return pulled, changed, removed, nil
 }
 
-// ErrNoDiffer 表示调用方没有提供差异源。
-var ErrNoDiffer = errors.New(i18n.T("err.no_differ"))
-
 // ChannelUnavailableError 表示频道解析不出来：已删除，或 bot 已不在该频道内。
 //
 // 输入：channelID 配置里的频道号

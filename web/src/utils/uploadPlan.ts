@@ -45,7 +45,7 @@ let taskSeq = 0;
  * 输出：`staged-<时间戳>-<自增序号>` 形式的唯一 id
  * 预期：同一毫秒内连续添加也不冲突
  */
-export function newStagedID(now = Date.now()): string {
+function newStagedID(now = Date.now()): string {
   stagedSeq += 1;
   return `staged-${now}-${stagedSeq}`;
 }
@@ -57,7 +57,7 @@ export function newStagedID(now = Date.now()): string {
  * 输出：`task-<时间戳>-<自增序号>`
  * 预期：与 TransferTask 现有 id 体例保持一致（task- 前缀）
  */
-export function newTaskID(now = Date.now()): string {
+function newTaskID(now = Date.now()): string {
   taskSeq += 1;
   return `task-${now}-${taskSeq}`;
 }

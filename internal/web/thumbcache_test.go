@@ -20,7 +20,7 @@ func writeFileForTest(t *testing.T, path string, body string) {
 	}
 }
 
-// PurgeEntry 只删同一路径的缓存，别的路径不动。
+// purgeEntry 只删同一路径的缓存，别的路径不动。
 func TestPurgeEntryRemovesOnlyThatPath(t *testing.T) {
 	dir := t.TempDir()
 	keep := posterPath(dir, "demo", "/keep.txt", "111")
@@ -30,7 +30,7 @@ func TestPurgeEntryRemovesOnlyThatPath(t *testing.T) {
 	writeFileForTest(t, kill, "k")
 	writeFileForTest(t, other, "o")
 
-	removed := PurgeEntry(dir, "demo", "/kill.txt")
+	removed := (&thumbCache{dir: dir}).purgeEntry("demo", "/kill.txt")
 	if removed != 1 {
 		t.Fatalf("removed = %d; want 1", removed)
 	}

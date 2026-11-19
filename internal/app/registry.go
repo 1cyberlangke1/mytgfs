@@ -8,7 +8,6 @@ package app
 // 结构上保证「删完即列表同步」。
 
 import (
-	"maps"
 	"sync"
 )
 
@@ -42,38 +41,6 @@ func (r *VolumeRegistry[T]) Get(name string) (T, bool) {
 	return v, ok
 }
 
-// Take 摘除并返回句柄；调用方负责等资源清理与删盘。
-func (r *VolumeRegistry[T]) Take(name string) (T, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	v, ok := r.vols[name]
-	if ok {
-		delete(r.vols, name)
-		r.dropOrderLocked(name)
-	}
-	return v, ok
-}
-
-// TakeFunc 按谓词摘除第一个匹配的卷；给配置名大小写不敏感匹配用。
-func (r *VolumeRegistry[T]) TakeFunc(pred func(string) bool) (T, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, name := range r.order {
-		if !pred(name) {
-			continue
-		}
-		v, ok := r.vols[name]
-		if !ok {
-			continue
-		}
-		delete(r.vols, name)
-		r.dropOrderLocked(name)
-		return v, true
-	}
-	var zero T
-	return zero, false
-}
-
 // Delete 摘除并丢弃句柄；不存在时为无副作用的 no-op。
 // 给挂载清理协程用：删卷路径可能已经摘走，重复调用必须无害。
 func (r *VolumeRegistry[T]) Delete(name string) bool {
@@ -102,15 +69,6 @@ func (r *VolumeRegistry[T]) Snapshot() []T {
 	for _, name := range r.order {
 		out = append(out, r.vols[name])
 	}
-	return out
-}
-
-// SnapshotMap 返回卷名到句柄的副本，给按配置顺序遍历的旧接口用。
-func (r *VolumeRegistry[T]) SnapshotMap() map[string]T {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make(map[string]T, len(r.vols))
-	maps.Copy(out, r.vols)
 	return out
 }
 

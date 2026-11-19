@@ -151,7 +151,6 @@
   "err.mute_channel": "关闭频道通知",
   "err.name_too_long": "文件或文件夹名字过长（最多 %d 字节）",
   "err.need_channel_bot": "需要 --channel 和 --bot",
-  "err.no_differ": "sync: 未提供 ChannelDiffer",
   "err.no_document": "返回结果里没有文档",
   "err.no_message": "返回结果里没有消息号",
   "err.not_connected": "还没连上 Telegram，本地索引可以先浏览，连上后自动继续",

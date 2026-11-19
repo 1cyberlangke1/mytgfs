@@ -12,7 +12,7 @@ import { getLocaleMeta } from './i18n';
 // MAX_SINGLE_FILE_BYTES 与后端 telegramstore.MaxFileSize 保持一致（2_097_152_000）。
 // 前端比后端宽会让文件通过预检后才在服务端被拒，白等一轮上传。
 export const MAX_SINGLE_FILE_BYTES = 2_097_152_000;
-export const CHUNK_RESUME_THRESHOLD_BYTES = 8 * 1024 * 1024; // 8 MB threshold for chunked resumable upload
+const CHUNK_RESUME_THRESHOLD_BYTES = 8 * 1024 * 1024; // 8 MB threshold for chunked resumable upload
 export const DEFAULT_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024; // 4 MB per chunk when > 8MB
 
 /**

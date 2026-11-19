@@ -9,7 +9,7 @@ import { wailsRuntime } from './runtime';
 import { makeVideoThumb } from './utils/videoThumb';
 
 /** ApiError 携带后端返回的可读原因与 HTTP 状态码。 */
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number
@@ -20,7 +20,7 @@ export class ApiError extends Error {
 }
 
 /** asMessage 兼容两种错误体：{error:{message}} 与 {error:"..."}。 */
-export function asMessage(payload: unknown): string {
+function asMessage(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const err = (payload as { error?: unknown }).error;
   if (!err) return '';
@@ -68,12 +68,12 @@ async function bridgeFetch(path: string, init?: RequestInit): Promise<Response> 
 }
 
 /** rawFetch 是 fetch 的平台分派：安卓走文本桥，其余照旧。 */
-export function rawFetch(path: string, init?: RequestInit): Promise<Response> {
+function rawFetch(path: string, init?: RequestInit): Promise<Response> {
   return isAndroid ? bridgeFetch(path, init) : fetch(path, init);
 }
 
 /** request 发一次 JSON 请求并解析响应；非 2xx 抛 ApiError。 */
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await rawFetch(path, init);
   const text = await res.text();
   let payload: unknown = null;
@@ -109,7 +109,7 @@ export interface ApiFile {
   thumbnailUrl?: string;
   previewUrl?: string;
 }
-export interface ApiVolume {
+interface ApiVolume {
   id: string;
   name: string;
   title?: string;
@@ -149,7 +149,7 @@ export interface ApiState {
   };
   status?: { state?: string; state_code?: string; transfers?: ApiTransfer[]; queue?: ApiQueueItem[] };
 }
-export interface ApiSettingDef {
+interface ApiSettingDef {
   key: string;
   kind: 'string' | 'int' | 'bool';
 }
@@ -161,7 +161,7 @@ export interface ApiSettings {
 export interface ApiAutostart {
   enabled: boolean;
 }
-export interface ApiDownload {
+interface ApiDownload {
   name: string;
   size: number;
   mod: string;
@@ -198,7 +198,6 @@ export interface ApiIdentity {
 
 // ---- 状态与同步 ----
 export const getState = () => request<ApiState>('/api/state');
-export const triggerSync = () => request('/api/sync', { method: 'POST' });
 export const rebuildVolume = (volume: string, signal?: AbortSignal) =>
   request<{ files: number }>(`/api/rebuild?vol=${encodeURIComponent(volume)}`, { method: 'POST', signal });
 
@@ -300,7 +299,7 @@ export const discardUpload = (id: string): Promise<void> =>
     .then(() => undefined)
     .catch(() => undefined);
 
-export async function putUploadThumb(id: string, blob: Blob): Promise<void> {
+async function putUploadThumb(id: string, blob: Blob): Promise<void> {
   await request(`/api/upload/thumb?id=${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'image/jpeg' },

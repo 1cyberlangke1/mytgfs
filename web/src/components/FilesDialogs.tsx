@@ -10,10 +10,10 @@ import { Modal } from './Modal';
 import { Button, Input } from './ui';
 
 /** ChannelOption 是「添加已有频道」列表里的一项。 */
-export type ChannelOption = ManageableChannel;
+type ChannelOption = ManageableChannel;
 
 /** 面板容器：统一圆角、卡片底色、最大高度与纵向布局 */
-export const PANEL_CLASS =
+const PANEL_CLASS =
   'w-full max-w-md rounded-2xl surface-card shadow-2xl flex flex-col max-h-[calc(100dvh-2.5rem)] overflow-hidden';
 const HEADER_CLASS = 'p-5 sm:p-6 pb-3 shrink-0 border-b border-zinc-200/60 dark:border-zinc-800/60';
 const BODY_CLASS =

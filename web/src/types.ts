@@ -28,10 +28,10 @@ export interface VolumeInfo {
   cover?: string;
 }
 
-export type TransferDirection = 'upload' | 'download';
+type TransferDirection = 'upload' | 'download';
 // cancelled 只出现在服务端队列任务上：用户主动取消后落这个终态，
 // 与 failed（错误）区分开，界面不给重试入口
-export type TransferState =
+type TransferState =
   | 'transferring'
   | 'queued'
   | 'paused'
@@ -93,7 +93,7 @@ export interface DownloadItem {
 }
 
 /** 下载任务状态：完成的任务会直接进入文件列表 */
-export type DownloadTaskState = 'running' | 'paused' | 'failed';
+type DownloadTaskState = 'running' | 'paused' | 'failed';
 
 export interface DownloadTask {
   id: string;

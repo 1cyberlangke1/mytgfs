@@ -32,15 +32,6 @@ func sweepThumbsOnce(dir string) {
 	go SweepFlatLegacy(dir, 24*time.Hour)
 }
 
-// PurgeEntry 删掉卷内一个路径的全部缓存文件（缩略图/封面，所有版本）。
-//
-// 输入：dir 缓存根目录；vol 卷名；p 卷内路径
-// 输出：清理掉的文件数；dir 为空表示缓存未启用，返回 0
-// 预期：文件删除/改名/移动后调用，孤儿缓存不再堆积
-func PurgeEntry(dir, vol, p string) int {
-	return (&thumbCache{dir: dir}).purgeEntry(vol, p)
-}
-
 // SweepFlatLegacy 清理旧版 flat 布局的残留文件。
 //
 // 旧版本把缓存文件直接放在 thumbs 根目录，新布局按卷分目录；

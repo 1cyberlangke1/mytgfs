@@ -46,7 +46,7 @@ export interface TreeEntry {
  * 输出：带分隔符的字符串
  * 预期：不同卷相同的目录名不会混为一谈
  */
-export function dirKey(volumeId: string, dirPath: string): string {
+function dirKey(volumeId: string, dirPath: string): string {
   return `${volumeId}\u0000${dirPath}`;
 }
 

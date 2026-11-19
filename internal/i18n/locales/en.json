@@ -151,7 +151,6 @@
   "err.mute_channel": "mute channel notifications",
   "err.name_too_long": "file or folder name is too long (max %d bytes)",
   "err.need_channel_bot": "--channel and --bot are required",
-  "err.no_differ": "sync: no ChannelDiffer provided",
   "err.no_document": "updates contain no document",
   "err.no_message": "updates contain no message id",
   "err.not_connected": "not connected to Telegram yet; local index is browsable and will resume once connected",
