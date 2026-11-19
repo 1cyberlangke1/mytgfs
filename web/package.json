@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit && node scripts/check-push-contract.mjs",
+    "knip": "knip",
     "test": "vitest run",
     "e2e:desktop": "node scripts/e2e-desktop.mjs",
     "e2e:keyboard": "node scripts/e2e-keyboard.mjs",
@@ -40,6 +41,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "jsdom": "^29.1.1",
+    "knip": "^6.46.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.12"

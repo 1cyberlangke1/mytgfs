@@ -153,6 +153,9 @@ jobs:
       - name: 类型检查与推送约束
         working-directory: web
         run: npm run lint
+      - name: 前端死代码检查 (knip)
+        working-directory: web
+        run: npx knip
       - name: 前端单元测试
         working-directory: web
         run: npm test
