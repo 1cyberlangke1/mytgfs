@@ -42,6 +42,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output 'OK build\mytgfs-tray.exe'
 
+# 校验 tray 的 PE 子系统必须是 GUI：裸 go build 会产出控制台子系统，双击弹黑框
+# 输入：build\mytgfs-tray.exe
+# 输出：子系统不是 2（WINDOWS_GUI）时打印 FAIL 并以 1 退出
+# 预期：构建阶段就拦住错误产物，不把问题留到双击时
+$trayExe = 'build\mytgfs-tray.exe'
+$fs = [IO.File]::OpenRead($trayExe)
+try {
+    $br = New-Object IO.BinaryReader($fs)
+    $fs.Position = 0x3C
+    $peOffset = $br.ReadInt32()
+    # PE32/PE32+ 的 OptionalHeader.Subsystem 都在 OptionalHeader 起始 + 68
+    $fs.Position = $peOffset + 24 + 68
+    $subsystem = $br.ReadUInt16()
+} finally {
+    $fs.Dispose()
+}
+if ($subsystem -ne 2) {
+    Write-Output "FAIL $trayExe subsystem=$subsystem (expected 2 / WINDOWS_GUI)"
+    exit 1
+}
+
 # 纯命令行版：不带 web/tray 依赖，体积约为完整版三分之一
 go build -trimpath -tags noweb -ldflags $base -o 'build\mytgfs-cli.exe' ./cmd/mytgfs
 if ($LASTEXITCODE -ne 0) {
