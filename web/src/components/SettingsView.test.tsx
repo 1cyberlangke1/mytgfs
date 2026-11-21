@@ -48,6 +48,7 @@ const renderView = (overrides: Partial<Parameters<typeof SettingsView>[0]> = {})
       settings={settings}
       canAutostart={false}
       canUseShortcuts
+      canSetDownloadsDir
       shortcuts={{ ...DEFAULT_SHORTCUTS }}
       onChangeShortcuts={handlers.onChangeShortcuts}
       onSaveSettings={handlers.onSaveSettings}
@@ -156,6 +157,14 @@ describe('SettingsView', () => {
       ...DEFAULT_SHORTCUTS,
       moveUp: 'J',
     });
+  });
+
+  it('不允许改下载目录时整个字段不渲染（安卓沙盒固定路径）', () => {
+    renderView({ canSetDownloadsDir: false });
+
+    expect(document.getElementById('setting-downloads.dir')).toBeNull();
+    // 其它字段照常出现
+    expect(document.getElementById('setting-log.level')).not.toBeNull();
   });
 
   it('恢复全部键位写回默认映射', () => {

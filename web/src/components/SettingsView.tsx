@@ -179,11 +179,16 @@ function useAccount({ t, onNotify }: { t: Translations; onNotify: (msg: string, 
 function useSettingsForm(p: {
   settings: AppSettings;
   t: Translations;
+  canSetDownloadsDir: boolean;
   onSaveSettings: (values: Record<string, string>) => Promise<void>;
   onNotifyError: (msg: string) => void;
 }) {
-  const { settings, t, onSaveSettings, onNotifyError } = p;
-  const visibleSchema = useMemo(() => settings.schema.filter((def) => !PANEL_HIDDEN.has(def.key)), [settings.schema]);
+  const { settings, t, canSetDownloadsDir, onSaveSettings, onNotifyError } = p;
+  // 安卓的下载目录固定在应用沙盒里：和快捷键/自启一样整块不渲染，不做置灰
+  const visibleSchema = useMemo(
+    () => settings.schema.filter((def) => !PANEL_HIDDEN.has(def.key) && (canSetDownloadsDir || def.key !== 'downloads.dir')),
+    [settings.schema, canSetDownloadsDir]
+  );
   const [draft, setDraft] = useState<Record<string, string>>(settings.values);
   const [saved, setSaved] = useState<Record<string, string>>(settings.values);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -594,6 +599,8 @@ interface SettingsViewProps {
   canAutostart: boolean;
   /** 设备有硬件键盘：false 时整块快捷键设置不渲染 */
   canUseShortcuts: boolean;
+  /** 下载目录可改：安卓固定在应用沙盒里，false 时该字段不渲染 */
+  canSetDownloadsDir: boolean;
   shortcuts: ShortcutMap;
   onChangeShortcuts: (next: ShortcutMap) => void;
   onSaveSettings: (values: Record<string, string>) => Promise<void>;
@@ -601,10 +608,11 @@ interface SettingsViewProps {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = (p) => {
-  const { t, locale, settings, canAutostart, canUseShortcuts, shortcuts, onChangeShortcuts, onSaveSettings, onNotifyError } = p;
+  const { t, locale, settings, canAutostart, canUseShortcuts, canSetDownloadsDir, shortcuts, onChangeShortcuts, onSaveSettings, onNotifyError } = p;
   const { groups, draft, setValue, errors, isDirty, sectionDirty, saveSection, savingSection, savedSection } = useSettingsForm({
     settings,
     t,
+    canSetDownloadsDir,
     onSaveSettings,
     onNotifyError,
   });

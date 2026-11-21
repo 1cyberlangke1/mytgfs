@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Eye, FolderDown, FolderOpen, HardDriveDownload, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react';
 import type { DownloadItem, DownloadTask, Locale } from '../types';
 import { formatBytes, inferFileCategory } from '../utils/fsLogic';
@@ -16,7 +16,8 @@ interface DownloadsViewProps {
   onRefresh: () => void;
   /** 下载目录动作：桌面用文件管理器打开，安卓把文件导出到系统下载目录 */
   dirAction: 'open' | 'export';
-  onDirAction: () => void;
+  /** names 为空表示处理全部文件；安卓导出时传选中项 */
+  onDirAction: (names?: string[]) => void;
   onRemove: (name: string) => Promise<void> | void;
   onTask: (id: string, action: 'pause' | 'resume' | 'cancel') => void;
   /** 预览本地文件，不重新下载 */
@@ -26,8 +27,32 @@ interface DownloadsViewProps {
 export const DownloadsView: React.FC<DownloadsViewProps> = (p) => {
   const { t, locale, dir, files, tasks, onRefresh, dirAction, onDirAction, onRemove, onTask, onPreview } = p;
   const [confirming, setConfirming] = useState('');
+  // exportNames 只在安卓导出模式使用：选中项为空表示导出全部
+  const [exportNames, setExportNames] = useState<Set<string>>(() => new Set());
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
   const percentOf = (task: DownloadTask) => (task.size > 0 ? Math.min(100, Math.floor((task.done / task.size) * 100)) : 0);
+
+  // 文件被删/列表刷新后清掉不再存在的选择，避免导出到已消失的名字
+  useEffect(() => {
+    setExportNames((prev) => {
+      if (prev.size === 0) return prev;
+      const alive = new Set(files.map((f) => f.name));
+      const next = new Set([...prev].filter((name) => alive.has(name)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [files]);
+
+  const exporting = dirAction === 'export';
+  const allSelected = files.length > 0 && files.every((f) => exportNames.has(f.name));
+  const toggleOne = (name: string) => {
+    setExportNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+  const toggleAll = () => setExportNames(allSelected ? new Set() : new Set(files.map((f) => f.name)));
 
   return (
     <div className="stagger space-y-6">
@@ -43,9 +68,21 @@ export const DownloadsView: React.FC<DownloadsViewProps> = (p) => {
             <RefreshCw className="w-3.5 h-3.5" />
             <span>{t.downloads.refreshBtn}</span>
           </Button>
-          <Button type="button" variant="accent" onClick={onDirAction} data-testid="downloads-dir-action" data-dir-action={dirAction}>
-            {dirAction === 'export' ? <FolderDown className="w-3.5 h-3.5" /> : <FolderOpen className="w-3.5 h-3.5" />}
-            <span>{dirAction === 'export' ? t.downloads.exportDirBtn : t.downloads.openDirBtn}</span>
+          <Button
+            type="button"
+            variant="accent"
+            onClick={() => onDirAction(exporting && exportNames.size > 0 ? [...exportNames] : undefined)}
+            data-testid="downloads-dir-action"
+            data-dir-action={dirAction}
+          >
+            {exporting ? <FolderDown className="w-3.5 h-3.5" /> : <FolderOpen className="w-3.5 h-3.5" />}
+            <span>
+              {exporting
+                ? exportNames.size > 0
+                  ? t.downloads.exportSelectedBtn.replace('{count}', String(exportNames.size))
+                  : t.downloads.exportDirBtn
+                : t.downloads.openDirBtn}
+            </span>
           </Button>
         </div>
       </div>
@@ -135,9 +172,35 @@ export const DownloadsView: React.FC<DownloadsViewProps> = (p) => {
         </section>
       ) : (
         <section className="surface-card rounded-2xl overflow-hidden">
+          {exporting && (
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-200/70 px-4 py-2.5 dark:border-zinc-800/70">
+              <label className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-300 accent-[#007AFF] dark:border-zinc-600"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label={t.downloads.exportSelectAll}
+                />
+                <span>{t.downloads.exportSelectAll}</span>
+              </label>
+              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {t.downloads.exportSelectedCount.replace('{count}', String(exportNames.size))}
+              </span>
+            </div>
+          )}
           <ul className="stagger divide-y divide-zinc-200/70 dark:divide-zinc-800/70">
             {files.map((f) => (
               <li key={f.name} data-download-name={f.name} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900/40 transition-colors">
+                {exporting && (
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0 rounded border-zinc-300 accent-[#007AFF] dark:border-zinc-600"
+                    checked={exportNames.has(f.name)}
+                    onChange={() => toggleOne(f.name)}
+                    aria-label={`${t.downloads.exportSelectLabel} ${f.name}`}
+                  />
+                )}
                 <RichFileTypeEmblem category={inferFileCategory(f.name, false)} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate" title={f.name}>

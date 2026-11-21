@@ -42,6 +42,13 @@ export const platformCaps = {
   downloads: true,
   /** 下载页那个目录按钮按什么行为渲染：桌面用文件管理器打开，安卓导出到公共下载目录 */
   downloadsDirAction: isAndroid ? 'export' : 'open',
+  /**
+   * 下载目录是否允许在设置页修改。
+   *
+   * 安卓的下载目录固定落在应用私有沙盒里，用户改不了也没有意义（导出走
+   * MediaStore），因此设置页整块不出现；桌面端仍可自定义。
+   */
+  downloadsDirConfigurable: !isAndroid,
   /** 剪贴板粘贴上传：安卓壳里没有可读的剪贴板文件通道 */
   paste: !isAndroid,
   /** 开机自启：只有桌面端有系统注册项 */

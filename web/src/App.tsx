@@ -311,6 +311,7 @@ export default function App() {
                     settings={settings}
                     canAutostart={caps.autostart && platformCaps.autostart}
                     canUseShortcuts={platformCaps.shortcuts}
+                    canSetDownloadsDir={platformCaps.downloadsDirConfigurable}
                     shortcuts={shortcuts}
                     onChangeShortcuts={handleChangeShortcuts}
                     onSaveSettings={handleSaveSettings}

@@ -94,8 +94,10 @@ export function useDownloads(p: {
   };
 
   // 安卓专用：把沙盒里的下载文件导出到系统公共下载目录
-  const exportDir = () => {
-    const targets = downloads.filter((f) => f.path);
+  // names 有值时只导出选中的文件；为空表示导出全部
+  const exportDir = (names?: string[]) => {
+    const picked = names && names.length > 0 ? new Set(names) : null;
+    const targets = downloads.filter((f) => f.path && (!picked || picked.has(f.name)));
     if (targets.length === 0) return pushToast(t.downloads.exportEmptyToast, 'error');
     let ok = 0;
     for (const f of targets) {

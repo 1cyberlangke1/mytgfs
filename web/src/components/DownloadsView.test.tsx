@@ -141,6 +141,45 @@ describe('DownloadsView', () => {
     expect(handlers.onDirAction).toHaveBeenCalledTimes(1);
   });
 
+  it('导出模式可以只导出选中的文件', () => {
+    const onDirAction = vi.fn();
+    const files: DownloadItem[] = [
+      { name: 'a.txt', size: 12, mod: '2026-11-15T10:00:00Z', path: '/data/x/a.txt' },
+      { name: 'b.txt', size: 34, mod: '2026-11-15T10:01:00Z', path: '/data/x/b.txt' },
+    ];
+    render(
+      <DownloadsView
+        t={t}
+        locale="zh"
+        dir="/data/user/0/com.mytgfs.app/files/data/downloads"
+        files={files}
+        tasks={[]}
+        onRefresh={vi.fn()}
+        dirAction="export"
+        onDirAction={onDirAction}
+        onRemove={vi.fn()}
+        onTask={vi.fn()}
+        onPreview={vi.fn()}
+      />
+    );
+
+    // 不选中时按钮仍是「全部导出」
+    expect(screen.getByRole('button', { name: t.downloads.exportDirBtn })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: `${t.downloads.exportSelectLabel} a.txt` }));
+    fireEvent.click(
+      screen.getByRole('button', { name: t.downloads.exportSelectedBtn.replace('{count}', '1') })
+    );
+    expect(onDirAction).toHaveBeenCalledWith(['a.txt']);
+
+    // 全选后一次带出两个名字
+    fireEvent.click(screen.getByRole('checkbox', { name: t.downloads.exportSelectAll }));
+    fireEvent.click(
+      screen.getByRole('button', { name: t.downloads.exportSelectedBtn.replace('{count}', '2') })
+    );
+    expect(onDirAction).toHaveBeenLastCalledWith(['a.txt', 'b.txt']);
+  });
+
   it('空列表显示空态', () => {
     renderView([]);
     expect(screen.getByText(t.downloads.emptyTitle)).toBeTruthy();
