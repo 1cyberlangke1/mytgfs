@@ -168,7 +168,6 @@ export const DownloadsView: React.FC<DownloadsViewProps> = (p) => {
             <HardDriveDownload className="w-6 h-6" />
           </div>
           <h2 className="text-sm font-semibold text-zinc-950 dark:text-white">{t.downloads.emptyTitle}</h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto">{t.downloads.emptyDesc}</p>
         </section>
       ) : (
         <section className="surface-card rounded-2xl overflow-hidden">

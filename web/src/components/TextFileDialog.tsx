@@ -121,7 +121,6 @@ export const TextFileDialog: React.FC<TextFileDialogProps> = ({
               setText(e.target.value);
               setError('');
             }}
-            placeholder={t.files.textDialogBodyPlaceholder}
             className="flex-1 min-h-[140px] w-full resize-none overflow-y-auto custom-scrollbar rounded-xl border border-zinc-200/90 bg-white p-3 font-mono text-[13px] leading-relaxed text-zinc-900 shadow-2xs transition-colors placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/35 focus-visible:border-[#007AFF] dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 dark:placeholder:text-zinc-500"
           />
           {error ? (

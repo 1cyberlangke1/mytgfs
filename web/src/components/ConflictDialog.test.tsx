@@ -89,7 +89,6 @@ describe('ConflictDialog', () => {
     await user.click(screen.getByRole('button', { name: t.files.conflictAllOverwrite }));
     const selects = screen.getAllByRole('combobox') as HTMLSelectElement[];
     expect(selects.map((s) => s.value)).toEqual(['overwrite', 'overwrite']);
-    expect(screen.getAllByText(t.files.conflictOverwriteHint)).toHaveLength(2);
   });
 
   it('全部跳过时确认被禁用', async () => {

@@ -109,11 +109,6 @@ export const ConflictDialog: React.FC<ConflictDialogProps> = ({
                       {interpolate(t.files.conflictSuggested, { name: conflict.suggested })}
                     </p>
                   )}
-                  {action === 'overwrite' && (
-                    <p className="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-                      {t.files.conflictOverwriteHint}
-                    </p>
-                  )}
                 </div>
                 {/* 每行一个真实 label：读屏能念出改的是哪个文件 */}
                 <label htmlFor={selectId} className="sr-only">

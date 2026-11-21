@@ -136,10 +136,7 @@ export const OverviewView: React.FC<OverviewViewProps> = (p) => {
         {summary.perVolume.length === 0 ? (
           <div className="surface-card rounded-2xl p-10 text-center space-y-3">
             <HardDrive className="w-8 h-8 text-zinc-400 mx-auto" />
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{t.overview.emptyVolumesTitle}</h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">{t.overview.emptyVolumesDesc}</p>
-            </div>
+            <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{t.overview.emptyVolumesTitle}</h3>
           </div>
         ) : (
           <div className="stagger grid grid-cols-1 min-[520px]:grid-cols-2 xl:grid-cols-3 gap-4">
