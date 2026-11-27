@@ -169,6 +169,8 @@ func Run(opts Options) error {
 	}
 
 	var statusItem *application.MenuItem
+	// trayMenu 是 SetMenu 交给 Wails 的唯一菜单对象；状态行更新复用它，不新建菜单。
+	var trayMenu *application.Menu
 	// rebuildMenu 由下方菜单构建逻辑赋值；卷挂载/卸载后重建卷入口
 	rebuildMenu := func() {}
 
@@ -216,8 +218,13 @@ func Run(opts Options) error {
 		connKey, connText = key, text
 		stateMu.Unlock()
 		uiUpdate(func() {
+			// 状态行更新：改 label 后对同一个 menu 调 SetMenu（Wails 官方 mutate 模式），
+			// 不新建菜单、不调用 rebuildMenu，避免打断右键弹菜单。
 			if statusItem != nil {
 				statusItem.SetLabel(text)
+			}
+			if trayMenu != nil {
+				sysTray.SetMenu(trayMenu)
 			}
 			sysTray.SetTooltip("mytgfs · " + text)
 		})
@@ -842,6 +849,7 @@ func Run(opts Options) error {
 			rootCancel()
 			wailsApp.Quit()
 		})
+		trayMenu = menu
 		return menu
 	}
 	rebuildMenu = func() {
@@ -920,7 +928,6 @@ func Run(opts Options) error {
 	// 主循环起来之后才能安全操作窗口与托盘对象
 	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		ready.Store(true)
-		sysTray.SetMenu(buildMenu())
 		sysTray.SetTooltip(tooltipText())
 	})
 
