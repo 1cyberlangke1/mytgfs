@@ -71,7 +71,7 @@ export default function App() {
   const localeRef = useRef(locale);
   localeRef.current = locale;
 
-  const downloadsApi = useDownloads({ activeTab, t, locale, pushToast, setProblem, clearProblem, localPreview, setLocalPreview });
+  const downloadsApi = useDownloads({ activeTab, t, locale, pushToast, dismissToast, setProblem, clearProblem, localPreview, setLocalPreview });
   const {
     downloads, downloadTasks, downloadsDir, reloadDownloads, downloadedPreview,
     startFileDownload, controlTask, removeFile, openDir, exportDir, previewDownloaded, openFile,
@@ -99,7 +99,7 @@ export default function App() {
   const summary = computeOverviewSummary(volumes, files);
   const viewSpring = useInterruptibleViewSpring(activeTab);
   const { handleCreateFolder, handleRenameMoveItem, handleBatchMoveItems, handleDeleteItems } = useFileActions({
-    files, t, locale, pushToast, reloadFiles,
+    files, t, locale, pushToast, dismissToast, reloadFiles,
   });
   const {
     handleCreateVolume, handleAttachVolume, handleDeleteVolume, handleSetCover,

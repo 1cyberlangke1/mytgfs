@@ -32,17 +32,46 @@ type PushToast = (
   action?: { label: string; onClick: () => void }
 ) => string;
 
+type DismissToast = (id: string) => void;
+
+/**
+ * 远端操作的统一反馈：先弹 pending 旋转条，成功换对勾，失败换错误。
+ * 输入：进行中文案、成功文案、执行体（内部含 reload）、两者回调。
+ * 输出：执行体的返回值（供需要结果的调用方使用）。
+ * 预期：任何路径下 pending 条都被消掉，不留永久转圈；失败仍走 errText。
+ */
+async function withFeedback<T>(
+  doing: string,
+  done: string,
+  run: () => Promise<T>,
+  pushToast: PushToast,
+  dismissToast: DismissToast
+): Promise<T> {
+  const pending = pushToast(doing, 'pending');
+  try {
+    const result = await run();
+    dismissToast(pending);
+    pushToast(done, 'success');
+    return result;
+  } catch (err) {
+    dismissToast(pending);
+    pushToast(errText(err), 'error');
+    throw err;
+  }
+}
+
 export function useDownloads(p: {
   activeTab: NavTab;
   t: Translations;
   locale: Locale;
   pushToast: PushToast;
+  dismissToast: DismissToast;
   setProblem: (key: string, text: string) => void;
   clearProblem: (key: string) => void;
   localPreview: DownloadItem | null;
   setLocalPreview: (item: DownloadItem | null) => void;
 }) {
-  const { activeTab, t, locale, pushToast, setProblem, clearProblem, localPreview, setLocalPreview } = p;
+  const { activeTab, t, locale, pushToast, dismissToast, setProblem, clearProblem, localPreview, setLocalPreview } = p;
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [downloadsDir, setDownloadsDir] = useState('');
@@ -66,18 +95,25 @@ export function useDownloads(p: {
   }, [activeTab, reloadDownloads]);
 
   const startFileDownload = (file: FileItem) => {
-    startDownload(file.volumeId, file.id)
-      .then((res) => {
+    void withFeedback(
+      interpolate(t.downloads.starting, { name: file.name }, locale),
+      interpolate(t.downloads.startedToast, { name: file.name }, locale),
+      async () => {
+        const res = await startDownload(file.volumeId, file.id);
         setDownloadTasks((prev) => [...prev.filter((item) => item.id !== res.task.id), res.task]);
-        pushToast(interpolate(t.downloads.startedToast, { name: file.name }, locale), 'success');
-        return reloadDownloads();
-      })
-      .catch((err) => pushToast(errText(err), 'error'));
+        await reloadDownloads();
+      },
+      pushToast,
+      dismissToast
+    ).catch(() => undefined);
   };
 
   const controlTask = (id: string, action: 'pause' | 'resume' | 'cancel') => {
     const call = action === 'pause' ? pauseDownload(id) : action === 'resume' ? resumeDownload(id) : cancelDownload(id);
-    call.then(() => reloadDownloads()).catch((err) => pushToast(errText(err), 'error'));
+    const doing = action === 'pause' ? t.downloads.pausing : action === 'resume' ? t.downloads.resuming : t.downloads.cancelling;
+    const done = action === 'pause' ? t.downloads.paused : action === 'resume' ? t.downloads.resumed : t.downloads.cancelled;
+    void withFeedback(doing, done, async () => { await call; await reloadDownloads(); }, pushToast, dismissToast)
+      .catch(() => undefined);
   };
 
   const removeFile = (name: string) => {
@@ -144,8 +180,15 @@ export function useDownloads(p: {
   };
 }
 
-export function useFileActions(p: { files: FileItem[]; t: Translations; locale: Locale; pushToast: PushToast; reloadFiles: (names?: string[]) => Promise<void> }) {
-  const { files, t, locale, pushToast, reloadFiles } = p;
+export function useFileActions(p: {
+  files: FileItem[];
+  t: Translations;
+  locale: Locale;
+  pushToast: PushToast;
+  dismissToast: DismissToast;
+  reloadFiles: (names?: string[]) => Promise<void>;
+}) {
+  const { files, t, locale, pushToast, dismissToast, reloadFiles } = p;
 
   // groupByVolume 按条目所属卷分组，避免批量操作只认第一条的卷
   const groupByVolume = (itemIds: string[]) => {
@@ -158,10 +201,13 @@ export function useFileActions(p: { files: FileItem[]; t: Translations; locale: 
   };
 
   const handleCreateFolder = (volumeId: string, parentId: string | null, name: string) => {
-    mkdir(volumeId, parentId || '/', name)
-      .then(() => reloadFiles([volumeId]))
-      .then(() => pushToast(interpolate(t.files.folderCreatedToast, { name }, locale), 'success'))
-      .catch((err) => pushToast(errText(err), 'error'));
+    void withFeedback(
+      interpolate(t.files.creatingFolder, { name }, locale),
+      interpolate(t.files.folderCreatedToast, { name }, locale),
+      async () => { await mkdir(volumeId, parentId || '/', name); await reloadFiles([volumeId]); },
+      pushToast,
+      dismissToast
+    ).catch(() => undefined);
   };
 
   // 改名/移动：同一父目录只改末段，跨目录用目标目录 + 新名
@@ -174,10 +220,13 @@ export function useFileActions(p: { files: FileItem[]; t: Translations; locale: 
     }
     const targetDir = targetParentId || '/';
     const dest = targetDir === '/' ? `/${newName}` : `${targetDir}/${newName}`;
-    moveItems(item.volumeId, [itemId], targetDir, dest)
-      .then(() => reloadFiles([item.volumeId]))
-      .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
-      .catch((err) => pushToast(errText(err), 'error'));
+    void withFeedback(
+      t.files.savingChange,
+      t.files.itemMovedRenamedToast,
+      async () => { await moveItems(item.volumeId, [itemId], targetDir, dest); await reloadFiles([item.volumeId]); },
+      pushToast,
+      dismissToast
+    ).catch(() => undefined);
   };
 
   const handleBatchMoveItems = (itemIds: string[], targetParentId: string | null) => {
@@ -186,10 +235,16 @@ export function useFileActions(p: { files: FileItem[]; t: Translations; locale: 
       void reloadFiles();
       return pushToast(t.files.itemMissingToast, 'error');
     }
-    Promise.all(Array.from(byVol.entries()).map(([vol, ids]) => moveItems(vol, ids, targetParentId || '/')))
-      .then(() => reloadFiles([...byVol.keys()]))
-      .then(() => pushToast(t.files.itemMovedRenamedToast, 'success'))
-      .catch((err) => pushToast(errText(err), 'error'));
+    void withFeedback(
+      t.files.savingChange,
+      t.files.itemMovedRenamedToast,
+      async () => {
+        await Promise.all(Array.from(byVol.entries()).map(([vol, ids]) => moveItems(vol, ids, targetParentId || '/')));
+        await reloadFiles([...byVol.keys()]);
+      },
+      pushToast,
+      dismissToast
+    ).catch(() => undefined);
   };
 
   const handleDeleteItems = (itemIds: string[]) => {
@@ -198,10 +253,16 @@ export function useFileActions(p: { files: FileItem[]; t: Translations; locale: 
       void reloadFiles();
       return pushToast(t.files.itemMissingToast, 'error');
     }
-    Promise.all(Array.from(byVol.entries()).map(([vol, ids]) => removeItems(vol, ids)))
-      .then(() => reloadFiles([...byVol.keys()]))
-      .then(() => pushToast(t.files.deletedToast, 'success'))
-      .catch((err) => pushToast(errText(err), 'error'));
+    void withFeedback(
+      t.files.deletingItems,
+      t.files.deletedToast,
+      async () => {
+        await Promise.all(Array.from(byVol.entries()).map(([vol, ids]) => removeItems(vol, ids)));
+        await reloadFiles([...byVol.keys()]);
+      },
+      pushToast,
+      dismissToast
+    ).catch(() => undefined);
   };
 
   return { handleCreateFolder, handleRenameMoveItem, handleBatchMoveItems, handleDeleteItems };
@@ -279,34 +340,26 @@ export function useVolumeActions(p: {
       });
   };
 
-  // 封面/标题失败时弹窗保持打开，用户可换一张或继续改
-  const handleSetCover = async (volume: string, file: File): Promise<void> => {
-    try {
+  // 封面/标题失败时弹窗保持打开，用户可换一张或继续改（withFeedback 会 rethrow）
+  const handleSetCover = (volume: string, file: File): Promise<void> =>
+    withFeedback(t.volume.savingCover, t.volume.coverSaved, async () => {
       await setCover(volume, file);
       await reloadState();
-      pushToast(t.volume.coverSaved, 'success');
-    } catch (err) {
-      pushToast(errText(err), 'error');
-    }
-  };
+    }, pushToast, dismissToast);
+
   const handlePickCoverNative = async (volume: string): Promise<void> => {
-    try {
-      if (!(await pickCoverNative(volume))) return;
+    // 用户取消系统选图：没有远端操作，不弹进度
+    if (!(await pickCoverNative(volume))) return;
+    await withFeedback(t.volume.savingCover, t.volume.coverSaved, async () => {
       await reloadState();
-      pushToast(t.volume.coverSaved, 'success');
-    } catch (err) {
-      pushToast(errText(err), 'error');
-    }
+    }, pushToast, dismissToast);
   };
-  const handleSetVolumeTitle = async (volume: string, title: string): Promise<void> => {
-    try {
+
+  const handleSetVolumeTitle = (volume: string, title: string): Promise<void> =>
+    withFeedback(t.volume.savingTitle, t.volume.titleSaved, async () => {
       await setVolumeTitle(volume, title);
       await reloadState();
-      pushToast(t.volume.titleSaved, 'success');
-    } catch (err) {
-      pushToast(errText(err), 'error');
-    }
-  };
+    }, pushToast, dismissToast);
 
   // 全量翻历史要几十秒：先弹「正在重建」并带取消按钮
   const handleRebuildVolume = async (volume: string): Promise<void> => {
